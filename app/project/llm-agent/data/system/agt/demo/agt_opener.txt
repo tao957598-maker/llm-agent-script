@@ -1,0 +1,27 @@
+/*
+{
+	"title":"辩论开场白生成器",
+	"parameter":[
+		{
+			"name":"topic",
+			"required":true,
+			"type":"text"
+		},
+		{
+			"name":"prompt",
+			"required":false,
+			"type":"textarea"
+		}
+	],
+	"displayOrder":0,
+	"version":2
+}
+*/
+define('tpl_opener', '''
+{{prompt}}
+辩论主题：{{topic}}
+请发表一个开场白，吸引对方辩友回应。要求：单行文本，不超过100字，不使用双引号。
+''')
+n_opening, tpl_opener, psr_all
+//## 最终输出
+assign('final_output', '{{n_opening}}')

@@ -1,0 +1,79 @@
+/*{
+	"title":"command view direct agent",
+	"description":"直接将 /cmdView、/cmdClose、/cmdInterrupt、/cmdExec 映射到 PowerShell 命令，不再由大模型决定命令",
+	"resultPlan":"n_result",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"用户输入",
+			"required":true
+		}
+	],
+	"uiEntrance":"chatdoc_QA",
+	"displayOrder":0,
+	"version":1
+}*/
+
+// 缓存用户输入，供后续分支判断
+assign('user_input', '{{userInput}}')
+
+
+// 先用 Groovy 计算是否为 /cmdExec
+n_is_cmd_exec, act_func.run?script='''
+def cmd = user_input == null ? '' : user_input.trim()
+return cmd.startsWith('/cmdExec')
+'''
+
+// 先用 Groovy 提取 /cmdExec 后面的真实命令
+n_cmd_exec, act_func.run?script='''
+def cmd = user_input == null ? '' : user_input.trim()
+if (cmd.startsWith('/cmdExec')) {
+    return cmd.substring(8).trim()
+}
+return ''
+'''
+
+// 主分支：用户显式输入 /cmdView 时，直接查看当前 PowerShell 会话
+when('user_input=="/cmdView"', {
+	// n_view_result: 直接执行 PowerShellView
+	n_view_result, act_rpa.send?command=PowershellView
+	// view_content: 将 screen_lines 列表直接拼接为可显示文本
+	assign('view_content', "{{n_view_result[0].screen_text}}")
+	//# 运行结果
+	assign('n_result', '{{view_content}}')
+})
+// 次分支：用户显式输入 /cmdClose 时，直接关闭当前 PowerShell 会话
+when('user_input=="/cmdClose"', {
+// n_result: 直接执行 PowerShellClose
+n_result, act_rpa.send?command=PowershellClose
+//# 运行结果
+assign('n_result', 'succeeded to close current session')
+}) 
+// 三分支：用户显式输入 /cmdInterrupt 时，直接中断当前 PowerShell 会话
+when('user_input=="/cmdInterrupt"', {
+// n_result: 直接执行 PowerShellInterrupt
+n_result, act_rpa.send?command=PowershellInterrupt
+//# 运行结果
+assign('n_result', 'succeeded to interrupt current session')
+})
+// 四分支：用户显式输入 /cmdExec 时，提取命令体并直接执行
+when('n_is_cmd_exec==true', {
+	// n_result: 直接执行 PowerShellCommand
+	n_result, act_rpa.send?command=PowershellCommand&parameters='{"command":"{{n_cmd_exec}}"}'
+	//# 运行结果
+	assign('n_result', 'succeeded to execute command: {{n_cmd_exec}}')
+})
+
+
+when('user_input=="/screenshot"', {
+	// n_collect_data: 收集数据节点，通过RPA机器人截取浏览器屏幕
+	n_collect_data, act_rpa.send?command=SaveDesktopScreenshot 
+	// 从收集到的数据中提取截图文件名，并存入变量 screenshot_filename
+	assign('screenshot_filename', "{{n_collect_data[0].kbSpaceFileId}}")
+	// file name
+	n_file_name, act_kb.selectBy?sql='select  knowledge_name,store_uri  from kb_spaces_folder_knowledge where id="{{n_collect_data[0].kbSpaceFileId}}" '
+	assign("file_name", '{{n_file_name[0].knowledge_name}}')
+	assign("file_path", '{{n_file_name[0].store_uri}}')
+	//## Desktop Screenshot
+    act_memory.assign?var='SaveDesktopScreenshot'&value='{{file_path}}'&type='image'
+})

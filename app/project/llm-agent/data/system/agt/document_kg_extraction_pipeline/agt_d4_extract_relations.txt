@@ -1,0 +1,213 @@
+/*{
+  "title": "候选关系抽取",
+  "description": "从语义切片中抽取候选实体间关系，覆盖归属、组成、使用、依赖、因果等通用关系类型",
+  "parameter": [
+    {"name":"ksDir","label":"输出目录","required":false,"description":"知识空间输出目录，默认 document_kg_extraction"}
+  ],
+  "version": 1,
+  "resultPlan": "n_output"
+}*/
+
+// 设置默认输出目录
+when('!fn.hasValue(ksDir)', {
+  assign("ksDir", "document_kg_extraction")
+})
+
+// 读取阶段二输出的chunks.json
+n_chunks_raw, act_artifact.read?filepath='{{ksDir}}/02_chunks/chunks.json'&maxLength=635555
+
+// 读取阶段三输出的entities_raw.json
+n_entities_raw, act_artifact.read?filepath='{{ksDir}}/03_extraction/entities_raw.json'&maxLength=635555
+
+// 检查输入文件是否可读
+when('!fn.hasValue(n_chunks_raw) || !fn.hasValue(n_entities_raw)', {
+  // 输入文件缺失则终止流程
+  act_flow.fail?result='无法读取输入文件，请确认 agt_d2_structure_chunk 和 agt_d3_extract_entities 已执行完成，ksDir={{ksDir}}'
+})
+
+// 从实体列表中构建精简引用表（只保留entity_id/name/entity_type）
+n_entity_refs, act_func?script='''
+  def entities = n_entities_raw ?: []
+  def refs = entities.collect { ent ->
+    return [
+      entity_id: ent.entity_id,
+      name: ent.name,
+      entity_type: ent.entity_type
+    ]
+  }
+  return refs
+'''
+
+// 统计可用实体数量
+n_entity_total, act_func?script='''
+  return n_entities_raw?.size() ?: 0
+'''
+
+// 初始化关系累积列表
+n_init_relations, act_func?script='''
+  fn.put("all_relations", [])
+  return "ok"
+'''
+
+// 逐chunk抽取候选关系
+foreach('n_chunk_loop', 'n_chunks_raw', {
+  // 当前chunk数据
+  assign("current_chunk", "{{n_chunk_loop.item}}")
+
+  // 提取chunk编号（去掉chunk_前缀）
+  assign("chunk_num", "{{current_chunk.chunk_id?replace('chunk_', '')}}")
+
+  // LLM从当前chunk文本中抽取关系
+  n_chunk_relations, tpl_extract_relations, psr_json
+
+  // 将当前chunk抽取的关系累积到全局列表
+  act_func?script='''
+    def extracted = n_chunk_relations?.relations ?: []
+    def allRelations = fn.get("all_relations")
+    allRelations.addAll(extracted)
+    fn.put("all_relations", allRelations)
+    return "ok"
+  '''
+})
+
+// 获取累积的全部关系
+n_relations_all, act_func?script='''
+  return fn.get("all_relations") ?: []
+'''
+
+// 统计关系数量与类型分布
+n_relation_stats, act_func?script='''
+  def stats = [total: 0, by_type: [:]]
+  def relations = n_relations_all ?: []
+  stats.total = relations.size()
+  relations.each { rel ->
+    def t = rel.relation_type ?: "Unknown"
+    stats.by_type[t] = (stats.by_type[t] ?: 0) + 1
+  }
+  return stats
+'''
+
+// 写入relations_raw.json到知识空间
+act_artifact.write?filepath='{{ksDir}}/03_extraction/relations_raw.json'&data='{{n_relations_all}}'
+
+// 输出阶段三关系抽取结果
+n_output, act_func?script='''
+  def result = [:]
+  result.success = true
+  result.stage = "d4_extract_relations"
+  result.total_relations = n_relations_all?.size() ?: 0
+  result.relation_type_distribution = n_relation_stats?.by_type ?: [:]
+  result.available_entities = n_entity_total
+  result.output_files = [
+    ksDir + "/03_extraction/relations_raw.json"
+  ]
+  return result
+'''
+
+// 异常处理：捕获错误并返回失败信息
+on_failure({
+  // 构造错误输出
+  n_output, act_func?script='''
+    def result = [:]
+    result.success = false
+    result.stage = "d4_extract_relations"
+    result.error = fn.str(sys_failure_task?.result ?: "Unknown error")
+    return result
+  '''
+  // 跳转到流程结束
+  act_flow.go?plan=end
+})
+
+// 关系抽取LLM模板
+define('tpl_extract_relations', '''
+你是关系抽取专家。从以下文本片段中识别已抽取实体之间的语义关系。
+
+## 可用实体列表
+
+以下是当前文档中已发现的所有实体。你只能引用此列表中的 entity_id。如果文本中提到的实体不在列表中，不要创建新实体，只需在 evidence 中引用原文。
+
+{{n_entity_refs}}
+
+## 关系类型（只使用以下类型，不要自创类型）
+
+| 类型 | 说明 | 示例 |
+|------|------|------|
+| MENTIONS | 提及、引用 | 文档提及某组织 |
+| BELONGS_TO | 归属于 | 员工归属于部门 |
+| PART_OF | 组成部分 | 模块是系统的一部分 |
+| RELATED_TO | 一般关联 | A与B相关 |
+| AUTHORED_BY | 由...创作 | 文档由某人编写 |
+| WORKS_FOR | 为...工作 | 某人任职于某组织 |
+| PRODUCES | 生产、产出 | 项目产出产品 |
+| USES | 使用、采用 | 项目使用某技术 |
+| DEPENDS_ON | 依赖于 | A依赖于B |
+| IMPLEMENTS | 实施、实现 | 组织实现项目 |
+| REQUIRES | 需要、要求 | 需求要求某指标 |
+| CAUSES | 导致、引起 | 风险导致损失 |
+| AFFECTS | 影响 | 变更影响进度 |
+| MEASURED_BY | 由...度量 | 性能由指标度量 |
+| HAS_RISK | 存在风险 | 项目存在风险 |
+| HAS_TIME | 具有时间 | 事件具有时间 |
+| HAS_PARTICIPANT | 具有参与方 | 项目有参与方 |
+| PRECEDES | 先于 | A先于B发生 |
+| FOLLOWS | 后于 | B后于A发生 |
+
+## 抽取原则
+
+1. 只抽取文本中明确表达的关系，不要臆造
+2. source_entity_id 和 target_entity_id 必须来自可用实体列表
+3. 关系方向要准确：A IMPLEMENTS B 表示A实施B
+4. 附带 qualifiers 补充关系细节（角色、条件、程度等）
+5. 每条关系必须附带证据
+6. confidence 基于文本明确程度
+7. 如果当前chunk没有可抽取的关系，返回空数组
+
+## 输出格式
+
+严格按以下JSON格式输出，不要任何解释或额外文字：
+
+```json
+{
+  "relations": [
+    {
+      "relation_id": "rel_{{chunk_num}}_001",
+      "relation_type": "IMPLEMENTS",
+      "source_entity_id": "ent_0001_001",
+      "target_entity_id": "ent_0001_002",
+      "qualifiers": {
+        "role": "承建方"
+      },
+      "evidence": [
+        {
+          "chunk_id": "{{current_chunk.chunk_id}}",
+          "page_range": {{current_chunk.page_range}},
+          "quote": "某科技有限公司负责系统建设"
+        }
+      ],
+      "confidence": 0.88
+    }
+  ]
+}
+```
+
+## 字段说明
+
+- relation_id：格式 rel_{{chunk_num}}_{序号}，序号从001开始
+- relation_type：必须是上表中列出的类型之一
+- source_entity_id：关系主体，必须来自可用实体列表
+- target_entity_id：关系客体，必须来自可用实体列表
+- qualifiers：关系的限定信息（角色、条件、程度等），键值对，无则设为 {}
+- evidence：证据列表，每项含 chunk_id/page_range/quote
+- confidence：置信度分数
+
+## 当前Chunk信息
+
+- chunk_id：{{current_chunk.chunk_id}}
+- 页码范围：{{current_chunk.page_range}}
+
+## 文本内容
+
+{{current_chunk.text}}
+
+仅输出 JSON，不要解释。
+''')

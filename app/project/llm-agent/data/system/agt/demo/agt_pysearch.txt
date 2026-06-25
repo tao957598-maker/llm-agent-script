@@ -1,0 +1,23 @@
+/*
+{
+	"title":"探测Python沙箱环境",
+	"parameter":[],
+	"displayOrder":0,
+	"version":1
+}
+*/
+// 让 LLM 生成探测代码
+define('tpl_probe_env', '''
+请输出一段 Python 代码，执行以下操作：
+1. 打印 Python 版本信息
+2. 尝试导入常见的数据科学库（pandas, matplotlib, numpy, scipy, sklearn），如果导入成功打印"库名: 已安装"，失败则打印"库名: 未安装"
+3. 打印 sys.path 显示搜索路径
+4. 尝试访问 https://pypi.org 测试网络连通性（用 urllib.request.urlopen），打印"网络: 可达"或"网络: 不可达"
+只输出 Python 代码，不要解释，放在 ```python ``` 代码块中。
+''')
+n_py_code, tpl_probe_env, psr_python
+
+n_py_file, act_python.writeTmp?requirement='探测Python环境'&path='tmp/probe_env.py'&sourceCode='{{n_py_code}}'
+n_result, act_python.run?filepath='{{n_py_file.kbspath}}'
+
+act_say "沙箱环境探测结果：\n{{n_result}}"

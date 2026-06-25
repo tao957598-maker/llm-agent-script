@@ -1,0 +1,69 @@
+/*
+{
+"title": "Call Specific Agent by Routing",
+"description": "Invoke a specific agent dynamically based on the routing decision or request context."
+"parameter":[
+    {
+        "name":"userInput",
+        "label":"需求"
+    },
+    {
+        "name":"kbSpaceId",
+        "label":"目录ID（支持多个）",
+        "type":"knowledge_fold"
+    },
+    {
+        "name":"kbSpaceFileId",
+        "label":"文件ID",
+        "type":"knowledge_space"
+    },
+    {
+        "name":"fileName",
+        "label":"文件名称"
+    },
+    {
+        "name":"currentUrl",
+        "label":"当前URL路径"
+    },
+    {
+        "name":"outputFormat",
+        "label":"输出得数据格式"
+    },
+    {
+        "name":"modifyContent",
+        "label":"待修改的内容"
+    }
+],
+"version":2
+}
+*/
+// agent代码生成
+when('currentUrl == "/flow-home"', {
+    n_data,agt_agent_gen_code?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}&docContent={{modifyContent}}
+    act_flow.go?plan=end
+})
+//  自动录入 api tool
+when('currentUrl == "/web-api-tool/create"', {
+    n_data,agt_api_registrar?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}
+    act_flow.go?plan=end
+})
+// llm 配置助手 TODO 该页面没有助手 暂时用不了
+when('currentUrl == "/model-create"', {
+    n_data,agt_model_create?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}
+    act_flow.go?plan=end
+})
+// TODO 该页面没有助手 暂时用不了
+when('currentUrl == "/agent-store-create"', {
+    n_data,agt_agent_store_create?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}
+    act_flow.go?plan=end
+})
+// Knowledge Base List 建表 
+when('currentUrl == "/knowledge-base"', {
+    n_data,agt_schema_manager?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}
+act_flow.go?plan=end
+})
+// 模板配置助手 TODO 该页面没有助手 暂时用不了
+when('currentUrl == "/kbs-template/agent-generate-template"', {
+  n_data,agt_doc_template?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}&modifyContent={{modifyContent}}
+	act_flow.go?plan=end
+})

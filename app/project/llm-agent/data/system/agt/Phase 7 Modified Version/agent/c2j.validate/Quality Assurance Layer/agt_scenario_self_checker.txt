@@ -1,0 +1,21 @@
+/*
+{
+  "title":"COBOL2Java Scenario Self Checker",
+  "description":"P0：7.0 生成 scenario 后、落盘前，确定性校验 golden 字段类型、必填项完整性、API 路径格式。严重错误阻止落盘，强制重译。不消耗 LLM。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"blockOnMissingGolden","label":"golden 缺失时阻止落盘","required":false,"default":"true"},
+    {"name":"blockOnMissingModuleId","label":"moduleId 缺失时阻止落盘","required":false,"default":"true"}
+  ],
+  "version":1,
+  "resultPlan":"n_scenario_self_check_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_block_on_missing_golden','{{fn.optional(blockOnMissingGolden,"true")}}',
+       'n_block_on_missing_module_id','{{fn.optional(blockOnMissingModuleId,"true")}}')
+
+n_scenario_self_check_report, act_func.run?expression=scenario_self_checker_json

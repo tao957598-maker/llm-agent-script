@@ -1,0 +1,191 @@
+/*
+{
+	"title":"Web 自动化测试(执行阶段)",
+	"description":"",
+	"parameter":[
+		{
+			"name":"steps",
+			"label":"测试步骤",
+			"required":true
+		},
+		{
+			"name":"test_no",
+			"label":"测试编号",
+			"required":true
+		},
+		{
+			"name":"system",
+			"label":"系统名称",
+			"required":true
+		},
+		{
+			"name":"envinfo",
+			"label":"environment information",
+			"required":true
+		},
+		{
+			"name":"version",
+			"label":"版本号",
+			"required":true
+		}
+	],
+	"resultPlan":"n_test_step",
+	"life":1000,
+	"version":6
+}
+*/
+// steps 调整成二维数组：执行+验证、验证。
+// 		总是在下一步的执行时，并行去验证上一步的结果。如果遇到用户的验证步骤，那么无并行。
+assign('n_step_list', '[]')
+
+agent('agt_async_step', {
+	assign('async_list_step', '[]')
+	assign('answer_summary_list_step', '[]')
+	assign('answer_summary', '[]')
+	assign('n_tmp_answers_step', '[]')
+
+	foreach('n_test_step_second', 'steps_second', {
+		assign('current_step', '{{n_test_step_second.item}}')
+		//# 设置执行器
+		assign('plan_agent', '{{current_step.agent}}')
+
+		//# Exploration mode: dynamic agent selection ================== 这个类型前端没有 ===================
+		when('fn.hasValue(plan_agent)', {
+			n_envinfo, act_kb.select?name=kb_testcase_biz&where='{"name":"{{current_step.application}}"}'
+			// Async Execute the plan with selected agent
+			when('plan_agent == "VERIFICATION_TASK"',{
+				n_step_result,agt_async_verify.webTestAutomation.test?test_no={{test_no}}&steps={{n_test_step.items}}&step_index={{n_test_step.index}}&current_step={{current_step}}&system={{system}}&version={{version}}&envinfo={{n_envinfo.envinfo}}&async=true
+			})
+			when('plan_agent == "VERIFICATION_TRIPLE_TASK"',{
+				n_step_result,agt_async_verify.webTestAutomation.test?test_no={{test_no}}&steps={{n_test_step.items}}&step_index={{n_test_step.index}}&current_step={{current_step}}&system={{system}}&version={{version}}&envinfo={{n_envinfo.envinfo}}&async=true
+			})
+			when('plan_agent == "VERIFICATION_EXECUTE_TASK"',{
+				n_step_result,agt_async_verify.webTestAutomation.test?test_no={{test_no}}&steps={{n_test_step.items}}&step_index={{n_test_step.index}}&current_step={{current_step}}&system={{system}}&version={{version}}&envinfo={{n_envinfo.envinfo}}&async=true
+			})
+			when('plan_agent == "VERIFICATION_EXIST_TASK"',{
+				n_step_result,agt_async_verify.webTestAutomation.test?test_no={{test_no}}&steps={{n_test_step.items}}&step_index={{n_test_step.index}}&current_step={{current_step}}&system={{system}}&version={{version}}&envinfo={{n_envinfo.envinfo}}&async=true
+			})
+
+			when('plan_agent == "TRIPLE_TASK"',{
+				n_step_result,agt_test_triple.webTestAutomation.test?test_no={{test_no}}&steps={{n_test_step.items}}&step_index={{n_test_step.index}}&current_step={{current_step}}&system={{system}}&version={{version}}&envinfo={{n_envinfo.envinfo}}&filename={{}}&async=true
+			})
+			when('plan_agent == "OPERATION_EXECUTE_TASK"',{
+				assign('task_type', 'OPERATION_EXECUTE_TASK')
+				n_step_result,agt_test_selenium.webTestAutomation.test?test_no={{test_no}}&steps={{n_test_step.items}}&step_index={{n_test_step.index}}&current_step={{current_step}}&system={{system}}&version={{version}}&envinfo={{n_envinfo.envinfo}}&taskType={{task_type}}&async=true
+			})
+			when('plan_agent == "OPERATION_EXIST_TASK"',{
+				assign('task_type', 'OPERATION_EXIST_TASK')
+				n_step_result,agt_test_selenium.webTestAutomation.test.test?test_no={{test_no}}&steps={{n_test_step.items}}&step_index={{n_test_step.index}}&current_step={{current_step}}&system={{system}}&version={{version}}&envinfo={{n_envinfo.envinfo}}&taskType={{task_type}}&async=true
+			})
+			"""
+			三元组不成熟，不要三元组了
+			['agt_async_verify.webTestAutomation.test','VERIFICATION_PAMP_TASK','VerifyPamp'],
+			['agt_test_selenium_pamp.webTestAutomation.test','PAMP_EXECUTE_TASK','Pamp']
+			"""
+		})
+		
+	})
+
+	
+	n_step_result_temp,act_func?script='''
+		def expert = n_step_result
+		async_list_step.add([n_step_result:expert])
+		return expert
+	'''
+
+	foreach('n_item', 'async_list_step', {
+		assign('async_map', '{{n_item.item}}')
+		assign('answer_summary', '[]')
+		n_key,act_func?script='''
+		def data = async_map
+		def entry = data.entrySet().first()  
+		def key = entry.key
+		return key
+		'''
+
+		n_value,act_func?script='''
+		def data = async_map
+		def entry = data.entrySet().first()  
+		def value = entry.value
+		return value
+		'''
+		// answer_summary answer_summary 1
+		assign('answer_summary', '{{fn.hasValue(n_value,"value") ? n_value.value : "[]"}}')
+
+		// n_tmp_answern_tmp_answer 1
+		n_tmp_answers_step,act_func?script='''
+		def newList = answer_summary
+		answer_summary_list_step.addAll([
+			key: n_key,
+			value: newList
+		])
+		return newList
+		'''
+  })
+
+  act_memory.assign?var=agt_async_step_answer&value={{answer_summary_list_step}}&global=true
+
+})
+
+//# 将steps 转换成二维数组：执行和对应的验证一起走。
+n_tmp,act_func.run?script='''  
+def data = steps
+def executorToAgent = [
+    "VERIFICATION_TASK": "agt_async_verify.webTestAutomation.test",
+    "VERIFICATION_TRIPLE_TASK": "agt_async_verify.webTestAutomation.test",
+    "VERIFICATION_EXECUTE_TASK": "agt_async_verify.webTestAutomation.test",
+    "VERIFICATION_EXIST_TASK": "agt_async_verify.webTestAutomation.test",
+    "TRIPLE_TASK": "agt_test_triple.webTestAutomation.test",
+    "OPERATION_EXECUTE_TASK": "agt_test_selenium.webTestAutomation.test",
+    "OPERATION_EXIST_TASK": "agt_test_selenium.webTestAutomation.test"
+]
+
+def result = []
+int idx = 0
+
+while (idx < data.size()) {
+    def current = data[idx]
+    def currentExecutor = current.executor
+    
+    boolean isVerificationNotTask = currentExecutor.startsWith("VERIFICATION_") && currentExecutor != "VERIFICATION_TASK"
+    
+    if (isVerificationNotTask && idx + 1 < data.size()) {
+        def nextItem = data[idx + 1]
+        
+        current.agent = executorToAgent[currentExecutor]
+        nextItem.agent = executorToAgent[nextItem.executor]
+        
+        result.add([current, nextItem])
+        idx += 2
+    } else {
+        current.agent = executorToAgent[currentExecutor]
+        result.add([current])
+        idx += 1
+    }
+}
+
+return result
+'''
+//# 转换为二维数组结果
+assign('steps_list',"{{n_tmp}}")
+
+foreach('n_test_step', 'steps_list', {
+	assign('steps_second', '{{n_test_step.item}}')
+	n_tmp,act_func.run?script='''
+	def rawData = steps_second
+	def dotIndex = rawData.indexOf('.')
+	def jsonStr = rawData.substring(dotIndex + 1)
+	return jsonStr
+	'''
+	//# 一维数组的元素
+	assign('steps_second', '{{fn.list(n_tmp)}}')
+	agt_async_step?userInput={{question}}&history={{history_for_async}}&steps_second={{steps_second}}
+	//# Async step result
+	n_tmp_answers,act_memory.retrieve?var=agt_async_step_answer&global=true
+	//# Async step result handled
+	append('n_step_list', '{{n_tmp_answers}}')
+
+})
+
+//# 执行结果
+assign('n_final_answer', '{{n_step_list}}')

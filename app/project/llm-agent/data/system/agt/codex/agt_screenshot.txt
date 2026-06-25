@@ -1,0 +1,33 @@
+/*
+{
+	"title":"test demo tmp",
+	"description":"test demo tmp",
+	"resultPlan":"s",
+	"parameter":[
+		
+	],
+	"displayOrder":0,
+	"version":3
+}
+*/
+// userInputuserInput
+assign('userInputuserInput',"{{userInput}}")
+
+ 
+// n_collect_data: 收集数据节点，通过RPA机器人截取浏览器屏幕
+n_collect_data, act_rpa.send?command=BrowserScreenshot
+// 从收集到的数据中提取截图文件名，并存入变量 screenshot_filename
+assign('screenshot_filename', "{{n_collect_data[0].screenshot_filename}}")
+
+// n_result: 处理结果节点，调用动态API对截图进行布局标注
+n_result, act_api.doExecuteDynamic?name="img_annotate_layout"&dynamicParamData='{"file":"{{screenshot_filename}}"}'
+
+// n_write_filename: 从文件路径中提取纯文件名（不含路径部分）
+n_write_filename, act_func.run?script=' return screenshot_filename.substring(screenshot_filename.lastIndexOf(File.separator) + 1)' 
+
+// write_path: 构建上传时使用的存储路径，将文件放入upload目录下
+assign('write_path', 'upload/{{n_write_filename}}')
+
+// write: 执行写入操作，将标注后图片的base64数据保存到指定路径，并同步到知识库
+act_func.write?filename='{{write_path}}'&data='{{n_result.image_base64}}'&syncKbs=true
+

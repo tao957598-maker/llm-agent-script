@@ -1,0 +1,21 @@
+/*
+{
+  "title":"COBOL2Java Document Sync Monitor",
+  "description":"P2：监控设计文档（target-architecture/openapi等）的 SHA256 变化，标记受影响的 scenario 为 STALE_DOC_DRIFT。完全确定性，不消耗 LLM。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"action","label":"动作","required":false,"default":"check"}
+  ],
+  "version":1,
+  "resultPlan":"n_document_sync_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_action','{{fn.optional(action,"check")}}')
+
+n_document_sync_report, act_func.run?expression=document_sync_monitor_json

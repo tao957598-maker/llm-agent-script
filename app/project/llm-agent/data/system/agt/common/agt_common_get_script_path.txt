@@ -1,0 +1,55 @@
+/*
+{
+	"title":"Get Script Path",
+	"description":"Common Agent: Query script_path from kb_testcase_step table by application, version and test_no, and support scanning to knowledge space",
+	"parameter":[
+		{
+			"name":"application",
+			"label":"Application Name",
+			"required":true
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		},
+		{
+			"name":"test_no",
+			"label":"Test Number",
+			"required":true
+		},
+		{
+			"name":"kbSpacesFolderId",
+			"label":"Knowledge Space Folder ID",
+			"required":false,
+			"description":"When provided, this parameter takes priority for scanning files to knowledge space"
+		}
+	]
+}
+*/
+
+// 查询测试脚本路径
+n_script_path_result,act_kb.selectBy?sql='select script_path from kb_testcase_step where application = ? and version = ? and test_no = ?'&parameters='{{application}},{{version}},{{test_no}}'
+
+when("fn.hasValue(n_script_path_result) && n_script_path_result.size > 0", {
+    // 查询成功，返回脚本路径
+    assign("script_path", "{{n_script_path_result[0].script_path}}")
+    log("Script path found: {{script_path}}")
+    
+    // ========== 扫描导入到知识空间 ==========
+    when("fn.hasValue(kbSpacesFolderId)", {
+        // 优先使用 kbSpacesFolderId
+        n_scan_result,act_kbs.fileWalkToKbs?kbSpacesFolderId='{{kbSpacesFolderId}}'&fullPath='{{script_path}}'
+        log('File scanned to knowledge space using folderId: {{n_scan_result}}')
+    }, {
+        // 只使用 fullPath 参数
+        n_scan_result,act_kbs.fileWalkToKbs?fullPath='{{script_path}}'
+        log('File scanned to knowledge space using fullPath: {{n_scan_result}}')
+    })
+    // ========== 扫描结束 ==========
+    
+}, {
+    // 查询失败，返回空值
+    assign("script_path", "")
+    log("No script path found for test_no: {{test_no}}")
+})

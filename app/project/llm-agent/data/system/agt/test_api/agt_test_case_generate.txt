@@ -1,0 +1,54 @@
+/*{
+  "title": "API Test Case Generate Agent",
+  "description": "Generate executable API test case drafts from the mapping matrix.",
+  "parameter": [
+    {
+      "name": "testMatrixJsonPath",
+      "label": "测试矩阵JSON路径",
+      "required": true
+    }
+  ],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+// Read the mapping matrix JSON directly from the knowledge-space file path.
+n_test_matrix_file_content, act_func.read?filename='{{testMatrixJsonPath}}'
+
+// Bind the mapping matrix JSON content for template use.
+assign('test_matrix_json', '{{n_test_matrix_file_content}}')
+
+// Generate test case JSON from the mapping matrix.
+n_payload, tpl_test_cases, psr_json
+
+// Prepare file content for persistence.
+assign('file_content', '{{fn.str(n_payload)}}')
+
+// Persist the generated test cases JSON into the knowledge space file.
+n_result, act_func.write?filename='test_api_codex/test_cases.json'&data='{{file_content}}'&syncKbs=true
+
+// Prompt template for test case generation.
+define('tpl_test_cases', '''
+你是 API 测试用例生成器。只根据映射矩阵生成可执行测试用例草稿，不要重新理解原始文档，不要扩写接口细节，不要加入无关场景。
+输入的 test matrix JSON：{{test_matrix_json}}
+
+输出要求：1. 只输出一个合法 JSON 对象。2. 在 test_cases 数组中逐条输出用例。3. 每个用例只覆盖一个明确场景。4. steps 必须保持简短、清晰、可执行。5. 不要输出 Markdown、代码块或额外文本。
+JSON 结构必须为：
+{
+  "test_cases": [
+    {
+      "case_id": "",
+      "requirement_id": "",
+      "precondition": "",
+      "steps": [],
+      "test_data": {},
+      "expected_result": "",
+      "priority": ""
+    }
+  ]
+}
+
+补充约束：
+- 如果映射项缺少关键信息，仍然生成一个最小可执行草稿，并在 precondition 或 test_data 中保留缺口标记。
+- priority 优先沿用映射中的优先级或需求优先级；无法判断时使用 medium。
+''')

@@ -1,0 +1,83 @@
+/*
+{
+  "title":"COBOL2Java Invariant Extractor",
+  "description":"P2：从 COBOL 源码确定性提取数值约束，LLM 从业务文档中提取语义层面不变式。输出不变式列表供测试嵌入。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"maxPrograms","label":"最多处理程序数","required":false,"default":"10"}
+  ],
+  "version":1,
+  "resultPlan":"n_invariant_extractor_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_max_programs','{{fn.optional(maxPrograms,"10")}}')
+
+//# 确定性部分：从 COBOL 源码提取数值约束
+n_invariant_candidates_json, act_func.run?expression=invariant_extractor_json
+
+//# LLM 部分：从业务文档补充语义不变式（如果有业务文档）
+n_invariant_semantic_json, tpl_invariant_semantic, psr_json?required='invariants', \
+  vrf_flag?value='fn.hasValue(sys_last_result,"invariants")'
+
+n_invariant_final_report, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONArray
+import com.alibaba.fastjson2.JSONWriter
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Instant
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim()
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def candidates = JSON.parseObject(fn.str(fn.get("n_invariant_candidates_json")))
+def semantic = JSON.parseObject(fn.str(fn.get("n_invariant_semantic_json")) ?: "{}")
+
+def invariants = new JSONArray()
+if (candidates.getJSONArray("invariants") != null) invariants.addAll(candidates.getJSONArray("invariants"))
+if (semantic.getJSONArray("invariants") != null) invariants.addAll(semantic.getJSONArray("invariants"))
+
+def report = [
+    schema: "cobol2java.invariant-registry",
+    version: "v1",
+    generatedAt: Instant.now().toString(),
+    generatedBy: "agt_invariant_extractor.c2j.validate",
+    invariants: invariants,
+    total: invariants.size()
+]
+
+def reportDir = base.resolve("test/equivalence")
+Files.createDirectories(reportDir)
+Files.writeString(reportDir.resolve("invariant-registry-v1.json"),
+    JSON.toJSONString(report, JSONWriter.Feature.PrettyFormat), StandardCharsets.UTF_8)
+
+fn.put("n_invariant_count", invariants.size())
+return agentResult(JSON.toJSONString([status:"COMPLETE", total:invariants.size()]))
+'''
+
+assign('n_invariant_extractor_report','''# 业务不变式提取报告
+
+已从 COBOL 源码和业务文档中提取不变式，详见 test/equivalence/invariant-registry-v1.json。
+''')
+
+define('tpl_invariant_semantic', '''
+你是业务规则分析师。从以下业务文档中提取"在任何情况下都必须为真"的不变式。
+
+# 业务文档
+{{n_invariant_candidates_json}}
+
+# 输出要求
+输出 JSON（仅 JSON）：
+- invariants: 数组，每项包含：
+  - description: 不变式描述（如 "转账后总余额不变"）
+  - scope: 适用范围（如 "all transfer transactions"）
+  - type: "arithmetic" | "logical" | "temporal"
+  - confidence: 0~1
+''')

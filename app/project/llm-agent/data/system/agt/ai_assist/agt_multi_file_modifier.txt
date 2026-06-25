@@ -1,0 +1,274 @@
+/*
+{
+  "title": "多文件协同修改 Agent",
+  "description": "用于知识库文件简单修改,新增文件，支持多个文件 modify/create/delete 操作。",
+  "parameter": [
+    {"name":"userInput","label":"修改指令","required":true},
+    {"name":"modifyContent","label":"选中文件列表JSON"}
+  ],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+// 保存用户修改指令
+assign('instruction', '{{userInput}}')
+// 保存选中文件列表 JSON 数据（含文件路径、语言、选中代码块及上下文）
+assign('files_json', '{{fn.optional(modifyContent, "Nan") }}')
+
+
+// 第一阶段：调用规划型 LLM 分析需求并生成结构化修改计划
+n_plan, tpl_gen_plan, psr_json
+// 从计划 JSON 中提取 plan 步骤数组供 foreach 循环遍历
+n_steps, act_func?script='return n_plan.plan'
+assign('modify_success', 'false')
+// 第二阶段：检查计划是否为空，非空则按执行顺序逐文件循环修改
+when('{{fn.hasValue(n_plan.plan)}}', {
+  // 初始化修改结果收集列表（用于汇聚每个文件的修改输出）
+  assign('modify_results', '[]')
+  // 计划非空，遍历每个步骤逐文件调用修改型 LLM 生成新代码
+  foreach('step', 'n_steps', {
+    // 将当前步骤的完整信息（action/file_path/change_summary 等）保存为变量供模板引用
+    assign('current_step', '{{step.item}}')
+    // 调用修改型 LLM 根据当前步骤计划生成该文件的修改后代码
+    n_modify_result, tpl_modify_file, psr_json
+    // 失败时捕获异常并写入错误结果，避免单文件失败中断整体流程
+    on_failure({
+      assign('n_modify_result', '{"success":false,"error":"Modification execution failed, please retry this step"}')
+    })
+    // 将计划步骤上下文与修改执行结果合并为结构化条目后追加到汇总列表
+    act_func?script='''
+def result = n_modify_result
+def entry = [
+    file_path: result?.file_path ?: "",
+    action: result?.action ?: "",
+    change_summary: result?.changes?.first()?.description ?: "",
+    success: result?.success ?: false,
+    changes: result?.changes ?: [],
+    error: result?.error ?: null
+]
+modify_results.add(entry)
+'''
+  })
+  assign('modify_success', 'true')
+}, {
+  // 计划为空，记录提示信息供汇总阶段展示（global_notes 中含具体原因）
+  assign('modify_results', '[{"success":false,"file_path":"N/A","action":"none","error":"Generated modification plan is empty. See global_notes in the plan for details."}]')
+})
+
+// 返回处理结果
+assign('finalResult', "{{fn.json('modify_success,modify_success,modify_results,modify_results')}}")
+
+
+// ======================== 模板定义 ========================
+
+// 规划模板：分析多文件需求并生成结构化修改计划
+define('tpl_gen_plan', '''
+你是一个文件构造或重构规划专家。用户可能需要跨多个文件进行内容修改，你的任务是先制定一个详细、可执行的修改计划。
+
+## 用户指令
+{{instruction}}
+
+## 所有选中文件的内容（含文件路径、语言、选中行范围及上下文）
+{{files_json}}
+
+1. 首先判断用户指令的性质：
+   - 如果用户要求修改、重构、删除现有文件中的代码，且提供了文件内容，则按照本条第2点制定详细修改计划。
+   - 如果用户仅要求提供代码示例、解释概念、给出通用方案（如“写一个 Python 示例文件”），且没有提供具体的文件内容或不需要基于现有代码修改，则属于创建。
+2. 根据用户指令确定每个文件需要的操作类型`action`：
+   - "modify": 修改现有文件中的选中代码块
+   - "create": 创建新文件（需在 change_summary 中描述完整文件内容要点）
+   - "delete": 删除不再需要的文件
+3. 为每个操作编写精确的 change_summary，必须包含：
+   - 关键行号范围（如"第20-35行"）
+   - 具体变更描述（如"将 fetch 调用改为 async/await 模式"）
+   - 需要新增或删除的导入语句
+   - 需要修改的函数签名或变量名
+4. 分析文件间依赖关系，确定合理的执行顺序（被依赖的文件应先修改）
+5. 如有跨文件的统一变更模式（如统一错误处理、统一导入路径），记录在 global_notes 中
+6. 如果某个文件不需要修改，不要将其列入 plan 数组
+
+
+
+
+#  输出格式
+## 代码修改计划数据格式说明
+
+该 JSON 格式用于描述一系列代码文件的操作（修改、创建、删除），并指定执行顺序与全局规范。
+
+## 顶层字段
+
+| 字段 | 类型 | 必填 | 描述 |
+|------|------|------|------|
+| `plan` | `Array<Object>` | 是 | 操作列表，每个对象描述一个具体的文件操作。 |
+| `order_of_execution` | `Array<string>` | 是 | 文件路径列表，规定操作的执行顺序。路径应与 `plan` 中 `file_path` 完全匹配。 |
+| `global_notes` | `string` | 否 | 全局补充说明或约束，例如编码规范、错误处理要求等。 |
+
+## `plan` 数组中的对象字段
+
+每个操作对象代表对某个文件的一种变更类型。支持三种动作：
+
+### 通用字段
+
+| 字段 | 类型 | 必填 | 描述 |
+|------|------|------|------|
+| `action` | `string` | 是 | 操作类型。取值：`"modify"`、`"create"`、`"delete"`。 |
+| `file_path` | `string` | 是 | 目标文件的相对路径（通常从项目根目录或 `src/` 开始）。 |
+| `language` | `string` | 视情况 | 当 `action` 为 `"modify"` 或 `"create"` 时必填，指定文件编程语言（如 `"javascript"`）。`"delete"` 时可省略。 |
+| `change_summary` | `string` | 视情况 | 当 `action` 为 `"modify"` 或 `"create"` 时必填，描述具体修改或创建的内容。`"delete"` 时一般填写删除理由。 |
+
+ 以下 JSON 结构示例，不要添加 markdown 代码块标记或任何解释文字：
+{
+  "plan": [
+    {
+      "action": "modify",
+      "file_path": "src/api/user.js",
+      "language": "javascript",
+      "change_summary": "第20-35行：将 fetch().then() 链式调用改为 async/await 模式，在函数体内使用 try/catch 包裹；顶部添加 import { request } from '../utils/request'"
+    },
+    {
+      "action": "create",
+      "file_path": "src/utils/request.js",
+      "language": "javascript",
+      "change_summary": "新建通用请求模块，封装基于 fetch 的异步请求函数，统一处理请求头、超时和基础错误日志"
+    },
+    {
+      "action": "delete",
+      "file_path": "src/legacy/apiV1.js",
+      "language": "javascript",
+      "change_summary": "旧版 API 适配器已无引用，所有调用已迁移至新模块，删除该文件"
+    }
+  ],
+  "order_of_execution": ["src/utils/request.js", "src/utils/fetchWrapper.js", "src/api/user.js", "src/api/order.js"],
+  "global_notes": "所有异步请求统一使用 try/catch 包裹，错误在 fetchWrapper 层集中记录日志；导入路径统一使用 '../utils/request'"
+}
+
+直接返回 JSON，不要解释。
+''')
+
+// 修改模板：按计划对单个文件执行精确代码修改（支持单文件多处非连续修改）
+define('tpl_modify_file', '''
+你是一个精确代码修改执行器。根据修改计划中对当前文件的描述，生成修改后的代码。只修改当前文件，不要改动其他文件。
+
+## 全局修改指令
+{{instruction}}
+
+## 所有文件的原始代码（供理解跨文件上下文和依赖关系）
+{{files_json}}
+
+## 当前步骤 修改计划（只改这个文件）
+{{current_step}}
+
+## 全局计划概览
+{{n_plan}}
+
+## 修改要求
+1. 严格按照当前步骤 change_summary 中的每一条描述执行修改，不增加、不遗漏、不自由发挥
+2. 仅修改当前步骤指定的文件，保持其他所有文件不变
+3. 保持原有代码风格：缩进方式、命名规范、注释风格与原文一致
+4. 确保修改后的代码语法完全正确、逻辑完整
+5. **关键规则：当一个文件需要多处非连续修改时（如顶部加 import + 中间改函数体），必须将每处修改拆为 changes 数组中的独立元素，每个元素代表一个连续的修改 hunk**
+6. 如果 change_summary 涉及删除操作（action="delete"），将 changes 设为空数组 []
+7. 如果 change_summary 涉及新建文件（action="create"），changes 中应包含一个 operation="create_file" 的条目，modified_code 为完整的新文件内容
+8. 用 \\n 表示代码中的换行符
+
+## changes 数组中 operation 的取值说明
+- "replace": 将 start_line 到 end_line 范围内的原代码替换为 modified_code
+- "insert_before": 在 start_line 行之前插入 modified_code（start_line 与 end_line 设为相同值）
+- "insert_after": 在 end_line 行之后插入 modified_code（start_line 与 end_line 设为相同值）
+- "delete": 删除 start_line 到 end_line 范围内的代码，modified_code 设为空字符串 ""
+- "create_file": 新建文件，start_line 和 end_line 均设为 0，modified_code 为完整文件内容
+
+## 输出格式
+严格只输出以下 JSON 结构，不要添加 markdown 代码块标记或任何解释文字：
+
+成功时（单处修改也使用 changes 数组，只包含一个元素）：
+{
+  "success": true,
+  "file_path": "main.py",
+  "action": "modify",
+  "changes": [
+    {
+      "start_line": 1,
+      "end_line": 1,
+      "operation": "insert_before",
+      "description": "在文件顶部添加 import config 和 import utils",
+      "modified_code": "import config\\nimport utils"
+    },
+    {
+      "start_line": 15,
+      "end_line": 18,
+      "operation": "replace",
+      "description": "将原有 calculate_total(price, tax_rate) 替换为从 config 读取税率并调用 utils",
+      "modified_code": "def calculate_total(price):\\n    tax_rate = config.number / 100\\n    return utils.calculate_total(price, tax_rate)"
+    }
+  ]
+}
+
+失败时：
+{
+  "success": false,
+  "file_path": "main.py",
+  "action": "modify",
+  "error": "具体失败原因（如：change_summary 中描述的原始代码在文件中未找到）"
+}
+
+直接返回 JSON，不要解释。
+''')
+
+// 汇总模板：将所有文件的修改结果（含多 hunk changes 数组）整理为结构化报告
+define('tpl_summary_result', '''
+你是一个代码修改结果汇总助手。将多文件代码修改的全部执行结果整理为清晰的结构化报告。
+
+## 用户原始修改指令
+{{instruction}}
+
+## 修改计划
+{{n_plan}}
+
+## 所有文件的修改执行结果（JSON 数组，每个文件的 result 含 changes 数组）
+{{modify_results}}
+
+## changes 数组字段说明
+每个文件的修改结果中，changes 是一个数组，每个元素代表一处连续修改 hunk：
+- start_line / end_line: 修改位置
+- operation: replace | insert_before | insert_after | delete | create_file
+- description: 该处修改的说明
+- modified_code: 修改后的代码
+
+一个文件可能有多个 changes（如顶部加 import + 中间改函数），需要逐一展示。
+
+## 汇总要求
+按以下 Markdown 格式整理报告，方便用户逐一审阅每个文件的每处 diff：
+
+# 多文件代码修改报告
+
+## 概览
+- 总文件数
+- 修改成功数
+- 修改失败数
+- 新建文件数
+- 删除文件数
+- 总修改 hunk 数
+
+## 各文件修改详情
+
+按执行顺序逐个展示每个文件：
+- 操作类型（modify/create/delete）
+- 执行状态（✅ 成功 / ❌ 失败）
+- 文件路径
+- 该文件包含 N 处修改
+
+对每个文件的每处 change 逐一展示：
+- 修改位置（第 X 行 ～ 第 Y 行）
+- 操作类型（替换/前插/后插/删除/新建）
+- 修改说明（来自 description）
+- 修改后代码（代码块）
+
+## 失败项处理建议
+如有修改失败的文件，给出具体的人工处理建议
+
+## 全局注意事项
+列出 global_notes 中的关键信息
+
+直接输出 Markdown 格式报告，不要额外解释。
+''')

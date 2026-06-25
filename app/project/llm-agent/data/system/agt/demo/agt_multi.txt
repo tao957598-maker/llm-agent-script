@@ -1,0 +1,49 @@
+/*
+{
+	"title":"多Agent协作示例",
+	"parameter":[
+		{
+			"name":"resource",
+			"label":"资源类型",
+			"args":[
+				{
+					"label":"帖子",
+					"value":"posts"
+				},
+				{
+					"label":"用户",
+					"value":"users"
+				},
+				{
+					"label":"评论",
+					"value":"comments"
+				}
+			],
+			"required":true,
+			"type":"select"
+		},
+		{
+			"name":"query_id",
+			"label":"指定ID",
+			"required":false,
+			"type":"text"
+		},
+		{
+			"name":"request",
+			"label":"分析要求",
+			"required":false,
+			"type":"text"
+		}
+	],
+	"displayOrder":0,
+	"version":4
+}
+*/
+// 调用子Agent1：获取数据
+n_fetched_data, agt_dataFetcher.demo?resource={{resource}}&query_id={{query_id}}
+
+// 调用子Agent2：分析数据
+n_analyzed_result, agt_DataAnalyzer.demo?data={{n_fetched_data}}&request={{request}}
+
+//## 输出最终结果
+act_say "分析结果：\n{{n_analyzed_result}}"

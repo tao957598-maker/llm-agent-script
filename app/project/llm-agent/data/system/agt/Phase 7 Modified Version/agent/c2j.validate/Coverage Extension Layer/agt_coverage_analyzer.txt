@@ -1,0 +1,23 @@
+/*
+{
+  "title":"COBOL2Java Coverage Analyzer",
+  "description":"P0：确定性解析 COBOL 源码所有条件分支（IF/EVALUATE/PERFORM UNTIL），与 trace-catalog 对比标记覆盖状态，输出覆盖缺口报告供 C2-C4 消费。不消耗 LLM。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"traceCatalogRel","label":"trace catalog 路径","required":false,"default":"verification/trace-scenarios/trace-catalog.json"},
+    {"name":"sourceRootRel","label":"COBOL 源码根目录","required":false,"default":"source"}
+  ],
+  "version":1,
+  "resultPlan":"n_coverage_analyzer_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_trace_catalog_rel','{{fn.optional(traceCatalogRel,"verification/trace-scenarios/trace-catalog.json")}}',
+       'n_source_root_rel','{{fn.optional(sourceRootRel,"source")}}')
+
+n_coverage_analyzer_report, act_func.run?expression=coverage_analyzer_json

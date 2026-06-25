@@ -1,0 +1,45 @@
+/*{
+  "title":"Simple Chat Document Writer",
+  "description":"将总结内容写入 Markdown 文档并返回结构化结果。",
+  "parameter":[
+    {"name":"documentType","label":"文档类型"},
+    {"name":"mode","label":"写入模式"},
+    {"name":"targetFile","label":"目标文件"},
+    {"name":"content","label":"写入内容"}
+  ],
+  "resultPlan":"n_result",
+  "version":1
+}*/
+
+// 保存文档类型
+assign('document_type', '{{fn.optional(documentType, "markdown")}}')
+
+// 保存写入模式
+assign('write_mode', '{{fn.optional(mode, "append_or_create")}}')
+
+// 保存目标文件
+assign('target_file', '{{fn.optional(targetFile, "docs/chat_summary.md")}}')
+
+// 保存写入内容
+assign('doc_content', '{{fn.optional(content, "")}}')
+
+// 初始化结果
+assign('n_result', '{"status":"error","error_code":"INIT","error_message":"未执行写入"}')
+
+// 判断内容是否为空
+when('fn.hasValue(doc_content)', {
+  // 判断目标文件是否为 markdown
+  when('document_type == "markdown"', {
+    // 执行写入
+    act_func.write?filename={{target_file}}&data={{doc_content}}
+
+    // 生成成功结果
+    assign('n_result', '{"status":"success","path":"{{target_file}}","bytes_written":{{fn.length(doc_content)}},"document_artifact":{"artifact_type":"document","content_type":"text/markdown","path":"{{target_file}}","summary":"Markdown 文档已写入"}}')
+  }, {
+    // 生成不支持类型错误
+    assign('n_result', '{"status":"error","error_code":"UNSUPPORTED_DOCUMENT_TYPE","error_message":"当前仅支持 markdown 文档写入"}')
+  })
+}, {
+  // 生成空内容错误
+  assign('n_result', '{"status":"error","error_code":"EMPTY_CONTENT","error_message":"写入内容为空"}')
+})

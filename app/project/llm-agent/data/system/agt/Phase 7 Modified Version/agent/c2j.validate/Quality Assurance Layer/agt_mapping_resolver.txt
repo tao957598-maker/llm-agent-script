@@ -1,0 +1,236 @@
+/*
+{
+  "title":"COBOL2Java API Mapping Resolver",
+  "description":"P2：当 7.0 无法确定 API 映射时（openQuestions 非空或 confidence<0.5），用 LLM 做第二轮针对性推理。只做映射，不同时理解 trace。仅在映射失败时按需调用 LLM。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"maxResolves","label":"单次最多解析 scenario 数","required":false,"default":"5"}
+  ],
+  "version":1,
+  "resultPlan":"n_mapping_resolver_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_max_resolves','{{fn.optional(maxResolves,"5")}}')
+
+//# 确定性：扫描 scenario 目录，筛选需要重新映射的 scenario
+n_mapping_candidates, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONArray
+import com.alibaba.fastjson2.JSONObject
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim()
+def maxResolves = 5
+try { maxResolves = Integer.parseInt((fn.str(fn.get("n_max_resolves")) ?: "5").trim()) } catch (Throwable ignored) {}
+
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def scenarioDir = base.resolve("verification/trace-scenarios/by-module")
+def candidates = new JSONArray()
+
+if (Files.isDirectory(scenarioDir)) {
+    Files.walk(scenarioDir)
+        .filter { Files.isRegularFile(it) && it.toString().endsWith(".scenario.json") }
+        .forEach { p ->
+            if (candidates.size() >= maxResolves) return
+            try {
+                def sc = JSON.parseObject(Files.readString(p, StandardCharsets.UTF_8))
+                def hints = sc.getJSONArray("apiMappingHints") ?: new JSONArray()
+                def openQuestions = sc.getJSONArray("openQuestions") ?: new JSONArray()
+                def confidence = sc.getDoubleValue("confidence")
+                def needsRetranslation = sc.getJSONObject("goldenMetadata")?.getBooleanValue("needsRetranslation") ?: false
+
+                // 筛选条件：hints 为空、或 openQuestions 中有映射相关疑问、或 confidence<0.5
+                // 但排除已人工审批的（goldenSource=manual-annotation）
+                def goldenSource = sc.getJSONObject("goldenMetadata")?.getString("goldenSource") ?: ""
+                if ("manual-annotation".equals(goldenSource) || "shadow-run".equals(goldenSource)) return
+
+                def needsResolve = hints.isEmpty()
+                for (int i = 0; i < openQuestions.size() && !needsResolve; i++) {
+                    def q = openQuestions.getString(i)?.toLowerCase() ?: ""
+                    if (q.contains("api") || q.contains("映射") || q.contains("mapping") || q.contains("endpoint")) {
+                        needsResolve = true
+                    }
+                }
+                if (!needsResolve && (confidence > 0 && confidence < 0.5)) needsResolve = true
+                if (!needsResolve && needsRetranslation) needsResolve = true
+
+                if (needsResolve) {
+                    def rel = base.relativize(p).toString()
+                    def scenarioId = sc.getString("scenarioId") ?: p.getFileName().toString()
+                    def moduleId = sc.getString("moduleId") ?: "unknown"
+                    def stepsText = sc.getJSONArray("steps")?.toString()?.take(2000) ?: ""
+                    candidates.add([
+                        scenarioRel: rel,
+                        scenarioId: scenarioId,
+                        moduleId: moduleId,
+                        stepsText: stepsText,
+                        currentHints: hints,
+                        openQuestions: openQuestions,
+                        confidence: confidence,
+                        traceFile: sc.getString("traceFile") ?: ""
+                    ])
+                }
+            } catch (Throwable ignored) {}
+        }
+}
+
+fn.put("n_mapping_candidates_count", String.valueOf(candidates.size()))
+fn.put("n_mapping_candidates_json", JSON.toJSONString(candidates))
+return JSON.toJSONString(candidates)
+'''
+
+//# 读取设计文档上下文（供 LLM 参考）
+n_mapping_context_json, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONObject
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim()
+def version = (fn.str(fn.get("n_ir_version")) ?: "v1").trim()
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+
+def ctx = new JSONObject()
+def readPart = { String r, int max ->
+    def p = base.resolve(r.replace("/", java.io.File.separator))
+    if (!Files.isRegularFile(p)) return ""
+    def text = Files.readString(p, StandardCharsets.UTF_8)
+    return text.length() <= max ? text : text.substring(0, max) + "\\n... [truncated]"
+}
+
+ctx.put("openapi", readPart("design/api/openapi.yaml", 15000))
+ctx.put("architecture", readPart("design/architecture/target-architecture-${version}.json", 10000))
+ctx.put("screenSemantics", readPart("requirement/semantic/screen/screen-semantics-v1.json", 6000))
+
+return JSON.toJSONString(ctx)
+'''
+
+//# LLM：为每个候选 scenario 重新推理 API 映射
+foreach('n_mapping_item', 'n_mapping_candidates', {
+    assign('n_current_scenario_rel', '{{n_mapping_item.item.scenarioRel}}')
+    assign('n_current_scenario_id', '{{n_mapping_item.item.scenarioId}}')
+    assign('n_current_module_id', '{{n_mapping_item.item.moduleId}}')
+
+    // LLM 推理
+    n_resolved_mapping_json, tpl_mapping_resolver, psr_json?required='path,method', \
+      vrf_flag?value='fn.hasValue(sys_last_result,"path") && fn.hasValue(sys_last_result,"method")'
+
+    // 更新 scenario 的 apiMappingHints
+    n_mapping_update_result, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONArray
+import com.alibaba.fastjson2.JSONObject
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Instant
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim()
+def scenarioRel = fn.str(fn.get("n_current_scenario_rel"))
+if (!scenarioRel) return "no-scenario-rel"
+
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def sp = base.resolve(scenarioRel)
+if (!Files.isRegularFile(sp)) return "scenario-not-found"
+
+def sc = JSON.parseObject(Files.readString(sp, StandardCharsets.UTF_8))
+def resolved = JSON.parseObject(fn.str(fn.get("n_resolved_mapping_json")))
+
+// 构造新的 apiMappingHint
+def newHint = new JSONObject()
+newHint.put("path", resolved.getString("path") ?: "/api/UNMAPPED")
+newHint.put("method", resolved.getString("method") ?: "POST")
+newHint.put("suggestedCapability", resolved.getString("suggestedCapability") ?: sc.getString("capabilityId"))
+newHint.put("suggestedOperation", resolved.getString("suggestedOperation") ?: "execute")
+if (resolved.getJSONObject("body") != null) newHint.put("body", resolved.getJSONObject("body"))
+if (resolved.getJSONObject("query") != null) newHint.put("query", resolved.getJSONObject("query"))
+
+// 替换或追加
+def hints = sc.getJSONArray("apiMappingHints") ?: new JSONArray()
+if (hints.isEmpty()) {
+    hints.add(newHint)
+} else {
+    hints.set(0, newHint)  // 替换第一个 hint
+}
+sc.put("apiMappingHints", hints)
+
+// 记录解析历史
+def meta = sc.getJSONObject("goldenMetadata") ?: new JSONObject()
+meta.put("mappingResolvedBy", "agt_mapping_resolver.c2j.validate")
+meta.put("mappingResolvedAt", Instant.now().toString())
+if (resolved.getString("confidence") != null) meta.put("mappingConfidence", resolved.getDouble("confidence"))
+sc.put("goldenMetadata", meta)
+
+// 清除 openQuestions 中已解决的部分
+def remaining = new JSONArray()
+def oq = sc.getJSONArray("openQuestions") ?: new JSONArray()
+for (int i = 0; i < oq.size(); i++) {
+    def q = oq.getString(i)?.toLowerCase() ?: ""
+    if (!q.contains("api") && !q.contains("映射") && !q.contains("mapping") && !q.contains("endpoint")) {
+        remaining.add(oq.getString(i))
+    }
+}
+sc.put("openQuestions", remaining.isEmpty() ? remaining : oq)
+
+// 提升置信度
+def oldConf = sc.getDoubleValue("confidence")
+if (oldConf <= 0 || oldConf < 0.7) sc.put("confidence", 0.7)
+
+Files.writeString(sp, JSON.toJSONString(sc), StandardCharsets.UTF_8)
+return "resolved " + scenarioRel + " → " + newHint.getString("path")
+'''
+})
+
+assign('n_mapping_resolver_report', '''# API 映射解析报告
+
+- 候选 scenario 数: {{n_mapping_candidates_count}}
+- 处理结果: 已更新对应 scenario 的 apiMappingHints
+- 上下文: 使用了 openapi + architecture + screenSemantics 文档
+
+## 下一步
+
+重新运行 7.1 agt_equivalence_validator 以使用更新后的 apiMappingHints 生成 manifest。
+''')
+
+define('tpl_mapping_resolver', '''
+你是 COBOL2Java API 映射解析器。任务：根据已知的操作语义，在 OpenAPI 文档中精确定位对应的 API 端点。
+
+# 场景信息
+模块: {{n_mapping_item.item.moduleId}}
+场景: {{n_mapping_item.item.scenarioId}}
+操作步骤: {{n_mapping_item.item.stepsText}}
+当前映射: {{n_mapping_item.item.currentHints}}
+疑问: {{n_mapping_item.item.openQuestions}}
+来源 trace: {{n_mapping_item.item.traceFile}}
+
+# 设计文档（API 文档 + 架构）
+{{n_mapping_context_json}}
+
+# 输出要求
+输出一个 JSON（仅 JSON，无 markdown）：
+- path: 完整的 API 路径（如 /api/auth/login），必须存在于 openapi 中
+- method: HTTP 方法（GET/POST/PUT/DELETE）
+- suggestedCapability: 能力 ID
+- suggestedOperation: 操作类型
+- body: 请求体参数（可选）
+- query: 查询参数（可选）
+- confidence: 0~1 置信度
+
+# 约束
+1. path 必须来源于 openapi.yaml 中实际存在的路径
+2. 如果无法确定，path 填 "/api/UNMAPPED"，confidence 设为 0
+3. 不要编造不存在的 API 端点
+4. 优先匹配模块对应的 capability
+''')

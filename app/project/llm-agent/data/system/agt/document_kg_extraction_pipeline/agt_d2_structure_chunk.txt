@@ -1,0 +1,205 @@
+/*{
+  "title": "结构恢复与切片",
+  "description": "从预处理后的文档中恢复章节结构、合并跨页段落、生成语义切片，输出结构化JSON供下游抽取使用",
+  "parameter": [
+    {"name":"ksDir","label":"输出目录","required":false,"description":"知识空间输出目录，默认 document_kg_extraction"}
+  ],
+  "version": 1,
+  "resultPlan": "n_output"
+}*/
+
+// 设置默认输出目录
+when('!fn.hasValue(ksDir)', {
+  assign("ksDir", "document_kg_extraction")
+})
+
+// 读取阶段一输出的document.json
+n_doc_json,act_artifact.read?filepath='{{ksDir}}/01_document/document.json'&maxLength=635555
+n_doc_json_str,act_func?script='''
+	return fn.map(n_doc_json)
+'''
+// 读取阶段一输出的pages_cleaned.json
+n_pages_json,act_artifact.read?filepath='{{ksDir}}/01_document/pages_cleaned.json'&maxLength=635555
+n_pages_json_str,act_func?script='''
+	return n_pages_json
+'''
+// 检查输入文件是否可读
+when('!fn.hasValue(n_doc_json_str) || !fn.hasValue(n_pages_json_str)', {
+  // 输入文件缺失则终止流程
+  act_flow.fail?result='无法读取阶段一输出文件，请确认 agt_d1_preprocess 已执行完成，ksDir={{ksDir}}'
+})
+
+// 从pages_cleaned.json中提取文档ID
+n_document_id, act_func?script='''
+  // 引擎自动解析JSON字符串为结构化对象
+  def docInfo = n_doc_json_str
+  return docInfo?.document_id ?: ""
+'''
+
+// 将页面数据拼接为LLM可读的带页码标记文本
+n_pages_text, act_func?script='''
+  def pagesData = n_pages_json_str
+  def pages = pagesData?.pages ?: []
+  def result = []
+  pages.each { page ->
+    result.add("=== Page " + page.page_no + " ===\n" + page.text)
+  }
+  return result.join("\n\n")
+'''
+
+// 计算页面总数
+n_page_count, act_func?script='''
+  def pagesData = n_pages_json_str
+  return pagesData?.pages?.size() ?: 0
+'''
+
+// LLM分析文档结构并生成语义切片
+n_structure_and_chunks, tpl_structure_chunk, psr_json
+
+// 从LLM输出中提取文档结构部分
+n_document_structure, act_func?script='''
+  def data = n_structure_and_chunks
+  def structure = data?.document_structure ?: [:]
+  if (!structure.document_id) {
+    structure.document_id = n_document_id
+  }
+  return structure
+'''
+
+// 从LLM输出中提取切片列表
+n_chunks, act_func?script='''
+  def data = n_structure_and_chunks
+  return data?.chunks ?: []
+'''
+
+// 补充每个chunk的char_len字段（若LLM未填入）
+n_chunks_final, act_func?script='''
+  def chunks = n_chunks
+  chunks.each { chunk ->
+    if (!chunk.char_len || chunk.char_len == 0) {
+      chunk.char_len = (chunk.text ?: "").length()
+    }
+    if (!chunk.document_id) {
+      chunk.document_id = n_document_id
+    }
+  }
+  return chunks
+'''
+
+// 写入document_structure.json到知识空间
+act_artifact.write?filepath='{{ksDir}}/02_chunks/document_structure.json'&data='{{n_document_structure}}'
+
+// 写入chunks.json到知识空间
+act_artifact.write?filepath='{{ksDir}}/02_chunks/chunks.json'&data='{{n_chunks_final}}'
+
+// 输出阶段二执行结果
+n_output, act_func?script='''
+  def result = [:]
+  result.success = true
+  result.stage = "d2_structure_chunk"
+  result.document_id = n_document_id
+  result.page_count = n_page_count
+  result.chunk_count = n_chunks_final?.size() ?: 0
+  result.section_count = n_document_structure?.sections?.size() ?: 0
+  result.output_files = [
+    ksDir + "/02_chunks/document_structure.json",
+    ksDir + "/02_chunks/chunks.json"
+  ]
+  return result
+'''
+
+// 异常处理：捕获错误并返回失败信息
+on_failure({
+  // 构造错误输出
+  n_output, act_func?script='''
+    def result = [:]
+    result.success = false
+    result.stage = "d2_structure_chunk"
+    result.error = fn.str(sys_failure_task?.result ?: "Unknown error")
+    return result
+  '''
+  // 跳转到流程结束
+  act_flow.go?plan=end
+})
+
+// 结构分析与切片LLM模板
+define('tpl_structure_chunk', '''
+你是一位专业的文档结构分析专家。请分析以下文档内容，完成两项任务。
+
+## 任务一：文档结构恢复
+
+从分页纯文本中恢复文档的逻辑结构：
+1. **标题层级识别**：识别一级标题、二级标题、三级标题等层次关系
+2. **章节边界标注**：标注每个章节的起始页和结束页
+3. **列表结构识别**：识别编号列表（1. 2. 3.）、项目符号列表（- •）、条款编号（第X条）等
+4. **表格痕迹识别**：识别文本形式的表格数据（对齐的列、分隔符等）
+5. **跨页段落合并**：识别被分页截断的段落，标注合并关系
+
+## 任务二：语义切片生成
+
+基于恢复的结构，生成适合后续知识抽取的语义切片：
+1. 每个切片应保持语义完整性，不在句子中间截断
+2. 切片大小建议 1000-3000 字符，可根据段落边界适当调整
+3. 标注每个切片所属的章节 section_id
+4. 标注每个切片的页码范围 page_range [起始页, 结束页]
+5. 切片文本保留原始内容和格式
+
+## 输出格式
+
+严格按以下 JSON 格式输出，不要任何解释或额外文字：
+
+```json
+{
+  "document_structure": {
+    "document_id": "{{n_document_id}}",
+    "sections": [
+      {
+        "section_id": "sec_001",
+        "title": "章节标题",
+        "level": 1,
+        "page_range": [1, 3],
+        "parent_section_id": null,
+        "child_section_ids": ["sec_002"]
+      }
+    ],
+    "cross_page_merges": [
+      {
+        "description": "合并说明",
+        "from_page": 1,
+        "to_page": 2,
+        "merged_text_preview": "被合并段落的前50个字符..."
+      }
+    ]
+  },
+  "chunks": [
+    {
+      "chunk_id": "chunk_0001",
+      "document_id": "{{n_document_id}}",
+      "section_id": "sec_001",
+      "page_range": [1, 1],
+      "text": "切片文本内容（保留原始格式）",
+      "char_len": 1350
+    }
+  ]
+}
+```
+
+## 字段说明
+
+- section_id 格式：sec_001, sec_002, ... 按出现顺序编号
+- level 从 1 开始，1=最高层级
+- parent_section_id 为 null 表示顶级章节
+- child_section_ids 为直接子章节的 section_id 列表
+- chunk_id 格式：chunk_0001, chunk_0002, ... 按出现顺序编号
+- page_range 为 [起始页, 结束页]，单页时两者相同
+- char_len 为 text 字段的字符数
+
+## 文档内容
+
+文档ID：{{n_document_id}}
+总页数：{{n_page_count}}
+
+{{n_pages_text}}
+
+仅输出 JSON，不要解释。
+''')

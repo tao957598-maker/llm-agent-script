@@ -1,0 +1,277 @@
+/*{
+  "title": "候选事件与属性抽取",
+  "description": "从语义切片中抽取候选事件及属性信息，覆盖事件类型、触发词、参与方、时间、金额、状态等",
+  "parameter": [
+    {"name":"ksDir","label":"输出目录","required":false,"description":"知识空间输出目录，默认 document_kg_extraction"}
+  ],
+  "version": 1,
+  "resultPlan": "n_output"
+}*/
+
+// 设置默认输出目录
+when('!fn.hasValue(ksDir)', {
+  assign("ksDir", "document_kg_extraction")
+})
+
+// 读取阶段二输出的chunks.json
+n_chunks_raw, act_artifact.read?filepath='{{ksDir}}/02_chunks/chunks.json'&maxLength=635555
+
+// 读取阶段三输出的entities_raw.json
+n_entities_raw, act_artifact.read?filepath='{{ksDir}}/03_extraction/entities_raw.json'&maxLength=635555
+
+// 检查输入文件是否可读
+when('!fn.hasValue(n_chunks_raw) || !fn.hasValue(n_entities_raw)', {
+  // 输入文件缺失则终止流程
+  act_flow.fail?result='无法读取输入文件，请确认 agt_d2_structure_chunk 和 agt_d3_extract_entities 已执行完成，ksDir={{ksDir}}'
+})
+
+// 从实体列表中构建精简引用表（只保留entity_id/name/entity_type）
+n_entity_refs, act_func?script='''
+  def entities = n_entities_raw ?: []
+  def refs = entities.collect { ent ->
+    return [
+      entity_id: ent.entity_id,
+      name: ent.name,
+      entity_type: ent.entity_type
+    ]
+  }
+  return refs
+'''
+
+// 统计可用实体数量
+n_entity_total, act_func?script='''
+  return n_entities_raw?.size() ?: 0
+'''
+
+// 初始化事件累积列表
+n_init_events, act_func?script='''
+  fn.put("all_events", [])
+  fn.put("all_attributes", [])
+  return "ok"
+'''
+
+// 逐chunk抽取候选事件与属性
+foreach('n_chunk_loop', 'n_chunks_raw', {
+  // 当前chunk数据
+  assign("current_chunk", "{{n_chunk_loop.item}}")
+
+  // 提取chunk编号（去掉chunk_前缀）
+  assign("chunk_num", "{{current_chunk.chunk_id?replace('chunk_', '')}}")
+
+  // LLM从当前chunk文本中抽取事件与属性
+  n_chunk_result, tpl_extract_events, psr_json
+
+  // 将当前chunk抽取的事件累积到全局列表
+  act_func?script='''
+    def events = n_chunk_result?.events ?: []
+    def allEvents = fn.get("all_events")
+    allEvents.addAll(events)
+    fn.put("all_events", allEvents)
+    return "ok"
+  '''
+
+  // 将当前chunk抽取的属性累积到全局列表
+  act_func?script='''
+    def attrs = n_chunk_result?.attributes ?: []
+    def allAttrs = fn.get("all_attributes")
+    allAttrs.addAll(attrs)
+    fn.put("all_attributes", allAttrs)
+    return "ok"
+  '''
+})
+
+// 获取累积的全部事件
+n_events_all, act_func?script='''
+  return fn.get("all_events") ?: []
+'''
+
+// 获取累积的全部属性
+n_attributes_all, act_func?script='''
+  return fn.get("all_attributes") ?: []
+'''
+
+// 统计事件数量与类型分布
+n_event_stats, act_func?script='''
+  def stats = [total: 0, by_type: [:]]
+  def events = n_events_all ?: []
+  stats.total = events.size()
+  events.each { evt ->
+    def t = evt.event_type ?: "Unknown"
+    stats.by_type[t] = (stats.by_type[t] ?: 0) + 1
+  }
+  return stats
+'''
+
+// 统计属性数量与类型分布
+n_attribute_stats, act_func?script='''
+  def stats = [total: 0, by_type: [:]]
+  def attrs = n_attributes_all ?: []
+  stats.total = attrs.size()
+  attrs.each { attr ->
+    def t = attr.attribute_type ?: "Unknown"
+    stats.by_type[t] = (stats.by_type[t] ?: 0) + 1
+  }
+  return stats
+'''
+
+// 写入events_raw.json到知识空间
+act_artifact.write?filepath='{{ksDir}}/03_extraction/events_raw.json'&data='{{n_events_all}}'
+
+// 写入attributes_raw.json到知识空间
+act_artifact.write?filepath='{{ksDir}}/03_extraction/attributes_raw.json'&data='{{n_attributes_all}}'
+
+// 输出阶段三事件与属性抽取结果
+n_output, act_func?script='''
+  def result = [:]
+  result.success = true
+  result.stage = "d5_extract_events"
+  result.total_events = n_events_all?.size() ?: 0
+  result.event_type_distribution = n_event_stats?.by_type ?: [:]
+  result.total_attributes = n_attributes_all?.size() ?: 0
+  result.attribute_type_distribution = n_attribute_stats?.by_type ?: [:]
+  result.available_entities = n_entity_total
+  result.output_files = [
+    ksDir + "/03_extraction/events_raw.json",
+    ksDir + "/03_extraction/attributes_raw.json"
+  ]
+  return result
+'''
+
+// 异常处理：捕获错误并返回失败信息
+on_failure({
+  // 构造错误输出
+  n_output, act_func?script='''
+    def result = [:]
+    result.success = false
+    result.stage = "d5_extract_events"
+    result.error = fn.str(sys_failure_task?.result ?: "Unknown error")
+    return result
+  '''
+  // 跳转到流程结束
+  act_flow.go?plan=end
+})
+
+// 事件与属性抽取LLM模板
+define('tpl_extract_events', '''
+你是事件与属性抽取专家。从以下文本片段中识别事件和结构化属性信息。
+
+## 可用实体列表
+
+以下是当前文档中已发现的所有实体。事件中的 participants 应引用此列表中的 entity_id。
+
+{{n_entity_refs}}
+
+## 一、事件抽取
+
+从文本中识别具有时间属性或动作语义的事件。事件是一组实体在特定时间发生的交互或状态变化。
+
+事件示例：签署合同、项目启动、系统上线、人员变更、评审通过、发布版本、发生故障
+
+### 事件字段说明
+
+- event_id：格式 evt_{{chunk_num}}_{序号}，序号从001开始
+- event_type：事件类型标签（用中文概括，2-6个字，如"签约""上线""变更""评审"）
+- trigger：触发词或短语，即文本中标志该事件发生的核心表述
+- participants：参与方列表，每项含 entity_id（引用可用实体列表）和 role（参与角色）
+- time：事件时间信息，含 normalized（YYYY-MM-DD格式）和 original（原文表述）
+- description：事件的一句话描述
+- evidence：证据列表，每项含 chunk_id/page_range/quote
+- confidence：置信度分数（0.0-1.0）
+
+## 二、属性抽取
+
+从文本中提取不适合作为独立实体但具有信息价值的结构化属性。
+
+### 属性类型
+
+| 类型 | 说明 | 示例 |
+|------|------|------|
+| amount | 金额、费用 | 合同金额500万元 |
+| ratio | 比例、比率 | 市场份额30% |
+| number | 编号、数量 | 员工编号EMP001 |
+| status | 状态、阶段 | 进行中、已完成 |
+| effective_date | 生效日期 | 2026-03-01起生效 |
+| expiry_date | 截止日期 | 2026-12-31前完成 |
+| parameter_value | 参数值、规格 | 最大并发1000 |
+| contact_info | 联系方式 | 电话、邮箱、地址 |
+
+### 属性字段说明
+
+- attribute_id：格式 attr_{{chunk_num}}_{序号}
+- attribute_type：必须是上表中列出的类型之一
+- name：属性名称（如"合同金额""最大并发数"）
+- value：属性值（保留原文表述）
+- related_entity_id：关联的实体ID（可选，若该属性明确属于某实体则填写）
+- evidence：证据列表
+- confidence：置信度分数
+
+## 抽取原则
+
+1. 只抽取文本中明确提及的事件和属性，不要臆造
+2. 事件参与方优先引用可用实体列表中的 entity_id
+3. 若文本中提到的参与实体不在列表中，可用自由文本描述 role
+4. 属性尽量关联到已有实体（related_entity_id）
+5. 每条事件和属性必须附带证据
+6. 如果当前chunk没有可抽取的事件或属性，返回空数组
+
+## 输出格式
+
+严格按以下JSON格式输出，不要任何解释或额外文字：
+
+```json
+{
+  "events": [
+    {
+      "event_id": "evt_{{chunk_num}}_001",
+      "event_type": "签约",
+      "trigger": "签署合作协议",
+      "participants": [
+        {"entity_id": "ent_0001_001", "role": "甲方"},
+        {"entity_id": "ent_0001_002", "role": "乙方"}
+      ],
+      "time": {
+        "normalized": "2026-05-01",
+        "original": "2026年5月1日"
+      },
+      "description": "甲乙双方签署了为期三年的合作协议",
+      "evidence": [
+        {
+          "chunk_id": "{{current_chunk.chunk_id}}",
+          "page_range": {{current_chunk.page_range}},
+          "quote": "双方于2026年5月1日签署了合作协议"
+        }
+      ],
+      "confidence": 0.92
+    }
+  ],
+  "attributes": [
+    {
+      "attribute_id": "attr_{{chunk_num}}_001",
+      "attribute_type": "amount",
+      "name": "合同金额",
+      "value": "500万元",
+      "related_entity_id": "ent_0001_001",
+      "evidence": [
+        {
+          "chunk_id": "{{current_chunk.chunk_id}}",
+          "page_range": {{current_chunk.page_range}},
+          "quote": "合同总金额为500万元人民币"
+        }
+      ],
+      "confidence": 0.95
+    }
+  ]
+}
+```
+
+## 当前Chunk信息
+
+- chunk_id：{{current_chunk.chunk_id}}
+- 页码范围：{{current_chunk.page_range}}
+
+## 文本内容
+
+{{current_chunk.text}}
+
+仅输出 JSON，不要解释。
+''')

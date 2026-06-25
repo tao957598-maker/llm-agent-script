@@ -1,0 +1,110 @@
+/*{
+  "title": "API Final Python Generate Agent",
+  "description": "Generate the final runnable Python test runner from the reviewed artifacts.",
+  "parameter": [
+    {
+      "name": "testCasesJsonPath",
+      "label": "测试用例JSON路径",
+      "required": true
+    },
+    {
+      "name": "apiCatalogJsonPath",
+      "label": "API目录JSON路径",
+      "required": true
+    },
+    {
+      "name": "testMatrixJsonPath",
+      "label": "测试矩阵JSON路径",
+      "required": true
+    },
+    {
+      "name": "reviewReportJsonPath",
+      "label": "复核报告JSON路径",
+      "required": true
+    }
+  ],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+// Read the reviewed test cases JSON directly from the knowledge-space file path.
+n_test_cases_file_content, act_func.read?filename='{{testCasesJsonPath}}'
+
+// Bind the reviewed test cases JSON content for template use.
+assign('test_cases_json', '{{n_test_cases_file_content}}')
+
+// Read the API catalog JSON directly from the knowledge-space file path.
+n_api_catalog_file_content, act_func.read?filename='{{apiCatalogJsonPath}}'
+
+// Bind the API catalog JSON content for template use.
+assign('api_catalog_json', '{{n_api_catalog_file_content}}')
+
+// Read the test matrix JSON directly from the knowledge-space file path.
+n_test_matrix_file_content, act_func.read?filename='{{testMatrixJsonPath}}'
+
+// Bind the test matrix JSON content for template use.
+assign('test_matrix_json', '{{n_test_matrix_file_content}}')
+
+// Read the review report JSON directly from the knowledge-space file path.
+n_review_report_file_content, act_func.read?filename='{{reviewReportJsonPath}}'
+
+// Bind the review report JSON content for template use.
+assign('review_report_json', '{{n_review_report_file_content}}')
+
+// Generate the final Python module.
+n_payload, tpl_final_python, psr_python
+
+// Prepare file content for persistence.
+assign('file_content', '{{fn.str(n_payload)}}')
+
+// Persist the generated Python code into the knowledge space file.
+n_result, act_func.write?filename='test_api_codex/final_test_code.py'&data='{{file_content}}'&syncKbs=true
+
+// Prompt template for final Python code generation.
+define('tpl_final_python', '''
+You are generating the final runnable Python test runner.
+Output only Python code. Do not use Markdown fences. Do not explain anything.
+
+Input artifacts:
+- test_cases_json: {{test_cases_json}}
+- api_catalog_json: {{api_catalog_json}}
+- test_matrix_json: {{test_matrix_json}}
+- review_report_json: {{review_report_json}}
+
+Hard requirements:
+1. Generate a single Python module that can be saved directly as `final_test_code.py`.
+2. Use only the Python standard library unless a dependency is absolutely required; prefer standard library.
+3. Load JSON artifacts from files next to the script when available:
+   - test_cases.json
+   - api_catalog.json
+   - test_matrix.json
+   - review_report.json
+4. Implement request encapsulation, execution, assertions, and logging.
+5. Keep explicit TODO markers for missing information such as base URL, auth token, or body assembly gaps.
+6. If a value is missing, keep a clear placeholder instead of guessing.
+7. The code must be syntactically valid and runnable even when some inputs are incomplete.
+8. Include a main entry point guarded by `if __name__ == "__main__":`.
+
+Behavioral expectations:
+- Resolve the script directory with `Path(__file__).resolve().parent`.
+- Read artifact JSON files from that directory if they exist.
+- Allow `API_BASE_URL` to come from environment variables, then from a config file, then from a placeholder constant.
+- Build requests using method, endpoint, headers, and test_data as far as the artifacts permit.
+- Perform assertions on HTTP status and response content when expected information is available.
+- Collect a per-case result list and print a final summary as formatted JSON to stdout.
+- When required information is missing, mark the case as skipped or blocked with a clear reason rather than silently failing.
+- Preserve informative logs for request URL, method, case id, status code, and assertion outcome.
+
+Suggested structure:
+- imports
+- constants
+- dataclasses for case result
+- JSON loading helpers
+- request building helpers
+- response parsing helpers
+- assertion helpers
+- execution loop
+- main function
+
+If the artifacts do not contain enough data to fully determine a request, keep explicit TODO comments and safe placeholder handling.
+''')

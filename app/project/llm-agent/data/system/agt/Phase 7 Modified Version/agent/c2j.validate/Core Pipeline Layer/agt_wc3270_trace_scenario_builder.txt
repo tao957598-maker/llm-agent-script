@@ -1,0 +1,555 @@
+/*
+{
+  "title":"COBOL2Java wc3270 Trace Scenario Builder (LLM)",
+  "description":"第七阶段 fixtures 前置（7.0）：纯 LLM，将 wc3270 .trace.txt 结合 requirement/design 业务知识转为 cobol2java.wc3270-scenario JSON，并可选生成 trace-catalog.json。",
+  "parameter":[
+    {"name":"projectKey", "label":"项目标识", "required":true},
+    
+    {"name":"projectRoot", "label":"迁移工作区根目录", "required":true},
+    {"name":"irVersion", "required":false, "default":"v1"},
+    {"name":"traceInputRoot", "label":"相对 projectRoot，扫描 *.trace.txt", "required":false, "default":"verification/wc3270"},
+    {"name":"scenarioOutputRoot", "label":"相对 projectRoot，写出 scenario.json 与 catalog", "required":false, "default":"verification/trace-scenarios"},
+    {"name":"writeCatalog", "label":"是否生成 trace-catalog.json", "required":false, "default":"true"},
+    {"name":"maxTraces", "label":"单次最多处理的 trace 文件数", "required":false, "default":"20"},
+    {"name":"incrementalEnabled", "label":"增量：trace 未新于已有 scenario 时跳过 LLM", "required":false, "default":"true"},
+    {"name":"llmMockEnabled", "label":"JUnit 契约：不调用真实 LLM", "required":false, "default":"false"}
+  ],
+  "version":1,
+  "resultPlan":"n_trace_scenario_builder_report"
+}
+*/
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+##模块 2：变量初始化 — assign 语句
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+
+assign('n_project_key', '{{projectKey}}',
+       'n_project_root', '{{projectRoot}}',
+       'n_source_root_rel', '{{n_project_root}}/source',
+       'n_ir_version', '{{fn.optional(irVersion, "v1")}}',
+       'n_trace_input_root', '{{fn.optional(traceInputRoot, "verification/wc3270")}}',
+       'n_scenario_output_root', '{{fn.optional(scenarioOutputRoot, "verification/trace-scenarios")}}',
+       'n_write_catalog', '{{fn.optional(writeCatalog, "true")}}',
+       'n_max_traces', '{{fn.optional(maxTraces, "20")}}',
+       'n_incremental_enabled', '{{fn.optional(incrementalEnabled, "true")}}',
+       'n_llm_mock_enabled', '{{fn.optional(llmMockEnabled, "false")}}')
+
+assign('n_scenarios_regenerated', '0')
+assign('n_scenarios_skipped', '0')
+assign('n_no_trace_fixture', 'false')
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+//# 模块 3 组装 requirement/design 上下文（确定性读盘 + 截断），供 LLM 推断 module/capability/API
+##通俗理解：这是"给 AI 准备的参考资料包"。
+
+##后面要让大模型翻译老录像，但大模型不知道这个项目的 API 长什么样、老屏幕的字段是什么意思。
+##所以这里先把所有设计文档读出来，打包成一个 JSON，后面一起塞给大模型。
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+
+
+n_equivalence_context_json, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONObject
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim(); if (!projectRoot) throw new IllegalStateException("Missing required parameter: projectRoot")
+def version = fn.str(fn.get("n_ir_version")) ?: "v1"
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def rel = { String r ->
+    def p = base.resolve(r.replace("/", java.io.File.separator))
+    return Files.isRegularFile(p) ? Files.readString(p, StandardCharsets.UTF_8) : null
+}
+def clip = { String s, int max ->
+    if (s == null) return ""
+    return s.length() <= max ? s : s.substring(0, max) + "\n... [truncated]"
+}
+def ctx = new JSONObject()
+ctx.put("projectKey", (fn.str(fn.get("n_project_key"))?.trim() ?: { throw new IllegalStateException("Missing required parameter: projectKey") }()))
+ctx.put("irVersion", version)
+ctx.put("architecture", clip(rel("design/architecture/target-architecture-${version}.json"), 12000))
+ctx.put("screenMeta", clip(rel("requirement/discovery/screen/screen-meta-v1.json"), 12000))
+ctx.put("screenSemantics", clip(rel("requirement/semantic/screen/screen-semantics-v1.json"), 8000))
+ctx.put("openapi", clip(rel("design/api/openapi.yaml"), 6000))
+ctx.put("semanticIndex", clip(rel("requirement/semantic/semantic-index-v1.json"), 4000))
+return JSON.toJSONString(ctx)
+'''
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+//# 模块 4：Trace 文件发现 — n_trace_discovery_json
+#通俗理解：这是"扫描老录像文件夹，列出所有需要处理的录像文件"。
+
+#执行逻辑：
+
+#walk：遍历 verification/wc3270/ 目录（包括子文件夹）
+#filter：只挑文件名以 .trace.txt 结尾的文件
+#sorted：按文件名排序（保证处理顺序一致）
+#limit：最多取 20 个（由 maxTraces 参数控制，防止一次性处理太多）
+#forEach：把每个文件的路径记录下来
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+
+
+n_trace_discovery_json, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONArray
+import com.alibaba.fastjson2.JSONObject
+import java.nio.file.Files
+import java.nio.file.Path
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim(); if (!projectRoot) throw new IllegalStateException("Missing required parameter: projectRoot")
+def inputRoot = fn.str(fn.get("n_trace_input_root")) ?: "verification/wc3270"
+def maxTraces = 20
+try { maxTraces = Integer.parseInt(fn.str(fn.get("n_max_traces")) ?: "20") } catch (Exception ignored) {}
+def base = Path.of(rootDir, projectRoot, inputRoot.replace("/", java.io.File.separator)).toAbsolutePath().normalize()
+if (!Files.isDirectory(base)) {
+    fn.put("n_trace_entries", entries)
+    fn.put("n_no_trace_fixture", "true")
+    return JSON.toJSONString([schema: "cobol2java.trace-discovery", status: "SKIPPED_NO_TRACE_FIXTURE",
+                              reason: "missing-trace-input-directory", inputRoot: inputRoot,
+                              directory: base.toString(), count: 0, catalogArtifact: null])
+}
+def entries = new JSONArray()
+Files.walk(base).filter { p -> Files.isRegularFile(p) && p.getFileName().toString().endsWith(".trace.txt") }
+        .sorted { a, b -> a.toString() <=> b.toString() }
+        .limit(maxTraces)
+        .forEach { p ->
+    def relToProject = base.relativize(p).toString().replace("\\", "/")
+    def relFull = (inputRoot.endsWith("/") ? inputRoot : inputRoot + "/") + relToProject
+    if (!relFull.startsWith(inputRoot)) relFull = inputRoot + "/" + relToProject
+    def item = new JSONObject()
+    item.put("traceRel", inputRoot + "/" + relToProject)
+    item.put("fileName", p.getFileName().toString())
+    entries.add(item)
+}
+if (entries.isEmpty()) {
+    fn.put("n_trace_entries", entries)
+    fn.put("n_no_trace_fixture", "true")
+    return JSON.toJSONString([schema: "cobol2java.trace-discovery", status: "SKIPPED_NO_TRACE_FIXTURE",
+                              reason: "no-trace-files", inputRoot: inputRoot,
+                              directory: base.toString(), count: 0, catalogArtifact: null])
+}
+def catalogRel = "verification/wc3270/trace-catalog-v1.json"
+def catalog = [schema: "cobol2java.trace-discovery-catalog", version: "v1", projectKey: fn.str(fn.get("n_project_key")),
+               inputRoot: inputRoot, count: entries.size(), traces: entries]
+def projectBase = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+Files.createDirectories(projectBase.resolve("verification/wc3270"))
+Files.writeString(projectBase.resolve(catalogRel), com.alibaba.fastjson2.JSON.toJSONString(catalog), StandardCharsets.UTF_8)
+fn.put("n_trace_catalog_rel", catalogRel)
+fn.put("n_trace_entry_count", entries.size().toString())
+return JSON.toJSONString([schema: "cobol2java.trace-discovery", status: "READY", count: entries.size(), catalogArtifact: catalogRel])
+'''
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+//# 模块 5：主循环 — foreach 逐个处理录像
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+
+
+foreach('n_trace_exec', 'n_trace_entries', {
+  assign('n_trace_rel', '{{n_trace_exec.item.traceRel}}')
+  assign('n_trace_file_name', '{{n_trace_exec.item.fileName}}')
+  assign('n_trace_path', '{{n_project_root}}/{{n_trace_rel}}')
+
+  n_trace_incremental_status, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONObject
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+
+def incremental = (fn.str(fn.get("n_incremental_enabled")) ?: "true").toBoolean()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim(); if (!projectRoot) throw new IllegalStateException("Missing required parameter: projectRoot")
+def traceRel = fn.str(fn.get("n_trace_rel")) ?: ""
+def tracePath = projectRoot + "/" + traceRel
+def outputRoot = fn.str(fn.get("n_scenario_output_root")) ?: "verification/trace-scenarios"
+if (outputRoot.endsWith("/")) outputRoot = outputRoot.substring(0, outputRoot.length() - 1)
+
+fn.put("n_skip_trace_llm", "false")
+fn.put("n_scenario_out_rel", "")
+
+if (!incremental) {
+    return JSON.toJSONString([action: "generate", reason: "incremental-disabled"])
+}
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def outDir = base.resolve(outputRoot.replace("/", java.io.File.separator))
+def matchedRel = null
+if (Files.isDirectory(outDir)) {
+    Files.walk(outDir).filter { p -> Files.isRegularFile(p) && p.getFileName().toString().endsWith(".scenario.json") }
+            .forEach { p ->
+        try {
+            def sc = com.alibaba.fastjson2.JSON.parseObject(Files.readString(p, StandardCharsets.UTF_8))
+            if (traceRel.equals(sc.getString("traceFile"))) {
+                def rel = base.relativize(p).toString().replace("\\", "/")
+                matchedRel = rel
+            }
+        } catch (Exception ignored) {}
+    }
+}
+if (matchedRel == null) {
+    return JSON.toJSONString([action: "generate", reason: "no-existing-scenario"])
+}
+fn.put("n_scenario_out_rel", matchedRel)
+def irVersion = fn.str(fn.get("n_ir_version")) ?: "v1"
+def contextInputs = [
+    tracePath,
+    projectRoot + "/design/architecture/target-architecture-" + irVersion + ".json",
+    projectRoot + "/requirement/discovery/screen/screen-meta-v1.json",
+    projectRoot + "/requirement/semantic/screen/screen-semantics-v1.json",
+    projectRoot + "/design/api/openapi.yaml"
+]
+if (fn.isOutputUpToDate(matchedRel, contextInputs[0], contextInputs[1], contextInputs[2], contextInputs[3], contextInputs[4])) {
+    fn.put("n_skip_trace_llm", "true")
+    def existing = fn.readFile(matchedRel)
+    if (existing != null) {
+        fn.put("n_scenario_json", existing)
+        def sc = JSON.parseObject(existing)
+        def written = new JSONObject()
+        written.put("scenarioRel", matchedRel)
+        written.put("moduleId", sc.getString("moduleId"))
+        written.put("scenarioId", sc.getString("scenarioId"))
+        written.put("traceRel", traceRel)
+        written.put("skipped", true)
+        def acc = fn.get("n_written_scenarios")
+        if (!(acc instanceof java.util.List)) acc = new java.util.ArrayList()
+        acc.add(written)
+        fn.put("n_written_scenarios", acc)
+        def skipped = 0
+        try { skipped = Integer.parseInt(fn.str(fn.get("n_scenarios_skipped")) ?: "0") } catch (Exception ignored) {}
+        fn.put("n_scenarios_skipped", String.valueOf(skipped + 1))
+    }
+    return JSON.toJSONString([action: "skip", scenarioRel: matchedRel, reason: "output-up-to-date"])
+}
+return JSON.toJSONString([action: "generate", scenarioRel: matchedRel, reason: "trace-newer-than-scenario"])
+'''
+
+  when('{{n_skip_trace_llm != "true"}}', {
+  n_trace_body, act_artifact.read?filepath='{{n_project_root}}/{{n_trace_rel}}'&maxLength=400000
+
+  when('{{n_llm_mock_enabled == "true"}}', {
+    n_scenario_json, act_func.run?script='''
+def name = fn.str(fn.get("n_trace_file_name")) ?: "trace.txt"
+def traceRel = fn.str(fn.get("n_trace_rel")) ?: ""
+def projectKey = fn.str(fn.get("n_project_key"))?.trim(); if (!projectKey) throw new IllegalStateException("Missing required parameter: projectKey")
+def moduleId = "bank-security"
+def scenarioId = "mock-scenario"
+if (name.contains("main-menu")) { moduleId = "bank-customer"; scenarioId = "main-menu-select-balances" }
+else if (name.contains("list-balances")) { moduleId = "bank-account"; scenarioId = "list-balances" }
+else if (name.contains("select-account") || name.contains("detail")) { moduleId = "bank-transaction"; scenarioId = "select-account-detail" }
+else if (name.contains("signon")) { moduleId = "bank-security"; scenarioId = "signon" }
+else if (name.contains("e2e")) { moduleId = "e2e"; scenarioId = "e2e-bank-signon-list-balances" }
+def scenario = [
+    schema: "cobol2java.wc3270-scenario",
+    version: "v1",
+    projectKey: projectKey,
+    moduleId: moduleId,
+    scenarioId: scenarioId,
+    description: "LLM mock scenario for " + name,
+    traceFile: traceRel,
+    steps: [[stepIndex: 0, action: "viewMap", assertions: [screenContains: ["mock"]]]],
+    apiMappingHints: [[suggestedCapability: "login", path: "/api/auth/login", body: [userId: "B0001", password: "password"]]],
+    sourceEvidence: ["llm-mock"],
+    confidence: 0.5
+]
+return com.alibaba.fastjson2.JSON.toJSONString(scenario)
+'''
+  })
+
+  when('{{n_llm_mock_enabled != "true"}}', {
+    n_scenario_json, tpl_wc3270_scenario_extract, psr_json?required='schema,moduleId,scenarioId,traceFile,steps', \
+      vrf_flag?value='fn.hasValue(sys_last_result,"moduleId") && fn.hasValue(sys_last_result,"steps")'
+  })
+
+  n_scenario_write_report, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONObject
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim(); if (!projectRoot) throw new IllegalStateException("Missing required parameter: projectRoot")
+def scenario = JSON.parseObject(fn.str(fn.get("n_scenario_json")))
+if (!"cobol2java.wc3270-scenario".equals(scenario.getString("schema"))) {
+    scenario.put("schema", "cobol2java.wc3270-scenario")
+}
+if (!scenario.containsKey("version")) scenario.put("version", "v1")
+scenario.put("projectKey", fn.str(fn.get("n_project_key")) ?: scenario.getString("projectKey"))
+def traceRel = fn.str(fn.get("n_trace_rel"))
+scenario.put("traceFile", traceRel)
+def moduleId = scenario.getString("moduleId") ?: "unknown"
+def scenarioId = scenario.getString("scenarioId") ?: "scenario"
+def outputRoot = fn.str(fn.get("n_scenario_output_root")) ?: "verification/trace-scenarios"
+if (outputRoot.endsWith("/")) outputRoot = outputRoot.substring(0, outputRoot.length() - 1)
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def outRel
+if ("e2e".equals(moduleId)) {
+    outRel = "${outputRoot}/e2e/${scenarioId}.scenario.json"
+} else {
+    outRel = "${outputRoot}/by-module/${moduleId}/${scenarioId}.scenario.json"
+}
+def out = base.resolve(outRel.replace("/", java.io.File.separator))
+Files.createDirectories(out.getParent())
+Files.writeString(out, JSON.toJSONString(scenario), StandardCharsets.UTF_8)
+def written = new JSONObject()
+written.put("scenarioRel", outRel)
+written.put("moduleId", moduleId)
+written.put("scenarioId", scenarioId)
+written.put("traceRel", traceRel)
+fn.put("n_last_written_scenario_rel", outRel)
+def acc = fn.get("n_written_scenarios")
+if (!(acc instanceof java.util.List)) acc = new java.util.ArrayList()
+acc.add(written)
+fn.put("n_written_scenarios", acc)
+def regen = 0
+try { regen = Integer.parseInt(fn.str(fn.get("n_scenarios_regenerated")) ?: "0") } catch (Exception ignored) {}
+fn.put("n_scenarios_regenerated", String.valueOf(regen + 1))
+return "wrote " + outRel
+'''
+  })
+})
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+//# 模块 6：生成总目录 — trace-catalog.json
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+when('{{n_write_catalog == "true"}}', {
+  n_catalog_refresh_decision, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONArray
+import java.nio.file.Files
+import java.nio.file.Path
+
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim(); if (!projectRoot) throw new IllegalStateException("Missing required parameter: projectRoot")
+def outputRoot = fn.str(fn.get("n_scenario_output_root")) ?: "verification/trace-scenarios"
+if (outputRoot.endsWith("/")) outputRoot = outputRoot.substring(0, outputRoot.length() - 1)
+def catalogRel = projectRoot + "/" + outputRoot + "/trace-catalog.json"
+def incremental = (fn.str(fn.get("n_incremental_enabled")) ?: "true").toBoolean()
+if ("true".equals(fn.str(fn.get("n_no_trace_fixture")))) {
+    fn.put("n_catalog_need_regen", "false")
+    return JSON.toJSONString([needRegen: false, status: "SKIPPED_NO_TRACE_FIXTURE", reason: "no-trace-fixture"])
+}
+
+def regen = 0
+try { regen = Integer.parseInt(fn.str(fn.get("n_scenarios_regenerated")) ?: "0") } catch (Exception ignored) {}
+if (regen > 0) {
+    fn.put("n_catalog_need_regen", "true")
+    return JSON.toJSONString([needRegen: true, reason: "scenarios-regenerated", count: regen])
+}
+if (!incremental) {
+    fn.put("n_catalog_need_regen", "true")
+    return JSON.toJSONString([needRegen: true, reason: "incremental-disabled"])
+}
+def catalogMtime = fn.fileLastModified(catalogRel)
+if (catalogMtime < 0) {
+    fn.put("n_catalog_need_regen", "true")
+    return JSON.toJSONString([needRegen: true, reason: "catalog-missing"])
+}
+def entries = fn.get("n_trace_entries")
+if (entries instanceof JSONArray) {
+    for (int i = 0; i < entries.size(); i++) {
+        def item = entries.getJSONObject(i)
+        def traceRel = item.getString("traceRel")
+        def tracePath = projectRoot + "/" + traceRel
+        if (fn.fileLastModified(tracePath) > catalogMtime) {
+            fn.put("n_catalog_need_regen", "true")
+            return JSON.toJSONString([needRegen: true, reason: "trace-newer-than-catalog", trace: traceRel])
+        }
+    }
+}
+fn.put("n_catalog_need_regen", "false")
+return JSON.toJSONString([needRegen: false, reason: "catalog-fresh"])
+'''
+
+  when('{{n_catalog_need_regen == "true" && n_llm_mock_enabled == "true"}}', {
+    n_trace_catalog_json, act_func.run?script='''
+def catalog = [
+    schema: "cobol2java.wc3270-trace-catalog",
+    version: "v2",
+    projectKey: (fn.str(fn.get("n_project_key"))?.trim() ?: { throw new IllegalStateException("Missing required parameter: projectKey") }()),
+    layout: "by-module",
+    modules: [],
+    e2eSuite: [traceId: "e2e-mock", file: "verification/wc3270/e2e/bank-signon-list-balances.mock.trace.txt",
+               scenario: "verification/trace-scenarios/e2e/bank-signon-list-balances.scenario.json"]
+]
+return com.alibaba.fastjson2.JSON.toJSONString(catalog)
+'''
+  })
+  when('{{n_catalog_need_regen == "true" && n_llm_mock_enabled != "true"}}', {
+    n_written_scenarios_json, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+def acc = fn.get("n_written_scenarios")
+if (!(acc instanceof java.util.List)) acc = []
+return JSON.toJSONString(acc)
+'''
+    n_trace_catalog_json, tpl_wc3270_trace_catalog, psr_json?required='schema,modules', \
+      vrf_flag?value='fn.hasValue(sys_last_result,"modules")'
+  })
+
+  when('{{n_catalog_need_regen == "true"}}', {
+  n_catalog_write_report, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim(); if (!projectRoot) throw new IllegalStateException("Missing required parameter: projectRoot")
+def version = fn.str(fn.get("n_ir_version")) ?: "v1"
+def outputRoot = fn.str(fn.get("n_scenario_output_root")) ?: "verification/trace-scenarios"
+if (outputRoot.endsWith("/")) outputRoot = outputRoot.substring(0, outputRoot.length() - 1)
+def rel = "${outputRoot}/trace-catalog.json"
+def out = Path.of(rootDir, projectRoot, rel).toAbsolutePath().normalize()
+Files.createDirectories(out.getParent())
+def catalog = JSON.parseObject(fn.str(fn.get("n_trace_catalog_json")))
+catalog.put("schema", "cobol2java.wc3270-trace-catalog")
+catalog.put("version", "v2")
+catalog.put("generatedBy", "agt_wc3270_trace_scenario_builder.c2j.validate")
+def normalizeProjectRel
+normalizeProjectRel = { Object v ->
+    def s = v == null ? "" : String.valueOf(v).replace("\\", "/")
+    def pr = projectRoot.replace("\\", "/")
+    while (pr.endsWith("/")) pr = pr.substring(0, pr.length() - 1)
+    return s.startsWith(pr + "/") ? s.substring(pr.length() + 1) : s
+}
+def modules = catalog.getJSONArray("modules")
+if (modules != null) {
+    for (int i = 0; i < modules.size(); i++) {
+        def trace = modules.getJSONObject(i)?.getJSONObject("trace")
+        if (trace != null && trace.getString("scenario") != null) {
+            trace.put("scenario", normalizeProjectRel(trace.getString("scenario")))
+        }
+    }
+}
+def e2e = catalog.getJSONObject("e2eSuite")
+if (e2e != null && e2e.getString("scenario") != null) {
+    e2e.put("scenario", normalizeProjectRel(e2e.getString("scenario")))
+}
+Files.writeString(out, JSON.toJSONString(catalog), StandardCharsets.UTF_8)
+return "wrote " + rel
+'''
+  })
+  when('{{n_catalog_need_regen != "true"}}', {
+    assign('n_catalog_write_report', 'skipped trace-catalog (incremental, catalog still fresh)')
+  })
+})
+
+assign('n_trace_fixture_status', 'READY')
+when('{{n_no_trace_fixture == "true"}}', { assign('n_trace_fixture_status', 'SKIPPED_NO_TRACE_FIXTURE') })
+
+assign('n_trace_scenario_builder_report', '''# wc3270 Trace Scenario Builder (LLM)
+
+- traceDiscovery: {{n_trace_discovery_json}}
+- status: {{n_trace_fixture_status}}
+- contextPack: equivalence context loaded (architecture / screen-meta / screen-semantics / openapi)
+- incrementalEnabled: {{n_incremental_enabled}}
+- scenariosRegenerated: {{n_scenarios_regenerated}}
+- scenariosSkipped: {{n_scenarios_skipped}}
+- llmMockEnabled: {{n_llm_mock_enabled}}
+- writeCatalog: {{n_write_catalog}}
+- catalogDecision: {{n_catalog_refresh_decision}}
+- catalog: {{n_catalog_write_report}}
+
+## Outputs
+
+- `verification/trace-scenarios/by-module/{moduleId}/{scenarioId}.scenario.json`
+- `verification/trace-scenarios/e2e/{scenarioId}.scenario.json` (when moduleId=e2e)
+- optional `verification/trace-scenarios/trace-catalog.json`
+
+## Next
+
+Run `agt_equivalence_validator.c2j.validate` then `agt_test_generator.c2j.validate`.
+''')
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+##模块 7：LLM 提示词模板（define
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+
+define('tpl_wc3270_scenario_extract', '''
+你是 COBOL2Java 第七阶段 fixtures Agent。任务：将 **wc3270 .trace.txt** 与工程内 **requirement/design 业务知识** 结合，输出单条 `cobol2java.wc3270-scenario` JSON（只输出 JSON，不要 markdown）。
+
+# 业务上下文（requirement + design，已截断）
+{{n_equivalence_context_json}}
+
+# 当前 trace 文件（相对 projectRoot 路径：{{n_trace_rel}}）
+```
+{{n_trace_body}}
+```
+
+# 输出契约（必须遵守）
+- `schema`: `"cobol2java.wc3270-scenario"`
+- `version`: `"v1"`
+- `projectKey`: 与上下文一致
+- `moduleId` / `boundedContext`: 对齐 `target-architecture.modules[]`（如 bank-security / bank-customer / bank-account / bank-transaction / bank-batch）；长 E2E trace 可用 `moduleId":"e2e"`
+- `scenarioId`: 短 kebab-case，源于业务动作（如 signon、list-balances）
+- `description`: 一句业务说明
+- `traceFile`: 必须为 `"{{n_trace_rel}}"`
+- `steps[]`: 从 trace 推断（cicsTransaction / enterMap / viewMap 等），含 `assertions.screenContains` 或 `assertions.fields` / `accounts`
+- `apiMappingHints[]`: 结合 screen-semantics、architecture、openapi 推断目标 REST；无法推断时 **空数组** 并设 `mappingConfidence` < 0.5
+- `goldenApiResponse`: 若能从 trace 屏幕或语义/数据字典推断关键字段则填写；否则省略
+- `credentials`: 若 trace 出现用户/密码则提取
+- `preconditionTrace` / `previousModule` / `nextModule`: 若能从模块链推断则填写
+- `sourceEvidence[]`: 列出实际引用的工件路径（如 screen-meta、target-architecture、联机 COBOL 程序源文件）
+- `confidence`: 0~1 总置信度；`openQuestions[]`: 不确定点
+
+禁止编造 trace 中未出现的屏幕文案；禁止编造未在 openapi/architecture 出现的 API path（可给建议但须在 openQuestions 说明）。
+''')
+
+define('tpl_wc3270_trace_catalog', '''
+你是 COBOL2Java 第七阶段 fixtures Agent。根据已生成的 scenario 列表与 architecture，输出 `cobol2java.wc3270-trace-catalog` JSON（只输出 JSON）。
+
+# 业务上下文
+{{n_equivalence_context_json}}
+
+# 本轮已写入的 scenario 摘要
+{{n_written_scenarios_json}}
+
+# 输出契约
+- `schema`: `"cobol2java.wc3270-trace-catalog"`
+- `version`: `"v2"`
+- `layout`: `"by-module"`
+- `modules[]`: 每项含 `moduleId`, `boundedContext`, `capabilities[]`, `trace.traceId`, `trace.file`（trace 相对路径）, `trace.scenario`（scenario.json 相对路径）, `trace.mock`（若文件名含 mock 则为 true）
+- 可选 `e2eSuite`：若存在 moduleId=e2e 的 scenario，填写串联 `moduleOrder[]`
+- `architectureRef`: `design/architecture/target-architecture-v1.json`
+
+只聚合已给出的 scenario，不要虚构未列出的 trace 文件。
+''')

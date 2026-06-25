@@ -1,0 +1,23 @@
+/*
+{
+  "title":"COBOL2Java Test Data Manager",
+  "description":"P1：确保新老系统测试数据一致。支持：数据快照导入、虚拟时间注入、测试账号隔离、测试后清理。确定性操作，不消耗 LLM。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"action","label":"操作类型","required":false,"default":"setup"},
+    {"name":"dataSnapshotRel","label":"数据快照路径","required":false,"default":""}
+  ],
+  "version":1,
+  "resultPlan":"n_test_data_manager_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_action','{{fn.optional(action,"setup")}}',
+       'n_data_snapshot_rel','{{fn.optional(dataSnapshotRel,"")}}')
+
+n_test_data_manager_report, act_func.run?expression=test_data_manager_json

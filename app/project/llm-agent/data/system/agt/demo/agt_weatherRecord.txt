@@ -1,0 +1,55 @@
+/*
+{
+	"title":"网页抓取与LLM分析",
+	"parameter":"{\"name\":\"target_url\",\"label\":\"目标网页地址\",\"type\":\"text\",\"required\":true}",
+	"displayOrder":0,
+	"version":13
+}
+*/
+// ========== 初级：抓取网页纯文本 ==========
+n_raw_text, act_func.run?script='''
+    def url = fn.get("target_url")
+    def html = new URL(url).text
+    // 去除脚本、样式、标签，保留纯文本
+    def text = html
+        .replaceAll("<script[^>]*>[\\s\\S]*?</script>", " ")
+        .replaceAll("<style[^>]*>[\\s\\S]*?</style>", " ")
+        .replaceAll("<[^>]+>", " ")
+        .replaceAll("\\s+", " ")
+        .trim()
+    // 截断至 3000 字符，避免超出 LLM 上下文
+    if (text.length() > 3000) {
+        text = text.substring(0, 3000) + " …(截断)"
+    }
+    text
+'''
+
+// 提取脚本返回的纯文本（该平台直接返回字符串，无需 .strings[0]）
+assign('page_text', '{{n_raw_text}}')
+
+// ========== 进阶：正则提取网页标题 ==========
+n_title, act_func.run?script='''
+    def url = fn.get("target_url")
+    def html = new URL(url).text
+    def matcher = (html =~ /<title>(.*?)<\/title>/)
+    matcher ? matcher[0][1] : "未找到标题"
+'''
+assign('page_title', '{{n_title}}')
+
+// ========== 高级：交给大模型分析 ==========
+define('tpl_analyze', '''
+你是一个信息提炼专家。请根据以下网页内容，用中文完成以下任务：
+1. 用一句话概括页面主题。
+2. 列出 3 个核心要点（如果有的话）。
+3. 如果内容为空或无法理解，请说明“无法分析”。
+
+【网页标题】：{{page_title}}
+【网页正文】：{{page_text}}
+''')
+
+// 调用大模型进行分析
+n_analysis , tpl_analyze,psr_all
+
+// 输出最终分析结果
+//## 最终分析
+assign('final_output', '{{n_analysis}}')

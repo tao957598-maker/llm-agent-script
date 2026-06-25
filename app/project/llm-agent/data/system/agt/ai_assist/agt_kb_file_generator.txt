@@ -1,0 +1,113 @@
+/*
+{
+	"title":"Knowledge Base File Generator",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求"
+		},
+		{
+			"name":"kbSpaceId",
+			"label":"目录ID（支持多个）",
+			"type":"knowledge_fold"
+		},
+		{
+			"name":"kbSpaceName",
+			"label":"目录名称（支持多个）"
+		}
+	],
+	"version":1,
+	"resultPlan":"n_result"
+}
+*/
+// file name
+n_file_name, act_kb.selectBy?sql='select  knowledge_name  from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}" '
+assign("file_name", '{{n_file_name[0].knowledge_name}}')
+
+// 初始化知识空间上下文与目录路径变量
+assign("kb_space_context", "NaN")
+assign("kb_dir_path", "")
+// 判断是否有目录ID传入
+when('fn.hasValue(kbSpaceId)', {
+	// 获取目录下已有文件列表用作LLM上下文参考
+	n_kb_dir_info,act_artifact.list?filepath='{{kbSpaceId}}'&maxDepth=1&maxResults=100
+	// 将文件列表赋值给上下文变量
+	assign("kb_space_context", "{{n_kb_dir_info}}")
+	// 获取目录元数据以提取实际路径
+	n_dir_desc,act_artifact.describe?filepath='{{kbSpaceId}}'
+	// 从describe结果中提取目录的实际路径
+	n_dir_path,act_func?script='''
+		return n_dir_desc.filepath
+	'''
+	// 将提取的路径赋值给目录路径变量
+	assign("kb_dir_path", "{{n_dir_path}}")
+})
+
+// 生成文件名称与内容
+n_gen_result,tpl_gen_file,psr_json
+
+// 构建完整文件写入路径（目录路径 + 文件名）
+n_final_path,act_func?script='''
+	def dirPath = fn.str(kb_dir_path) ?: ""
+	def fileName = fn.str(n_gen_result?.fileName) ?: "generated_file.txt"
+	def fullPath = ""
+	if (dirPath) {
+		fullPath = dirPath + "/" + fileName
+	} else {
+		fullPath = fileName
+	}
+	return fullPath
+'''
+
+// 将生成的文件内容写入知识空间并同步索引
+n_result,act_func.write?filename='{{n_final_path}}'&data='{{n_gen_result.fileContent}}'&syncKbs=true
+
+// 组装最终返回结果
+assign("finalResult", '{"success":true,"fileName":"{{n_gen_result.fileName}}","filePath":"{{n_final_path}}","fileType":"{{n_gen_result.fileType}}"}')
+
+// 输出最终结果
+n_output,act_memory.assign?var=finalResult&value={{finalResult}}&type=json
+
+// 异常处理：生成或写入失败时记录错误信息
+on_failure({
+	// 记录失败原因
+	assign("finalResult", '{"success":false,"error":"{{sys_failure_task.result}}"}')
+	// 输出错误结果
+	act_memory.assign?var=finalResult&value={{finalResult}}&type=json
+	// 跳转到结束
+	act_flow.go?plan=end
+})
+
+// 文件生成模板：根据用户需求智能生成文件名和完整文件内容
+define('tpl_gen_file', '''
+你是一个智能文件生成专家。根据用户提供的需求描述，生成一个完整的文件（包括文件名和文件内容），该文件将被保存到知识空间指定目录中。
+
+# 用户需求
+{{userInput}}
+
+# 目标目录已有文件列表（供参考，避免命名冲突）
+{{kb_space_context}}
+
+# 任务要求
+1. 仔细分析用户需求，确定要生成的文件类型（如 .txt、.md、.json、.csv、.py、.js、.html、.sql、.xml、.yaml、.cfg 等）
+2. 生成一个合适的文件名（包含扩展名），使用英文或拼音命名，避免与已有文件重名
+3. 生成完整、可用的文件内容，内容应专业、准确、格式正确，可直接保存使用
+4. 不需要你关注 filePath，系统会自动将文件保存到目标目录
+
+# 输出格式（严格返回以下JSON，不要任何额外解释，不要用代码块包裹）
+{
+  "fileName": "实际生成的文件名（含扩展名）",
+  "fileContent": "文件的完整文本内容",
+  "fileType": "文件类型描述（如 markdown/json/python/html/text 等）"
+}
+
+# 生成规则
+- 文件名应简洁且有意义，使用英文或拼音命名，不要包含特殊字符
+- 文件内容应完整可直接使用，不要留占位符或TODO项
+- 如果是代码文件，确保语法正确、可执行
+- 如果是数据文件（JSON/CSV等），确保格式规范、可解析
+- 如果是文档（Markdown等），确保结构清晰、内容完整
+- fileContent中的换行符直接保留即可，系统会自动处理
+
+{{sys_hint}}
+''')

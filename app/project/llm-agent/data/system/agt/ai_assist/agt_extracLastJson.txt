@@ -1,0 +1,40 @@
+/*
+{
+	"title":"Agent Creation",
+	"parameter":[
+		{
+			"name":"data",
+			"label":"data",
+			"required":true
+		}
+	],
+	"version":1
+}
+*/
+n_json,act_func.run?script='''
+import java.util.regex.Pattern
+
+def extractLastJson(String text) {
+    // 匹配JSON代码块的正则
+    def pattern = Pattern.compile("```json\\s*([\\s\\S]*?)\\s*```")
+    def matcher = pattern.matcher(text)
+    
+    def jsonBlocks = []
+    while (matcher.find()) {
+        jsonBlocks.add(matcher.group(1))
+    }
+    
+    if (jsonBlocks.isEmpty()) {
+        return null
+    }
+    
+    // 返回最后一个JSON块
+    return jsonBlocks.last()
+}
+
+def lastJson = extractLastJson(data)
+if (lastJson == null) {
+    lastJson = "{}"
+}
+return lastJson
+'''

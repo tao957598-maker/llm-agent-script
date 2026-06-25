@@ -1,0 +1,22 @@
+/*
+{
+	"title":"test demo tmp",
+	"description":"test demo tmp",
+	"resultPlan":"s",
+	"parameter":[
+		
+	],
+	"displayOrder":0,
+	"version":3
+}
+*/
+// userInputuserInput
+assign('userInputuserInput',"{{userInput}}")
+
+ 
+// n_collect_data: 收集数据节点，通过RPA机器人截取浏览器屏幕
+n_collect_data, act_rpa.send?command=SaveDesktopScreenshot 
+// 从收集到的数据中提取截图文件名，并存入变量 screenshot_filename
+assign('screenshot_filename', "{{n_collect_data[0].kbSpaceFileId}}")
+
+

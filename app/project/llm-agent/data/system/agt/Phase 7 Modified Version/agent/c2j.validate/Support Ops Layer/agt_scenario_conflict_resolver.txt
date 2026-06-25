@@ -1,0 +1,21 @@
+/*
+{
+  "title":"COBOL2Java Scenario Conflict Resolver",
+  "description":"P2：写盘前检测 scenario 路径冲突（多个 trace 映射到相同 moduleId+scenarioId），自动追加后缀或合并。完全确定性，不消耗 LLM。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"conflictStrategy","label":"冲突策略","required":false,"default":"rename"}
+  ],
+  "version":1,
+  "resultPlan":"n_conflict_resolver_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_conflict_strategy','{{fn.optional(conflictStrategy,"rename")}}')
+
+n_conflict_resolver_report, act_func.run?expression=conflict_resolver_json

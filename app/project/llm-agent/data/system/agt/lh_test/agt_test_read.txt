@@ -1,0 +1,6 @@
+n_file_name, act_kb.selectBy?sql='select knowledge_name, store_uri from kb_spaces_folder_knowledge where file_name="analysis-results.html"'
+assign("file_path", '{{n_file_name[0].store_uri}}')
+n_analysis_html_tpl, act_func.read?filename='{{file_path}}'&version=1
+assign('final_html_output', '{{n_analysis_html_tpl}}') 
+act_memory.assign?var=final_html_output&value={{n_analysis_html_tpl}}&type=html  
+

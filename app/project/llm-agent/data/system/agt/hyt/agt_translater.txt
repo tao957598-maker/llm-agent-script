@@ -1,0 +1,36 @@
+/*
+{
+	"title":"扩写译文（中译英）",
+	"resultPlan":"n_translate_result",
+	"parameter":[
+		{
+			"name":"sourceText",
+			"label":"待译中文",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		}
+	],
+	"tag":"hyt",
+	"displayOrder":0,
+	"version":2
+}
+*/
+define('tpl_translate', '''
+你是一名专业中英翻译，将下列中文翻译成地道、流畅的英文。
+
+## 要求
+- 忠实原意，不增删事实
+- 语气与原文一致（书面/口语由原文决定）
+- 只输出英文译文，不要中文、注释或标题
+
+## 中文原文
+{{sourceText}}
+''')
+
+//^ 正在翻译
+tpl_translate, psr_all
+
+assign('n_translate_result', '{{tpl_translate}}')

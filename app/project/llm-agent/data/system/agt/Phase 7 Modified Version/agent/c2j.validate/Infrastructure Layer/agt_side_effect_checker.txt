@@ -1,0 +1,21 @@
+/*
+{
+  "title":"COBOL2Java Side Effect Checker",
+  "description":"P1：验证 API 调用之外的副作用——数据库状态、审计日志、消息队列、文件输出是否与预期一致。确定性检查，基于 scenario 中的 expectedSideEffects。不消耗 LLM。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"scenarioFilter","label":"仅处理指定 scenario","required":false,"default":""}
+  ],
+  "version":1,
+  "resultPlan":"n_side_effect_checker_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_scenario_filter','{{fn.optional(scenarioFilter,"")}}')
+
+n_side_effect_checker_report, act_func.run?expression=side_effect_checker_json

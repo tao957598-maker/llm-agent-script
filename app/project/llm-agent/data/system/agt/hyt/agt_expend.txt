@@ -1,0 +1,63 @@
+/*
+{
+	"title":"文本扩写",
+	"description":"出示文本扩写后翻译成英文",
+	"resultPlan":"n_english_result",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"原文",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"expand_style",
+			"label":"扩写风格",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"target_words",
+			"label":"目标字数",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		}
+	],
+	"tag":"hyt",
+	"displayOrder":0,
+	"version":2
+}
+*/
+define('tpl_expand', '''
+
+你是一名专业的中文写作助手，任务是对用户原文进行扩写。
+
+## 要求
+- 保留原意，不编造与原文无关的事实
+- 扩写风格：{{expand_style!"通顺、自然的书面语"}}
+- 目标篇幅：{{target_words!"在原文基础上适度加长，约 1.5～2 倍篇幅"}}
+- 只输出扩写后的正文，不要标题、前言或修改说明
+
+## 原文
+{{userInput}}
+''')
+
+//^ 正在扩写
+tpl_expand, psr_all
+
+assign('n_expand_result', '{{tpl_expand}}')
+
+// 调用翻译 Agent，入参为扩写结果
+//^ 正在翻译为英文
+agt_translater?sourceText={{n_expand_result}}
+
+assign('n_english_result', '{{agt_translater}}')

@@ -1,0 +1,41 @@
+/*{
+  "title":"Async Global Var Entry",
+  "description":"Entry agent writes a global value, then uses act_plan.runPlan to launch an async child that reads the value.",
+  "parameter":[
+    {"name":"waitSeconds", "label":"子 agent 等待秒数", "type":"number", "default":1}
+  ],
+  "tag":"cases",
+  "life":100,
+  "version":1,
+  "resultPlan":"n_result"
+}*/
+// [GLOBAL] write the parent global variable first
+act_memory.assign?var=async_demo_global&value=from-parent&global=true
+// [PLAN] build a one-item plan so runPlan has a plan context
+n_child_plan, act_plan.parse?task='
+- [ ] async child reader
+'
+foreach('n_step', 'n_child_plan', {
+  //# Step: {{n_step.item}}
+  assign("n_page_step_temp","{{n_step.item}}")
+  // [BIND] attach the child executor to the plan item
+  n_act_plan,act_plan.assignAgent?var=n_child_plan&index={{n_step.index}}&executor=agt_async_global_var_reader.async_test_global_var
+  // [ASYNC] run the child agent asynchronously
+  n_discovery_task_result, act_plan.runPlan?var=n_child_plan&index={{n_step.index}}&_suppressFailure=true
+
+})
+
+
+ 
+
+
+
+// [RESULT] collect the async child return value
+assign('n_child_result', '{{n_child_future.value}}')
+
+// [VERIFY] read back the parent global value
+n_parent_global_seen, act_memory.retrieve?var=async_demo_global&global=true
+// [VERIFY] read back the global value written by the child
+n_child_seen, act_memory.retrieve?var=async_demo_child_seen&global=true
+// [SUMMARY] final result for quick inspection
+assign('n_result', 'parent={{n_parent_global_seen}} | child={{n_child_result}} | child-global={{n_child_seen}}')

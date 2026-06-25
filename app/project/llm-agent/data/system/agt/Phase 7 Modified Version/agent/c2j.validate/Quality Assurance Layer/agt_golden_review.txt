@@ -1,0 +1,139 @@
+/*
+{
+  "title":"COBOL2Java Golden Review",
+  "description":"P0：读取 golden-trust-assessment，对 NEEDS_REVIEW 场景逐个弹出人工审批页。批准/修改后 goldenSource 升为 manual-annotation。仅低分触发，唯一需人工的 Agent。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"priorityOnly","label":"仅处理 CRITICAL","required":false,"default":"true"}
+  ],
+  "version":1,
+  "resultPlan":"n_golden_review_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_priority_only','{{fn.optional(priorityOnly,"true")}}')
+
+// 读取评分报告，筛出 NEEDS_REVIEW 场景
+n_review_queue, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONArray
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim()
+if (!projectRoot) return "[]"
+
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def assessmentPath = base.resolve("test/equivalence/golden-trust-assessment-v1.json")
+if (!Files.isRegularFile(assessmentPath)) return "[]"
+
+def assessment = JSON.parseObject(Files.readString(assessmentPath, StandardCharsets.UTF_8))
+def all = assessment.getJSONArray("assessments") ?: new JSONArray()
+def queue = new JSONArray()
+
+for (int i = 0; i < all.size(); i++) {
+    def a = all.getJSONObject(i)
+    if (a.getString("verdict") == "NEEDS_REVIEW") queue.add(a)
+}
+
+fn.put("n_golden_review_queue", JSON.toJSONString(queue))
+fn.put("n_golden_review_count", String.valueOf(queue.size()))
+return JSON.toJSONString(queue)
+'''
+
+// 逐个审批
+assign('n_golden_review_approved','0')
+assign('n_golden_review_modified','0')
+assign('n_golden_review_rejected','0')
+
+foreach('n_review_item','n_review_queue',{
+    n_approval_result, act_flow.pageConfirm?confirmTool=false&params='''
+    {
+        "title":"Golden 值审批 — {{n_review_item.item.scenarioId}}",
+        "description":"评分 {{n_review_item.item.score}}（来源: {{n_review_item.item.goldenSource}}），请确认或修正。",
+        "fields":[
+            {"name":"verdict","label":"审批决定","type":"select","options":["approve","modify","reject_gap"]},
+            {"name":"comment","label":"备注（可选）","type":"text"}
+        ]
+    }
+    '''
+
+    // 根据审批结果更新 scenario
+    n_update_result, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONObject
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Instant
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim()
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def scenarioRel = fn.str(fn.get("n_review_item.item.scenarioRel"))
+def verdict = fn.str(fn.get("n_approval_result"))?.trim() ?: ""
+
+if (!scenarioRel || !verdict) return "skipped"
+
+def sp = base.resolve(scenarioRel)
+if (!Files.isRegularFile(sp)) return "scenario-not-found"
+
+def sc = JSON.parseObject(Files.readString(sp, StandardCharsets.UTF_8))
+def meta = sc.getJSONObject("goldenMetadata") ?: new JSONObject()
+
+if (verdict.contains("approve")) {
+    meta.put("goldenSource", "manual-annotation")
+    meta.put("approvedBy", "human-reviewer")
+    meta.put("approvedAt", Instant.now().toString())
+    meta.put("needsRetranslation", false)
+    meta.put("trustScore", 0.95)
+    sc.put("confidence", 0.95)
+    sc.put("status", "accepted")
+} else if (verdict.contains("modify")) {
+    meta.put("goldenSource", "manual-annotation-modified")
+    meta.put("modifiedBy", "human-reviewer")
+    meta.put("modifiedAt", Instant.now().toString())
+    meta.put("needsRetranslation", false)
+    meta.put("trustScore", 0.90)
+    sc.put("status", "accepted")
+} else {
+    meta.put("needsRetranslation", false)
+    meta.put("trustScore", 0.0)
+    sc.put("status", "waived")
+    def oq = sc.getJSONArray("openQuestions") ?: new com.alibaba.fastjson2.JSONArray()
+    oq.add("人工审批驳回为缺口: ${verdict}")
+    sc.put("openQuestions", oq)
+}
+
+sc.put("goldenMetadata", meta)
+Files.writeString(sp, JSON.toJSONString(sc), StandardCharsets.UTF_8)
+return "${verdict} — ${scenarioRel}"
+'''
+
+    when('{{fn.contains(n_approval_result,"approve")}}',{
+        assign('n_golden_review_approved','{{(n_golden_review_approved!0)+1}}')
+    })
+    when('{{fn.contains(n_approval_result,"modify")}}',{
+        assign('n_golden_review_modified','{{(n_golden_review_modified!0)+1}}')
+    })
+    when('{{fn.contains(n_approval_result,"reject")}}',{
+        assign('n_golden_review_rejected','{{(n_golden_review_rejected!0)+1}}')
+    })
+})
+
+assign('n_golden_review_report','''# Golden 值人工审批报告
+
+- 待审批场景总数: {{n_golden_review_count}}
+- 已批准: {{n_golden_review_approved}}
+- 已修改: {{n_golden_review_modified}}
+- 已驳回: {{n_golden_review_rejected}}
+
+已批准/修改的场景 goldenSource 已升为 manual-annotation。
+''')

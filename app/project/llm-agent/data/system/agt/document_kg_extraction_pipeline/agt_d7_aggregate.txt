@@ -1,0 +1,630 @@
+/*{
+  "title": "跨Chunk聚合",
+  "description": "对标准化后的实体/关系/事件进行文档级全局聚合：指代消解、跨section实体合并、事件去重、隐式关系发现，输出图谱候选JSON",
+  "parameter": [
+    {"name":"ksDir","label":"输出目录","required":false,"description":"知识空间输出目录，默认 document_kg_extraction"}
+  ],
+  "version": 1,
+  "resultPlan": "n_output"
+}*/
+
+// 设置默认输出目录
+when('!fn.hasValue(ksDir)', {
+  assign("ksDir", "document_kg_extraction")
+})
+
+// 读取阶段四输出的entities_normalized.json
+n_entities_norm, act_artifact.read?filepath='{{ksDir}}/04_normalization/entities_normalized.json'&maxLength=635555
+
+// 读取阶段四输出的relations_normalized.json
+n_relations_norm, act_artifact.read?filepath='{{ksDir}}/04_normalization/relations_normalized.json'&maxLength=635555
+
+// 读取阶段四输出的events_normalized.json
+n_events_norm, act_artifact.read?filepath='{{ksDir}}/04_normalization/events_normalized.json'&maxLength=635555
+
+// 读取阶段二输出的document_structure.json
+n_structure, act_artifact.read?filepath='{{ksDir}}/02_chunks/document_structure.json'&maxLength=635555
+
+// 读取阶段二输出的chunks.json
+n_chunks, act_artifact.read?filepath='{{ksDir}}/02_chunks/chunks.json'&maxLength=635555
+
+// 检查输入文件是否可读
+when('!fn.hasValue(n_entities_norm) || !fn.hasValue(n_relations_norm) || !fn.hasValue(n_events_norm)', {
+  // 输入文件缺失则终止流程
+  act_flow.fail?result='无法读取阶段四输出文件，请确认 agt_d6_normalize 已执行完成，ksDir={{ksDir}}'
+})
+
+// ===== Phase 1: Entity co-reference & final dedup =====
+
+// Groovy: 为LLM准备实体精简摘要（用于指代消解和最终去重）
+n_entity_agg_input, act_func?script='''
+  def entities = n_entities_norm ?: []
+  return entities.collect { ent ->
+    return [
+      entity_id: ent.entity_id,
+      name: ent.name,
+      entity_type: ent.entity_type,
+      aliases: ent.aliases ?: [],
+      confidence: ent.confidence ?: 0.0,
+      evidence_count: ent.evidence?.size() ?: 0
+    ]
+  }
+'''
+
+// Groovy: 提取文档结构中的section层级信息
+n_section_context, act_func?script='''
+  def structure = n_structure ?: [:]
+  def sections = structure?.sections ?: []
+  return sections.collect { sec ->
+    return [
+      section_id: sec.section_id,
+      title: sec.title ?: "",
+      level: sec.level ?: 1,
+      page_range: sec.page_range ?: [],
+      parent_section_id: sec.parent_section_id ?: null
+    ]
+  }
+'''
+
+// 统计聚合前数据
+n_pre_agg_stats, act_func?script='''
+  def stats = [:]
+  stats.entity_count = n_entities_norm?.size() ?: 0
+  stats.relation_count = n_relations_norm?.size() ?: 0
+  stats.event_count = n_events_norm?.size() ?: 0
+  return stats
+'''
+
+// LLM: 实体指代消解 + 最终去重
+n_entity_agg_result, tpl_aggregate_entities, psr_json
+
+// Groovy: 应用实体聚合决策
+n_entities_aggregated, act_func?script='''
+  def entities = n_entities_norm ?: []
+  def mergeGroups = n_entity_agg_result?.merge_groups ?: []
+  def corefResolutions = n_entity_agg_result?.coreference_resolutions ?: []
+  def nameCorrections = n_entity_agg_result?.name_corrections ?: []
+
+  // 构建合并ID映射
+  def idMapping = [:]
+  mergeGroups.each { group ->
+    def ids = group.entity_ids_to_merge ?: []
+    if (ids.size() > 0) {
+      def canonicalId = ids[0]
+      ids.each { oldId -> idMapping[oldId] = canonicalId }
+    }
+  }
+
+  // 构建coreference映射（旧name → 新name）
+  def corefMap = [:]
+  corefResolutions.each { cr ->
+    if (cr.entity_id && cr.resolved_name) {
+      corefMap[cr.entity_id] = cr.resolved_name
+    }
+  }
+
+  // 构建名称纠正映射
+  def nameFixMap = [:]
+  nameCorrections.each { nc ->
+    if (nc.entity_id && nc.corrected_name) {
+      nameFixMap[nc.entity_id] = nc.corrected_name
+    }
+  }
+
+  // 应用合并
+  def aggregated = []
+  def seenCanonical = [] as Set
+
+  entities.each { ent ->
+    def mappedId = idMapping[ent.entity_id] ?: ent.entity_id
+
+    if (idMapping.containsKey(ent.entity_id) && idMapping[ent.entity_id] != ent.entity_id) {
+      def canonical = aggregated.find { it.entity_id == mappedId }
+      if (canonical) {
+        if (ent.evidence) {
+          canonical.evidence = (canonical.evidence ?: []) + ent.evidence
+        }
+        if (ent.aliases) {
+          canonical.aliases = ((canonical.aliases ?: []) + ent.aliases).unique()
+        }
+        if (ent.attributes) {
+          canonical.attributes = (canonical.attributes ?: [:]) + ent.attributes
+        }
+        if ((ent.confidence ?: 0) > (canonical.confidence ?: 0)) {
+          canonical.confidence = ent.confidence
+        }
+      }
+    } else {
+      ent.entity_id = mappedId
+      // 应用coreference
+      if (corefMap[ent.entity_id]) {
+        ent.name = corefMap[ent.entity_id]
+      }
+      // 应用名称纠正
+      if (nameFixMap[ent.entity_id]) {
+        ent.name = nameFixMap[ent.entity_id]
+      }
+      aggregated.add(ent)
+      seenCanonical.add(mappedId)
+    }
+  }
+
+  // 应用合并组的canonical名称
+  mergeGroups.each { group ->
+    def ids = group.entity_ids_to_merge ?: []
+    if (ids.size() > 0) {
+      def canonical = aggregated.find { it.entity_id == ids[0] }
+      if (canonical) {
+        if (group.canonical_name) canonical.name = group.canonical_name
+        if (group.canonical_type) canonical.entity_type = group.canonical_type
+        if (group.unified_aliases) canonical.aliases = group.unified_aliases
+      }
+    }
+  }
+
+  return aggregated
+'''
+
+// Groovy: 构建最终ID映射表
+n_final_id_mapping, act_func?script='''
+  def mergeGroups = n_entity_agg_result?.merge_groups ?: []
+  def mapping = [:]
+  mergeGroups.each { group ->
+    def ids = group.entity_ids_to_merge ?: []
+    if (ids.size() > 0) {
+      def canonicalId = ids[0]
+      ids.each { oldId -> mapping[oldId] = canonicalId }
+    }
+  }
+  return mapping
+'''
+
+// ===== Phase 2: Event merging =====
+
+// Groovy: 重映射事件中的实体引用
+n_events_remapped, act_func?script='''
+  def events = n_events_norm ?: []
+  def idMapping = n_final_id_mapping ?: [:]
+
+  return events.collect { evt ->
+    def newEvt = [:] + evt
+    if (newEvt.participants) {
+      newEvt.participants = newEvt.participants.collect { p ->
+        def newP = [:] + p
+        if (idMapping.containsKey(p.entity_id)) {
+          newP.entity_id = idMapping[p.entity_id]
+        }
+        return newP
+      }
+    }
+    return newEvt
+  }
+'''
+
+// Groovy: 为LLM准备事件摘要
+n_event_agg_input, act_func?script='''
+  def events = n_events_remapped ?: []
+  return events.collect { evt ->
+    return [
+      event_id: evt.event_id,
+      event_type: evt.event_type,
+      trigger: evt.trigger ?: "",
+      time_normalized: evt.time?.normalized ?: "",
+      description: evt.description ?: "",
+      participant_ids: evt.participants?.collect { it.entity_id } ?: [],
+      confidence: evt.confidence ?: 0.0
+    ]
+  }
+'''
+
+// LLM: 跨chunk事件合并
+n_event_agg_result, tpl_aggregate_events, psr_json
+
+// Groovy: 应用事件合并
+n_events_aggregated, act_func?script='''
+  def events = n_events_remapped ?: []
+  def eventMerges = n_event_agg_result?.event_merges ?: []
+
+  // 构建事件合并映射
+  def eventMapping = [:]
+  eventMerges.each { group ->
+    def ids = group.event_ids_to_merge ?: []
+    if (ids.size() > 0) {
+      def canonicalId = ids[0]
+      ids.each { oldId -> eventMapping[oldId] = canonicalId }
+    }
+  }
+
+  def aggregated = []
+  def seenCanonical = [] as Set
+
+  events.each { evt ->
+    def mappedId = eventMapping[evt.event_id] ?: evt.event_id
+
+    if (eventMapping.containsKey(evt.event_id) && eventMapping[evt.event_id] != evt.event_id) {
+      def canonical = aggregated.find { it.event_id == mappedId }
+      if (canonical) {
+        if (evt.evidence) {
+          canonical.evidence = (canonical.evidence ?: []) + evt.evidence
+        }
+        if (evt.participants) {
+          canonical.participants = ((canonical.participants ?: []) + evt.participants).unique { it.entity_id }
+        }
+        if ((evt.confidence ?: 0) > (canonical.confidence ?: 0)) {
+          canonical.confidence = evt.confidence
+        }
+      }
+    } else {
+      evt.event_id = mappedId
+      aggregated.add(evt)
+      seenCanonical.add(mappedId)
+    }
+  }
+
+  // 应用合并组的canonical信息
+  eventMerges.each { group ->
+    def ids = group.event_ids_to_merge ?: []
+    if (ids.size() > 0) {
+      def canonical = aggregated.find { it.event_id == ids[0] }
+      if (canonical) {
+        if (group.canonical_type) canonical.event_type = group.canonical_type
+        if (group.canonical_description) canonical.description = group.canonical_description
+      }
+    }
+  }
+
+  return aggregated
+'''
+
+// ===== Phase 3: Implicit relation discovery =====
+
+// Groovy: 重映射关系实体引用
+n_relations_remapped, act_func?script='''
+  def relations = n_relations_norm ?: []
+  def idMapping = n_final_id_mapping ?: [:]
+
+  def remapped = relations.collect { rel ->
+    def newRel = [:] + rel
+    if (idMapping.containsKey(rel.source_entity_id)) {
+      newRel.source_entity_id = idMapping[rel.source_entity_id]
+    }
+    if (idMapping.containsKey(rel.target_entity_id)) {
+      newRel.target_entity_id = idMapping[rel.target_entity_id]
+    }
+    return newRel
+  }
+
+  return remapped.findAll { rel -> rel.source_entity_id != rel.target_entity_id }
+'''
+
+// Groovy: 构建实体名称索引 + 现有关系摘要
+n_relation_context, act_func?script='''
+  def entities = n_entities_aggregated ?: []
+  def relations = n_relations_remapped ?: []
+  def sections = n_section_context ?: []
+
+  // 实体索引
+  def entityIndex = [:]
+  entities.each { ent ->
+    entityIndex[ent.entity_id] = [name: ent.name, type: ent.entity_type]
+  }
+
+  // 现有关系摘要
+  def relationSummary = relations.collect { rel ->
+    return [
+      relation_type: rel.relation_type,
+      source_name: entityIndex[rel.source_entity_id]?.name ?: "?",
+      target_name: entityIndex[rel.target_entity_id]?.name ?: "?"
+    ]
+  }
+
+  return [
+    entity_index: entityIndex,
+    existing_relations: relationSummary,
+    section_count: sections.size()
+  ]
+'''
+
+// LLM: 隐式关系发现
+n_implicit_result, tpl_aggregate_relations, psr_json
+
+// Groovy: 合并隐式关系到现有关系
+n_relations_aggregated, act_func?script='''
+  def relations = n_relations_remapped ?: []
+  def implicitRelations = n_implicit_result?.implicit_relations ?: []
+  def entityIndex = n_relation_context?.entity_index ?: [:]
+
+  // 为隐式关系生成ID
+  def maxRelNum = relations.size()
+  def newRels = []
+  implicitRelations.eachWithIndex { imp, idx ->
+    def newId = "rel_imp_" + String.format("%03d", idx + 1)
+    // 通过entity name查找entity_id
+    def sourceId = null
+    def targetId = null
+    entityIndex.each { id, info ->
+      if (info.name == imp.source_entity_name) sourceId = id
+      if (info.name == imp.target_entity_name) targetId = id
+    }
+    if (sourceId && targetId && sourceId != targetId) {
+      newRels.add([
+        relation_id: newId,
+        relation_type: imp.relation_type,
+        source_entity_id: sourceId,
+        target_entity_id: targetId,
+        qualifiers: imp.qualifiers ?: [:],
+        evidence: [[source: "implicit_inference", description: imp.reason ?: ""]],
+        confidence: imp.confidence ?: 0.6,
+        implicit: true
+      ])
+    }
+  }
+
+  return relations + newRels
+'''
+
+// ===== Phase 4: Assemble graph_candidates.json =====
+
+// Groovy: 提取文档ID
+n_document_id, act_func?script='''
+  def structure = n_structure ?: [:]
+  return structure?.document_id ?: ""
+'''
+
+// Groovy: 组装图谱候选JSON
+n_graph_candidates, act_func?script='''
+  def graph = [:]
+
+  // 元信息
+  graph.document_id = n_document_id ?: ""
+  graph.pipeline_version = "1.0"
+  graph.stage = "d7_aggregate"
+
+  // 三层结构
+  // Layer 1: 文档结构层
+  graph.document_layer = [
+    document_id: n_document_id ?: "",
+    sections: n_section_context ?: [],
+    chunk_count: n_chunks?.size() ?: 0
+  ]
+
+  // Layer 2: 知识层
+  graph.entities = n_entities_aggregated ?: []
+  graph.relations = n_relations_aggregated ?: []
+  graph.events = n_events_aggregated ?: []
+
+  // Layer 3: 证据索引
+  def evidenceByChunk = [:]
+  def allEvidence = []
+  n_entities_aggregated?.each { ent ->
+    ent.evidence?.each { ev ->
+      def chunkId = ev.chunk_id ?: "unknown"
+      if (!evidenceByChunk[chunkId]) evidenceByChunk[chunkId] = []
+      evidenceByChunk[chunkId].add([entity_id: ent.entity_id, entity_name: ent.name, quote: ev.quote ?: ""])
+    }
+  }
+  graph.evidence_index = [
+    by_chunk: evidenceByChunk,
+    total_evidence_items: allEvidence.size()
+  ]
+
+  // 统计
+  graph.statistics = [
+    entity_count: n_entities_aggregated?.size() ?: 0,
+    relation_count: n_relations_aggregated?.size() ?: 0,
+    event_count: n_events_aggregated?.size() ?: 0,
+    implicit_relation_count: n_implicit_result?.implicit_relations?.size() ?: 0,
+    entity_merges_applied: n_entity_agg_result?.merge_groups?.size() ?: 0,
+    coreference_resolutions: n_entity_agg_result?.coreference_resolutions?.size() ?: 0,
+    event_merges_applied: n_event_agg_result?.event_merges?.size() ?: 0
+  ]
+
+  return graph
+'''
+
+// 写入graph_candidates.json到知识空间
+act_artifact.write?filepath='{{ksDir}}/05_graph/graph_candidates.json'&data='{{n_graph_candidates}}'
+
+// 输出阶段五聚合结果
+n_output, act_func?script='''
+  def result = [:]
+  result.success = true
+  result.stage = "d7_aggregate"
+  result.pre_aggregation = n_pre_agg_stats
+  result.post_aggregation = [
+    entity_count: n_entities_aggregated?.size() ?: 0,
+    relation_count: n_relations_aggregated?.size() ?: 0,
+    event_count: n_events_aggregated?.size() ?: 0
+  ]
+  result.entity_merges = n_entity_agg_result?.merge_groups?.size() ?: 0
+  result.coreference_resolutions = n_entity_agg_result?.coreference_resolutions?.size() ?: 0
+  result.event_merges = n_event_agg_result?.event_merges?.size() ?: 0
+  result.implicit_relations = n_implicit_result?.implicit_relations?.size() ?: 0
+  result.output_files = [
+    ksDir + "/05_graph/graph_candidates.json"
+  ]
+  return result
+'''
+
+// 异常处理：捕获错误并返回失败信息
+on_failure({
+  // 构造错误输出
+  n_output, act_func?script='''
+    def result = [:]
+    result.success = false
+    result.stage = "d7_aggregate"
+    result.error = fn.str(sys_failure_task?.result ?: "Unknown error")
+    return result
+  '''
+  // 跳转到流程结束
+  act_flow.go?plan=end
+})
+
+// ===== LLM Templates =====
+
+// 实体聚合模板：指代消解 + 最终去重
+define('tpl_aggregate_entities', '''
+你是知识图谱实体聚合专家。请对标准化后的实体列表进行文档级指代消解和最终去重。
+
+## 实体列表
+
+{{n_entity_agg_input}}
+
+## 文档结构上下文
+
+{{n_section_context}}
+
+## 任务一：指代消解 (Coreference Resolution)
+
+识别以下指代情况并给出解析：
+1. **简称/全称**：如"北大"→"北京大学"，"AI"→"人工智能"
+2. **代词回指**：如"该公司""该项目""其""此"等
+3. **同义异名**：不同chunk中名称不同但指向同一对象（如"张三"和"张总"）
+4. **上下位关系**：不需要合并，但标注两者关系
+
+## 任务二：最终实体去重
+
+标准化阶段可能遗漏的合并候选：
+1. 名称高度相似（如"某科技有限公司" vs "某科技"）
+2. 同一对象不同表述（如"CRM系统" vs "客户关系管理系统"）
+3. 证据重叠（两条实体引用相同原文）
+
+## 任务三：名称纠正
+
+对明显错误或不规范的实体名称进行纠正：
+1. 名称含无关前缀/后缀
+2. 名称格式不一致（如英文大小写）
+3. 名称使用了临时代称
+
+## 输出格式
+
+```json
+{
+  "merge_groups": [
+    {
+      "canonical_name": "统一标准名称",
+      "canonical_type": "Organization",
+      "entity_ids_to_merge": ["ent_0001_001", "ent_0003_002"],
+      "unified_aliases": ["别名1", "别名2"],
+      "reason": "二者指向同一组织"
+    }
+  ],
+  "coreference_resolutions": [
+    {
+      "entity_id": "ent_0004_001",
+      "original_name": "该公司",
+      "resolved_name": "某科技有限公司",
+      "reason": "代词回指解析"
+    }
+  ],
+  "name_corrections": [
+    {
+      "entity_id": "ent_0005_001",
+      "current_name": " 某科技 ",
+      "corrected_name": "某科技",
+      "reason": "去除首尾空格"
+    }
+  ]
+}
+```
+
+注意：
+- merge_groups：需要合并的实体组，不需要合并的不要列出
+- coreference_resolutions：只列出需要改变名称的指代解析
+- name_corrections：只列出需要纠正名称的实体
+- 所有数组若无内容则返回空数组 []
+
+仅输出 JSON，不要解释。
+''')
+
+// 事件聚合模板：跨chunk事件合并
+define('tpl_aggregate_events', '''
+你是事件聚合专家。请对以下事件列表进行跨chunk合并判断。
+
+## 事件列表
+
+{{n_event_agg_input}}
+
+## 任务：跨chunk事件去重
+
+判断以下情况并给出合并建议：
+1. **同一事件分散在多chunk**：例如"项目启动"在chunk_0002中描述了启动仪式，chunk_0005中描述了启动后的工作安排
+2. **事件时间相同+参与方相同**：高度可能为同一事件
+3. **事件类型相同+描述相似**：可能为同一事件
+4. **触发词不同但描述同一件事**：如"签署协议"和"合同签订"
+
+合并判断原则：
+- 时间相同 + 参与方重叠 → merge
+- 类型相同 + 描述高度相似 → merge
+- 时间不同或参与方完全不同 → keep_separate
+- 不确定 → keep_separate（保守策略）
+
+## 输出格式
+
+```json
+{
+  "event_merges": [
+    {
+      "canonical_type": "签约",
+      "canonical_description": "甲乙双方签署为期三年的合作协议",
+      "event_ids_to_merge": ["evt_0002_001", "evt_0005_003"],
+      "reason": "同一签约事件分散在两个chunk中描述"
+    }
+  ]
+}
+```
+
+仅输出 JSON，不要解释。
+''')
+
+// 隐式关系发现模板
+define('tpl_aggregate_relations', '''
+你是知识图谱关系推理专家。请基于文档结构上下文和现有关系，发现可能遗漏的隐式关系。
+
+## 文档结构
+
+Section数量：{{n_relation_context.section_count}}
+
+## 现有显式关系
+
+{{n_relation_context.existing_relations}}
+
+## 任务：发现隐式关系
+
+隐式关系是指：
+1. **层级传递**：如果 A PART_OF B, B PART_OF C，则 A PART_OF C
+2. **跨section关联**：同一实体在不同section中与其他实体有关联，但它们之间缺少直接关系
+3. **文档结构隐含**：Section层级关系暗示其中实体的归属
+4. **常识推断**：基于实体类型和名称的合理推断
+5. **共现推断**：同一chunk中频繁共现的实体可能有关联
+
+要求：
+- 只输出高置信度（≥0.7）的隐式关系
+- 每条关系附带推理依据
+- 使用已有的关系类型词汇
+
+## 输出格式
+
+```json
+{
+  "implicit_relations": [
+    {
+      "relation_type": "PART_OF",
+      "source_entity_name": "财务部",
+      "target_entity_name": "某科技有限公司",
+      "qualifiers": {"inferred_from": "hierarchy"},
+      "confidence": 0.85,
+      "reason": "财务部通常为公司组成部分，且二者在同一文档层级中出现"
+    }
+  ]
+}
+```
+
+注意：
+- 不要重复已有显式关系
+- 只列出高置信度的隐式关系
+- source/target 使用实体名称（name字段），系统会自动映射为entity_id
+- 若无隐式关系可发现，返回空数组
+
+仅输出 JSON，不要解释。
+''')

@@ -1,0 +1,82 @@
+/*
+{
+	"title":"test demo tmp",
+	"description":"test demo tmp",
+	"resultPlan":"s",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID"
+			 
+		},
+		{
+			"name":"workspace",
+			"label":"workspace"
+			 
+		},
+        {
+			"name":"startup_tpye",
+			"label":"startup_tpye",
+			"args":[
+				{
+					"label":"claude",
+					"value":"claude"
+				},
+				{
+					"label":"bash",
+					"value":"bash"
+				}
+			],
+			"defaultValue":"bash",
+			"type":"select",
+			"required":true
+		},
+	],
+	"uiEntrance":"chatdoc_QA",
+	"displayOrder":0,
+	"version":1
+}
+*/
+// workspace 例如知识空间 /claude_code workspace=claude_code
+assign('workspace2','{{workspace}}')
+when("startup_tpye=='claude'", {
+assign('startup_command', "docker run -d --name claude-code --network host -w /workspace --user root --env ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic --env ANTHROPIC_AUTH_TOKEN=sk-3b7cbafda9de45c095927122e13deb74 --env ANTHROPIC_MODEL=deepseek-v4-pro[1m] --env ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro[1m] --env ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-pro[1m] --env ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash --env CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash --env CLAUDE_CODE_EFFORT_LEVEL=max -v D:\\app\\data\\{{workspace}}:/workspace -v C:\\Users\\Administrator\\Downloads\\docker-optimized\\data\\claude-config:/home/claude/.claude -v C:\\Users\\Administrator\\Downloads\\docker-optimized\\data\\gstack-config:/home/claude/.gstack -v C:\\Users\\Administrator\\.ssh:/home/claude/.ssh:ro -v C:\\Users\\Administrator\\.gitconfig:/home/claude/.gitconfig:ro -v C:\\Users\\Administrator\\Downloads\\docker-optimized\\data\\.claude.json:/home/claude/.claude.json -i -t docker-optimized-claude-runtime claude")
+},{
+assign('startup_command', "docker run -d --name claude-code --network host -w /workspace --user root --env ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic --env ANTHROPIC_AUTH_TOKEN=sk-3b7cbafda9de45c095927122e13deb74 --env ANTHROPIC_MODEL=deepseek-v4-pro[1m] --env ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro[1m] --env ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-pro[1m] --env ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash --env CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash --env CLAUDE_CODE_EFFORT_LEVEL=max -v D:\\app\\data\\{{workspace}}:/workspace -v C:\\Users\\Administrator\\Downloads\\docker-optimized\\data\\claude-config:/home/claude/.claude -v C:\\Users\\Administrator\\Downloads\\docker-optimized\\data\\gstack-config:/home/claude/.gstack -v C:\\Users\\Administrator\\.ssh:/home/claude/.ssh:ro -v C:\\Users\\Administrator\\.gitconfig:/home/claude/.gitconfig:ro -v C:\\Users\\Administrator\\Downloads\\docker-optimized\\data\\.claude.json:/home/claude/.claude.json -i -t docker-optimized-claude-runtime /bin/bash")
+})
+
+assign('startup_command', '{{fn.jsonObj("startup_command, startup_command")}}')
+// create 
+n_create_session, act_api.doExecuteDynamic?name="claude_sessions_create"&dynamicParamData={{startup_command}}
+// {
+//   "session_id": "2f27755239b84cfb9e9b88fab6be748e",
+//   "container_id": "18598547eabe0f22c2e46806a2d1242cd2d18b0bb9114d16d14602880e47bdca",
+//   "image": "docker-optimized-claude-runtime",
+//   "status": "running",
+//   "created_at": "2026-06-12T02:14:35.911619Z"
+// }
+// get output
+assign('sessionId', '{{n_create_session.session_id}}')
+act_flow.wait?second=3
+// command
+assign('command', 'echo 1 >> timestamp.txt')
+// execute command
+n_command, act_api.doExecuteDynamic?name="claude_code_command"&dynamicParamData={{fn.json('sessionId,sessionId,command,command')}}
+
+
+// get output
+n_command_data, act_api.doExecuteDynamic?name="claude_output"&dynamicParamData={{fn.json('sessionId,sessionId')}}
+// {
+//   "session_id": "2f27755239b84cfb9e9b88fab6be748e",
+// "output": "xxxxxxxxx"}
+
+
+
+// # 文件扫描到知识空间接口文档
+act_kbs.fileWalkToKbs?fullPath={{workspace}}
+// close session
+// n_command_data, act_api.doExecuteDynamic?name="claude_close_session"&dynamicParamData={{fn.json('sessionId,sessionId')}}

@@ -1,0 +1,82 @@
+/*{
+  "title": "API Test Mapping Agent",
+  "description": "Map parsed API catalog items to parsed test requirements and mark missing information explicitly.",
+  "parameter": [
+    {
+      "name": "apiCatalogJsonPath",
+      "label": "API目录JSON路径",
+      "required": true
+    },
+    {
+      "name": "testRequirementsJsonPath",
+      "label": "测试需求JSON路径",
+      "required": true
+    }
+  ],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+// Read the API catalog JSON directly from the knowledge-space file path.
+n_api_catalog_file_content, act_func.read?filename='{{apiCatalogJsonPath}}'
+
+// Bind the API catalog JSON content for template use.
+assign('api_catalog_json', '{{n_api_catalog_file_content}}')
+
+// Read the test requirements JSON directly from the knowledge-space file path.
+n_test_requirements_file_content, act_func.read?filename='{{testRequirementsJsonPath}}'
+
+// Bind the test requirements JSON content for template use.
+assign('test_requirements_json', '{{n_test_requirements_file_content}}')
+
+// Generate the mapping matrix JSON.
+n_payload, tpl_test_matrix, psr_json
+
+// Prepare file content for persistence.
+assign('file_content', '{{fn.str(n_payload)}}')
+
+// Persist the generated mapping matrix JSON into the knowledge space file.
+n_result, act_func.write?filename='test_api_codex/test_matrix.json'&data='{{file_content}}'&syncKbs=true
+
+// Prompt template for requirement-to-API mapping.
+define('tpl_test_matrix', '''
+你是 API 测试映射器。只做映射和补缺口识别，不扩写测试步骤，不生成测试用例，不修改原始语义。
+
+输入的 API catalog JSON：{{api_catalog_json}}
+输入的 test requirements JSON：{{test_requirements_json}}
+
+输出要求：
+1. 只输出一个合法 JSON 对象。
+2. 在 test_matrix 数组中逐条输出映射结果。
+3. 每条映射只保留一个明确的接口与一个需求场景。
+4. 找不到明确匹配时，coverage_status 设为 uncovered，并在 missing_info 中写出缺口。
+5. 不要输出 Markdown、代码块或额外文本。
+
+JSON 结构必须为：
+{
+  "test_matrix": [
+    {
+      "requirement_id": "",
+      "endpoint": "",
+      "method": "",
+      "test_type": "",
+      "coverage_status": "",
+      "missing_info": []
+    }
+  ]
+}
+
+coverage_status 可使用：
+- covered
+- partial
+- uncovered
+
+test_type 尽量从以下类型中选择：
+- smoke
+- positive
+- negative
+- boundary
+- auth
+- contract
+- regression
+''')

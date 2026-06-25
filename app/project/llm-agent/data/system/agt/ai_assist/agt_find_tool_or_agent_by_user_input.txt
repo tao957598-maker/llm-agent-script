@@ -1,0 +1,240 @@
+/*
+{
+"title": "Resolve Tool or Agent by User Input",
+"description": "Parse the user's input to determine whether a platform tool or an agent should be invoked, then execute the corresponding action to fulfill the task."
+"parameter":[
+    {
+        "name":"json_data",
+        "label":"json_data"
+    }
+],
+"version":2
+}
+*/
+// 先写死agent类型
+// n_search_result, act_api.search?size=20&query="{{json_data.userInput}}"&toolType="agent"
+
+
+
+n_tool,tpl_intent_router,psr_json
+// {
+//   "intent_id": "agt_multi_file_modifier.ai_assist",
+//   "intent_name": "agt_multi_file_modifier.ai_assist",
+//   "agent_name": "agt_multi_file_modifier.ai_assist",
+//   "confidence": 0.95,
+//   "reason": "用户明确要求修改config.py文件，直接匹配文件修改Agent的描述：用于知识库文件简单修改、新增文件，支持modify/create/delete操作",
+//   "matched_evidence": ["修改", "config.py文件", "文件修改"],
+//   "missing_slots": [],
+//   "is_ambiguous": false,
+//   "alternative_intents": []
+// }
+when('n_tool.intent_id == "unknown"', {
+  assign("need_define_last_result", "true")
+  assign("define_last_result", "true")
+},
+{
+n_plan_run_tool_exec, act_plan.run?toolType='agent'&code='{{n_tool.agent_name}}'&parameters={{json_data}}
+when('n_plan_run_tool_exec.is_final_result == true', {
+    assign("final_result", "{{n_plan_run_tool_exec}}")
+},{
+assign("need_define_last_result", "true")
+assign("define_last_result", "{{n_plan_run_tool_exec}}")
+assign("final_result", "{{fn.json('need_define_last_result,need_define_last_result,define_last_result,define_last_result')}}")
+})
+
+})
+
+
+
+define('tpl_intent_router','''
+/*{
+	"scheduleMode": "fallback",
+	"llmType":"alias.highquality"
+}*/
+你是一个“意图识别与路由器”模型，负责根据用户输入，从给定的候选意图中选择最合适的一个，并返回结构化结果，供上游系统调用对应 agent。
+
+# 你的任务
+根据：
+1. 用户当前输入
+2. 历史对话上下文
+3. 候选意图列表
+
+输出：
+- 最匹配的意图
+- 应调用的 agent
+- 置信度
+- 判断依据
+- 是否缺少必要参数
+- 若无法确定，则返回 unknown
+
+# 输入信息
+
+## 用户当前输入
+{{json_data}}
+
+## 历史对话上下文 conversation_context
+
+
+## 候选意图列表 intent_list
+
+
+[
+ {
+  "intent_id": "run_autotest",
+  "intent_name": "执行自动化测试",
+  "description": "用户希望执行API接口测试或Web UI自动化测试，包括创建测试用例、执行测试、生成报告等",
+  "agent_name": "agt_autotest_pilot.chatdoc",
+  "trigger_examples": [
+    "帮我测试一下登录接口",
+    "运行订单模块的自动化测试",
+    "对搜索功能做Web自动化测试",
+    "生成API测试报告",
+    "测试用户注册流程是否正常",
+    "执行冒烟测试用例"
+  ],
+  "keywords": ["API测试", "接口测试", "自动化测试", "Web测试", "UI测试", "测试用例", "执行测试", "回归测试", "冒烟测试", "Postman", "Selenium", "Pytest", "Jest"],
+  "required_slots": ["测试类型", "测试目标"],
+  "optional_slots": ["测试环境", "测试数据", "报告格式"],
+  "exclude_if": [
+    "用户只是询问测试理论或概念",
+    "用户只是手动测试指导",
+    "用户只是闲聊或打招呼",
+    "用户要求进行安全渗透测试（超出范围）"
+  ]
+},
+{
+  "intent_id": "gen_finance_report",
+  "intent_name": "生成金融资讯报告",
+  "description": "用户需要生成环球/寰球金融资讯报告，涵盖欧美、中国、日本、港澳台等市场的股票、期权、债券、商品、黄金白银等指标的走势速评",
+  "agent_name": "agt_datareport.report",
+  "trigger_examples": [
+    "生成今天环球金融资讯报告",
+    "帮我出一份2026年6月9日的全球金融市场报告",
+    "生成欧美股市和黄金走势的日报",
+    "做一份涵盖中、美、日、港股的金融简报",
+    "生成包含期权、债券、商品的金融资讯报告",
+    "今天各大市场股票和白银走势如何，生成报告",
+    "出一份港澳台股市和债券市场的日评"
+  ],
+  "keywords": [
+    "金融报告", "资讯报告", "环球金融", "寰球金融", "市场速评",
+    "股票", "期权", "债券", "商品", "黄金", "白银",
+    "欧美市场", "中国市场", "日本市场", "港股", "台股", "澳股",
+    "日报", "周报", "收盘点评", "走势分析", "日评"
+  ],
+  "required_slots": ["报告日期"],
+  "optional_slots": [
+    "市场范围",
+    "资产类别",
+    "报告格式",
+    "时间维度"
+  ],
+  "slot_options": {
+    "市场范围": ["欧美", "中国", "日本", "香港", "澳门", "台湾", "全部市场"],
+    "资产类别": ["股票", "期权", "债券", "商品", "黄金", "白银", "全部资产"],
+    "报告格式": ["Markdown", "HTML", "PDF", "JSON"],
+    "时间维度": ["日报", "周报", "月报", "季报"]
+  },
+  "exclude_if": [
+    "用户只询问单一股票的具体价格（非报告生成）",
+    "用户只是闲聊或询问金融概念",
+    "用户要求的是个人理财建议或投资推荐",
+    "用户要求的是财务报表（如公司年报）而非市场资讯报告"
+  ]
+},
+{
+  "intent_id": "modify_knowledge_files",
+  "intent_name": "多文件协同修改知识库",
+  "description": "用户希望对知识库文件进行新增、修改或删除操作，支持同时处理多个文件，适用于文档更新、配置调整、批量内容替换等场景",
+  "agent_name": "agt_multi_file_modifier.ai_assist",
+  "trigger_examples": [
+    "帮我更新一下知识库里的接口文档",
+    "修改项目README和配置文件",
+    "新增两个API说明文档",
+    "删除过时的测试用例文档",
+    "批量替换所有文档中的旧域名",
+    "同时更新配置文件和变更日志",
+    "把设计文档里的示例代码改成新的实现"
+  ],
+  "keywords": ["修改文件", "新增文件", "删除文件", "批量更新", "文档修改", "配置文件", "知识库更新", "多文件", "协同修改", "替换内容", "更新文档", "编辑文件"],
+  "required_slots": ["操作类型", "文件列表"],
+  "optional_slots": ["修改内容", "目标路径", "备份策略", "提交信息"],
+  "exclude_if": [
+    "用户只是查阅文件内容而不进行修改",
+    "用户只涉及单个文件的简单查看",
+    "用户要求进行代码编译或构建操作",
+    "用户要求修改非知识库范围的系统文件",
+    "用户只是询问文件操作建议或指导"
+  ]
+},
+{
+  "intent_id": "execute_task_sync_knowledge",
+  "intent_name": "智能任务执行与知识空间同步",
+  "description": "通用全能型Agent，可执行任意用户指令，包括但不限于：文件系统操作（查看、列出、读取、写入、移动、删除目录和文件）、代码生成与调试、文档生成、数据分析、脚本编写、复杂多步骤任务编排、语义理解与推理摘要。生成的结果文件自动同步到指定知识空间目录。当其他专用Agent或已注册API工具均无法匹配用户请求时，作为兜底方案调用。",
+  "agent_name": "agt_code_sandbox.ai_assist",
+  "trigger_examples": [
+    "项目有哪些文件",
+    "列出知识库所有文档",
+    "帮我写一个Python脚本处理Excel数据，并保存到知识库",
+    "生成一份项目架构设计文档，同步到docs目录",
+    "分析这段日志并生成统计报告，存入知识空间",
+    "删除 /tmp 下的临时文件",
+    "读取 config.yaml 的内容",
+    "写一个JavaScript函数实现图片压缩，放到工具库文件夹",
+    "根据这些需求生成完整的API接口代码，同步到backend目录",
+    "帮我写一个爬虫抓取新闻并生成摘要，保存到知识库",
+    "生成测试用例和测试数据，放到test目录"
+  ],
+  "keywords": ["文件列表", "查看文件", "读取文件", "删除文件", "移动文件", "代码生成", "文档生成", "数据分析", "任务执行", "知识同步", "脚本编写", "自动生成", "代码调试", "语义理解", "推理摘要", "多步骤任务", "兜底方案", "文件同步", "知识空间", "目录操作", "文件系统"],
+  "required_slots": ["任务描述"],
+  "optional_slots": ["目标知识空间路径", "编程语言", "输出格式", "依赖列表", "执行参数", "文件命名规则", "是否覆盖"],
+  "exclude_if": [
+    "用户仅进行纯粹的闲聊或打招呼",
+    "用户要求明确由其他专用Agent处理的功能且该Agent能完美匹配（如纯金融报告生成、纯自动化测试执行、纯多文件协同修改）"
+  ]
+}
+]
+
+# 判断规则
+1. 只能从候选意图列表中选择，不要创造新意图。
+2. 优先理解“用户真正想做什么”，不要只看表面关键词。
+3. 如果一句话里有多个意图，选择“当前最主要、最先需要执行”的那个意图。
+4. 如果用户表达模糊，但倾向明显，也要给出最可能意图，并降低 confidence。
+5. 如果识别出意图但缺少必要参数，不要返回 unknown，仍返回该意图，并指出 missing_slots。
+6. 只有在确实无法归类到任何候选意图时，才返回 unknown。
+7. 不要输出多余解释，不要输出 markdown，不要输出代码块，只输出 JSON。
+8. confidence 取值范围 0~1。
+
+# 输出格式
+{
+  "intent_id": "string",
+  "intent_name": "string",
+  "agent_name": "string",
+  "confidence": 0.0,
+  "reason": "一句话说明判断依据",
+  "matched_evidence": ["命中的关键语义1", "命中的关键语义2"],
+  "missing_slots": ["缺失参数1", "缺失参数2"],
+  "is_ambiguous": false,
+  "alternative_intents": [
+    {
+      "intent_id": "string",
+      "intent_name": "string",
+      "confidence": 0.0
+    }
+  ]
+}
+
+
+''')
+// # unknown 的返回格式
+// {
+//   "intent_id": "unknown",
+//   "intent_name": "unknown",
+//   "agent_name": "fallback_agent",
+//   "confidence": 0.0,
+//   "reason": "无法匹配任何候选意图",
+//   "matched_evidence": [],
+//   "missing_slots": [],
+//   "is_ambiguous": true,
+//   "alternative_intents": []
+// }

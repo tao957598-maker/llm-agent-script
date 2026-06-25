@@ -1,0 +1,72 @@
+/*{
+  "title":"Simple Chat Intent Router",
+  "description":"识别 simple_chat 主流程中的 MVP 意图并输出结构化路由结果。",
+  "parameter":[
+    {"name":"userMessage","label":"用户消息","required":true},
+    {"name":"recentMessages","label":"最近消息JSON"},
+    {"name":"taskHistory","label":"任务历史JSON"},
+    {"name":"artifacts","label":"产物列表JSON"}
+  ],
+  "resultPlan":"n_result",
+  "version":1
+}*/
+
+// 保存用户消息
+assign('user_message', '{{userMessage}}')
+
+// 保存最近消息
+assign('recent_messages', '{{fn.optional(recentMessages, "[]")}}')
+
+// 保存任务历史
+assign('task_history', '{{fn.optional(taskHistory, "[]")}}')
+
+// 保存产物列表
+assign('artifact_list', '{{fn.optional(artifacts, "[]")}}')
+
+// 调用意图识别模板
+n_result,tpl_intent_router,psr_json
+
+// 定义意图识别模板
+define('tpl_intent_router', '''
+你是 `agt_simple_chat` 的意图识别模块。
+
+请根据用户消息、最近消息、任务历史、产物列表，识别当前请求属于哪个 MVP 意图，并输出严格 JSON。
+
+# 支持的 intent
+- chat
+- query_and_summarize
+- recall_last_result
+- summarize_and_write
+
+# 识别规则
+1. 如果是问候、普通闲聊、简单解释，没有明显执行动作，返回 `chat`。
+2. 如果包含“刚才”“上次”“之前”，并追问“返回了什么”“查到了什么”“结果是什么”，返回 `recall_last_result`。
+3. 如果用户在多轮对话中追问“你第一次回答了什么”“你刚才怎么说”“你前面说了什么”“第一次怎么回答的”这类历史回复问题，也返回 `recall_last_result`。
+4. 如果同时包含“总结”以及“写入/写进/保存/文档/markdown”，返回 `summarize_and_write`。
+5. 如果包含“查一下”“查询”“获取”“看看状态”“帮我查”这类外部查询语义，默认返回 `query_and_summarize`。
+6. 若不确定，优先回退为 `chat`。
+7. 仅输出 JSON，不要解释。
+
+# 用户消息
+{{user_message}}
+
+# 最近消息
+{{recent_messages}}
+
+# 任务历史
+{{task_history}}
+
+# 产物列表
+{{artifact_list}}
+
+# 输出格式
+{
+  "intent": "chat",
+  "need_tool": false,
+  "need_memory_lookup": false,
+  "need_summary_before_reply": false,
+  "confidence": 0.95,
+  "context_scope": "current_message",
+  "reason": "一句话说明原因"
+}
+''')

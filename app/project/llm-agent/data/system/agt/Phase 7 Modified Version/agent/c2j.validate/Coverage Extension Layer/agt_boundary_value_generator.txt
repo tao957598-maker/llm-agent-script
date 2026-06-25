@@ -1,0 +1,74 @@
+/*
+{
+  "title":"COBOL2Java Boundary Value Generator",
+  "description":"P1：确定性从 COBOL PIC 定义生成边界值表，LLM 基于边界值表生成变体 scenario。确定性部分不消耗 LLM 算力。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"scenarioFilter","label":"仅处理指定 scenario（逗号分隔，空=全部）","required":false,"default":""},
+    {"name":"maxVariants","label":"每个场景最多生成变体数","required":false,"default":"8"}
+  ],
+  "version":1,
+  "resultPlan":"n_boundary_value_generator_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_scenario_filter','{{fn.optional(scenarioFilter,"")}}',
+       'n_max_variants','{{fn.optional(maxVariants,"8")}}')
+
+//# 确定性：从 COBOL PIC 定义生成边界值表
+n_boundary_tables_json, act_func.run?expression=boundary_value_generator_json
+
+//# LLM：基于边界值表生成变体 scenario
+foreach('n_boundary_item', 'n_boundary_tables', {
+    n_boundary_scenario_json, tpl_boundary_generator, psr_json?required='schema,moduleId,scenarioId', \
+      vrf_flag?value='fn.hasValue(sys_last_result,"moduleId")'
+
+    n_boundary_write_result, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim()
+def sc = JSON.parseObject(fn.str(fn.get("n_boundary_scenario_json")))
+sc.put("scenarioSource", "BOUNDARY_INFERRED")
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def moduleId = sc.getString("moduleId") ?: "inferred"
+def scenarioId = sc.getString("scenarioId") ?: "boundary-variant"
+def outRel = "verification/trace-scenarios/by-module/${moduleId}/${scenarioId}-boundary.scenario.json"
+def out = base.resolve(outRel.replace("/", java.io.File.separator))
+Files.createDirectories(out.getParent())
+Files.writeString(out, JSON.toJSONString(sc), StandardCharsets.UTF_8)
+return "wrote " + outRel
+'''
+})
+
+assign('n_boundary_value_generator_report', '''# 边界值生成报告
+
+边界值表已生成，详见 test/equivalence/boundary-value-tables-v1.json
+LLM 变体 scenario 已落盘至 verification/trace-scenarios/by-module/
+所有生成 scenario 标记为 BOUNDARY_INFERRED。
+''')
+
+define('tpl_boundary_generator', '''
+你是边界值测试生成器。基于边界值表生成变体 scenario。
+
+# 边界值表
+{{n_boundary_item.item.boundaryTable}}
+
+# 原始正常场景
+{{n_boundary_item.item.originalScenario}}
+
+# 输出要求
+生成一个 cobol2java.wc3270-scenario JSON（仅 JSON）：
+- scenarioId 含 "boundary" 后缀
+- steps 描述边界值测试
+- confidence ≤ 0.7
+- scenarioSource: "BOUNDARY_INFERRED"
+''')

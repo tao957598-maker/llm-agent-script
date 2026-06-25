@@ -1,0 +1,19 @@
+/*
+{
+  "title":"COBOL2Java Equivalence Diagnostician",
+  "description":"P0：mvn test 完成后解析 Surefire XML，确定性自动分类失败为 GOLDEN_MISMATCH/CODE_BUG/API_NOT_FOUND/MAP_GAP/ENV_ERROR。LLM 仅对 GOLDEN_MISMATCH 做 diff 分析。确定性分类不消耗 LLM。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"}
+  ],
+  "version":1,
+  "resultPlan":"n_equivalence_diagnostician_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}')
+
+n_equivalence_diagnostician_report, act_func.run?expression=equivalence_diagnostician_json

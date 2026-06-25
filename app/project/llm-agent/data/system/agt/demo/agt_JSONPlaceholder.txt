@@ -1,0 +1,125 @@
+/*
+{
+	"title":"JSONPlaceholder 查询分析与 Word 报告生成",
+	"description":"根据用户需求，自动生成包含 POI-TL 标签的 Markdown 报告模板，并保存到指定目录。",
+	"parameter":[
+		{
+			"name":"resource",
+			"label":"资源类型",
+			"args":[
+				{
+					"label":"帖子 (posts)",
+					"value":"posts"
+				},
+				{
+					"label":"用户 (users)",
+					"value":"users"
+				},
+				{
+					"label":"评论 (comments)",
+					"value":"comments"
+				}
+			],
+			"required":true,
+			"type":"select"
+		},
+		{
+			"name":"query_id",
+			"label":"指定ID (留空则返回列表)",
+			"required":false,
+			"type":"text"
+		},
+		{
+			"name":"request",
+			"label":"提示词",
+			"required":false,
+			"type":"text"
+		},
+		{
+			"name":"saveDir",
+			"label":"报告保存目录（工作区相对路径）",
+			"required":false,
+			"maxLength":50,
+			"type":"text"
+		}
+	],
+	"displayOrder":0,
+	"version":46
+}
+*/
+// ==================== 原有查询与分析 ====================
+// 1. 构造请求路径
+assign('endpoint', '{{resource}}')
+when ("query_id != ''", {
+    assign('endpoint', '{{resource}}/{{query_id}}')
+})
+
+// 2. 调用 JSONPlaceholder API
+n_raw_data, act_api.doExecuteDynamic?name='jsonplaceholder'&dynamicParamData='{"resource":"{{endpoint}}"}'
+
+// 3. 数据分析
+define('tpl_summary', '''
+你是数据分析助手。以下是来自 JSONPlaceholder 的 {{resource}} 数据。{{request}}
+数据：
+{{api_data}}
+''')
+assign('api_data', '{{n_raw_data}}')
+n_summary, tpl_summary, psr_all
+
+//## 最终分析结果（聊天界面展示）
+assign('final_output', '{{n_summary}}')
+
+// ==================== 报告生成 ====================
+//## 4. 准备报告所需元数据
+assign('qid_display', '{{fn.optional(query_id, "全部")}}')
+assign('req_display', '{{fn.optional(request, "无")}}')
+assign('raw_snippet', '{{fn.optional(n_raw_data, "无数据").toString().substring(0, 300)}}……')
+assign('now', '{{fn.now()}}')
+
+//## 5. 生成报告 Markdown
+define('tpl_report_md', '''
+请根据以下信息生成一份简洁的 Markdown 报告，不要添加任何解释或代码块。
+时间：{{now}}
+资源：{{resource}}
+查询 ID：{{qid_display}}
+提示词：{{req_display}}
+原始数据（前300字符）：{{raw_snippet}}
+分析结果：{{final_output}}
+要求：
+- 使用一级标题“JSONPlaceholder 查询报告”
+- 包含“查询信息”、“原始数据摘要”、“AI 分析”三个章节
+- 直接输出 Markdown 文本
+''')
+n_report_md, tpl_report_md, psr_all
+
+//## 6. 生成文件路径（使用 assign + 模板，不再依赖 act_func 访问 saveDir）
+assign('uuid', '{{fn.now().replaceAll("[-: ]", "")}}')   // 时间戳作为唯一标识
+assign('fileName', 'report_{{uuid}}.md')
+assign('baseDir', '{{fn.optional(saveDir, "tmp")}}')     // 默认 tmp/
+assign('fullPath', '{{baseDir}}/{{fileName}}')
+
+//## 7. 写入 Markdown 文件
+n_write_result, act_func.write?filename="{{fullPath}}"&data="{{n_report_md}}"
+
+//## 8. 转换为 Word
+assign("converter_type", '''{"converter_type":"md_to_word"}''')
+n_word_url, act_api.doExecute?name='report_word_to_pdf'&fileNames='{{fullPath}}'&params='{{converter_type}}'
+
+//## 9. 提取 Word 相对路径（这里的 act_func 访问 n_word_url 没问题）
+n_word_rel_path, act_func?script='''
+    def url = n_word_url.relativePath
+    return url.replace("/app/data/", "/")
+'''
+
+//## 10. 上传 Word 到知识空间 wp_demo
+n_upload_result, act_api.doExecute?name='report_kbs_upload_user_file'&fileNames="{{n_word_rel_path}}"&params='{"folderName":"wp_demo"}'
+
+//## 11. 提取文件 ID
+n_final_file, act_func?script='''
+    if(n_upload_result.code == 200){
+        def m = n_upload_result.data[0]
+        def k = m.keySet().iterator().next()
+        return [fid:m[k], fileName:k]
+    }
+    return [fid:"上传失败"]
+'''

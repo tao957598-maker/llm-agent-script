@@ -1,0 +1,77 @@
+/*
+{
+  "title":"COBOL2Java Metamorphic Validator",
+  "description":"P2：验证输入输出变化规律（如金额翻倍则手续费增加），不依赖精确 golden。确定性构造扰动输入，LLM 辅助推导变化规律。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"scenarioFilter","label":"仅处理指定 scenario","required":false,"default":""}
+  ],
+  "version":1,
+  "resultPlan":"n_metamorphic_validator_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_scenario_filter','{{fn.optional(scenarioFilter,"")}}')
+
+//# 确定性：构造扰动输入并调用 API，收集基础结果
+n_metamorphic_base_data, act_func.run?expression=metamorphic_validator_json
+
+//# LLM：基于基础结果推导变化规律，生成验证断言
+n_metamorphic_rules, tpl_metamorphic_derivation, psr_json?required='rules', \
+  vrf_flag?value='fn.hasValue(sys_last_result,"rules")'
+
+//# 将规则写入报告
+n_metamorphic_final_report, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Instant
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim()
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def rules = JSON.parseObject(fn.str(fn.get("n_metamorphic_rules")))
+def reportDir = base.resolve("test/equivalence")
+Files.createDirectories(reportDir)
+
+def report = [
+    schema: "cobol2java.metamorphic-validation-report",
+    version: "v1",
+    generatedAt: Instant.now().toString(),
+    generatedBy: "agt_metamorphic_validator.c2j.validate",
+    rules: rules.getJSONArray("rules"),
+    baseData: JSON.parseObject(fn.str(fn.get("n_metamorphic_base_data")))
+]
+Files.writeString(reportDir.resolve("metamorphic-validation-report-v1.json"),
+    JSON.toJSONString(report), StandardCharsets.UTF_8)
+
+fn.put("n_metamorphic_rules_count", rules.getJSONArray("rules")?.size() ?: 0)
+return agentResult(JSON.toJSONString([status:"COMPLETE"]))
+'''
+
+assign('n_metamorphic_validator_report','''# 蜕变关系验证报告
+
+扰动测试数据已收集，LLM 推导的变化规律已记录。
+详见 test/equivalence/metamorphic-validation-report-v1.json
+''')
+
+define('tpl_metamorphic_derivation', '''
+你是业务变化规律分析师。根据已有的基础测试数据，推导输入与输出之间的变化规律。
+
+# 基础数据（原始输入 + 多个扰动输入及对应输出）
+{{n_metamorphic_base_data}}
+
+# 输出要求
+输出一个 JSON（仅 JSON）：
+- rules: 数组，每项包含：
+  - field: 输出字段名
+  - relation: 变化关系（如 "monotonically_increasing", "constant", "proportional"）
+  - confidence: 0~1 置信度
+  - evidence: 简要证据描述
+''')

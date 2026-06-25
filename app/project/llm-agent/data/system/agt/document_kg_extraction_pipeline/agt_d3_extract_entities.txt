@@ -1,0 +1,238 @@
+/*{
+  "title": "候选实体抽取",
+  "description": "从语义切片中抽取候选实体，覆盖人物、组织、产品、项目、技术、指标、风险、需求、时间、术语等通用类型",
+  "parameter": [
+    {"name":"ksDir","label":"输出目录","required":false,"description":"知识空间输出目录，默认 document_kg_extraction"}
+  ],
+  "version": 1,
+  "resultPlan": "n_output"
+}*/
+
+// 设置默认输出目录
+when('!fn.hasValue(ksDir)', {
+  assign("ksDir", "document_kg_extraction")
+})
+
+// 读取阶段二输出的chunks.json
+n_chunks_raw, act_artifact.read?filepath='{{ksDir}}/02_chunks/chunks.json'&maxLength=635555
+
+// 读取阶段二输出的document_structure.json
+n_structure_raw, act_artifact.read?filepath='{{ksDir}}/02_chunks/document_structure.json'&maxLength=635555
+
+// 检查输入文件是否可读
+when('!fn.hasValue(n_chunks_raw) || !fn.hasValue(n_structure_raw)', {
+  // 输入文件缺失则终止流程
+  act_flow.fail?result='无法读取阶段二输出文件，请确认 agt_d2_structure_chunk 已执行完成，ksDir={{ksDir}}'
+})
+
+// 从document_structure中预生成Document和Section实体
+n_structural_entities, act_func?script='''
+  def structure = n_structure_raw
+  def entities = []
+  def docId = structure?.document_id ?: ""
+
+  // 创建Document实体
+  def docEntity = [:]
+  docEntity.entity_id = "ent_doc_001"
+  docEntity.entity_type = "Document"
+  docEntity.name = "Document:" + docId
+  docEntity.aliases = []
+  docEntity.attributes = [document_id: docId]
+  docEntity.evidence = [[chunk_id: "chunk_0001", page_range: [1, 1], quote: "文档结构根节点"]]
+  docEntity.confidence = 1.0
+  entities.add(docEntity)
+
+  // 为每个Section创建实体
+  def sections = structure?.sections ?: []
+  sections.eachWithIndex { sec, idx ->
+    def secEntity = [:]
+    secEntity.entity_id = "ent_sec_" + String.format("%03d", idx + 1)
+    secEntity.entity_type = "Section"
+    secEntity.name = sec.title ?: "Section " + (idx + 1)
+    secEntity.aliases = []
+    secEntity.attributes = [
+      section_id: sec.section_id,
+      level: sec.level ?: 1,
+      page_range: sec.page_range ?: []
+    ]
+    secEntity.evidence = [[
+      chunk_id: "chunk_0001",
+      page_range: sec.page_range ?: [1, 1],
+      quote: sec.title ?: ""
+    ]]
+    secEntity.confidence = 1.0
+    entities.add(secEntity)
+  }
+
+  return entities
+'''
+
+// 初始化实体累积列表
+n_init_entities, act_func?script='''
+  fn.put("all_entities", [])
+  return "ok"
+'''
+
+// 逐chunk抽取候选实体
+foreach('n_chunk_loop', 'n_chunks_raw', {
+  // 当前chunk数据
+  assign("current_chunk", "{{n_chunk_loop.item}}")
+
+  // 提取chunk编号（去掉chunk_前缀）
+  assign("chunk_num", "{{current_chunk.chunk_id?replace('chunk_', '')}}")
+
+  // LLM从当前chunk文本中抽取实体
+  n_chunk_entities, tpl_extract_entities, psr_json
+
+  // 将当前chunk抽取的实体累积到全局列表
+  act_func?script='''
+    def extracted = n_chunk_entities?.entities ?: []
+    def allEntities = fn.get("all_entities")
+    allEntities.addAll(extracted)
+    fn.put("all_entities", allEntities)
+    return "ok"
+  '''
+})
+
+// 获取累积的全部实体
+n_extracted_entities, act_func?script='''
+  return fn.get("all_entities") ?: []
+'''
+
+// 合并结构实体与LLM抽取的实体
+n_entities_all, act_func?script='''
+  def all = []
+  all.addAll(n_structural_entities ?: [])
+  all.addAll(n_extracted_entities ?: [])
+  return all
+'''
+
+// 统计实体数量
+n_entity_count, act_func?script='''
+  return n_entities_all?.size() ?: 0
+'''
+
+// 按实体类型统计
+n_entity_type_stats, act_func?script='''
+  def stats = [:]
+  def entities = n_entities_all ?: []
+  entities.each { ent ->
+    def t = ent.entity_type ?: "Unknown"
+    stats[t] = (stats[t] ?: 0) + 1
+  }
+  return stats
+'''
+
+// 写入entities_raw.json到知识空间
+act_artifact.write?filepath='{{ksDir}}/03_extraction/entities_raw.json'&data='{{n_entities_all}}'
+
+// 输出阶段三实体抽取结果
+n_output, act_func?script='''
+  def result = [:]
+  result.success = true
+  result.stage = "d3_extract_entities"
+  result.total_entities = n_entities_all?.size() ?: 0
+  result.structural_entities = n_structural_entities?.size() ?: 0
+  result.extracted_entities = n_extracted_entities?.size() ?: 0
+  result.entity_type_distribution = n_entity_type_stats
+  result.output_files = [
+    ksDir + "/03_extraction/entities_raw.json"
+  ]
+  return result
+'''
+
+// 异常处理：捕获错误并返回失败信息
+on_failure({
+  // 构造错误输出
+  n_output, act_func?script='''
+    def result = [:]
+    result.success = false
+    result.stage = "d3_extract_entities"
+    result.error = fn.str(sys_failure_task?.result ?: "Unknown error")
+    return result
+  '''
+  // 跳转到流程结束
+  act_flow.go?plan=end
+})
+
+// 实体抽取LLM模板
+define('tpl_extract_entities', '''
+你是实体抽取专家。从以下文本片段中识别并抽取知识实体。
+
+## 实体类型（只抽取以下类型，不要自创类型）
+
+| 类型 | 说明 | 示例 |
+|------|------|------|
+| Person | 人物、角色、职位持有者 | 张三、CEO、项目经理 |
+| Organization | 组织、公司、机构、部门 | 某科技有限公司、财务部 |
+| Product | 产品、服务、解决方案 | CRM系统、云平台 |
+| Project | 项目、工程、计划 | 数字化转型项目 |
+| Technology | 技术、方法、框架、系统 | 微服务架构、Kubernetes |
+| Metric | 指标、KPI、度量 | 响应时间、市场份额 |
+| Risk | 风险项、隐患 | 数据泄露风险、工期延误 |
+| Requirement | 需求、约束条件 | 性能要求、合规要求 |
+| Time | 时间表达、日期 | 2026-03-01、Q3 |
+| Term | 术语、概念、专有名词 | 知识图谱、语义切片 |
+
+注意：Document 和 Section 是结构实体，已由系统预生成，不需要从文本中抽取。
+注意：Event 实体由事件抽取阶段专门处理，本阶段不需要抽取 Event。
+
+## 抽取原则
+
+1. 只抽取文本中明确提及的实体，不要臆造
+2. 同一个实体在同一chunk中只抽取一次
+3. 提取原始名称作为 name，同时收集别名 aliases
+4. 附带属性信息（如行业、规模、类型等）
+5. 每条实体必须附带证据：来源chunk_id、页码范围、原文引用
+6. confidence 表示抽取置信度（0.0-1.0），基于文本明确程度
+7. 如果当前chunk没有可抽取的实体，返回空数组
+
+## 输出格式
+
+严格按以下JSON格式输出，不要任何解释或额外文字：
+
+```json
+{
+  "entities": [
+    {
+      "entity_id": "ent_{{chunk_num}}_001",
+      "entity_type": "Organization",
+      "name": "某科技有限公司",
+      "aliases": ["某科技", "该公司"],
+      "attributes": {
+        "industry": "软件"
+      },
+      "evidence": [
+        {
+          "chunk_id": "{{current_chunk.chunk_id}}",
+          "page_range": {{current_chunk.page_range}},
+          "quote": "某科技有限公司负责系统建设"
+        }
+      ],
+      "confidence": 0.91
+    }
+  ]
+}
+```
+
+## 字段说明
+
+- entity_id：格式 ent_{{chunk_num}}_{序号}，序号从001开始，按出现顺序递增
+- entity_type：必须是上表中列出的类型之一
+- name：实体的主要名称，保持原文表述
+- aliases：文中出现的别名、简称、代称，字符串数组
+- attributes：该实体的附加属性，键值对，无则设为 {}
+- evidence：证据列表，每项含 chunk_id/page_range/quote，quote 为原文引用（50-200字符）
+- confidence：置信度分数，高明确度0.9+，中等0.7-0.9，低明确度0.5-0.7
+
+## 当前Chunk信息
+
+- chunk_id：{{current_chunk.chunk_id}}
+- 页码范围：{{current_chunk.page_range}}
+
+## 文本内容
+
+{{current_chunk.text}}
+
+仅输出 JSON，不要解释。
+''')

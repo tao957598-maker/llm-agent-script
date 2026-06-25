@@ -1,0 +1,206 @@
+/*{
+    "title":"Build system-level map",
+    "description":"Merge multiple single-document maps into a unified system-level map. Identifies cross-document module relationships, resolves source roles (primary/supplementary), and produces a converged module structure without generating design points or test cases.",
+    "parameter":[
+        {
+            "name":"single_doc_maps",
+            "label":"List of single-document maps"
+        },
+        {
+            "name":"platform",
+            "label":"System/Platform name"
+        },
+        {
+            "name":"systemName",
+            "label":"System name"
+        },
+        {
+            "name":"outputLanguage",
+            "label":"Output Language",
+            "type":"select",
+            "defaultValue":"en",
+            "args":[
+                {"label":"English","value":"en"},
+                {"label":"Chinese","value":"zh"},
+                {"label":"Traditional Chinese","value":"tw"}
+            ]
+        }
+    ],
+    "llmType":"alias.highquality",
+    "life":10000,
+    "version":1
+}*/
+//# Agent status
+assign("status", 'Agent is running')
+
+// Normalize input maps
+n_maps_normalized,act_func?script='''
+    def raw = single_doc_maps
+    if (raw == null) raw = []
+    if (!(raw instanceof List)) raw = [raw]
+    def out = []
+    raw.each { mapItem ->
+        if (!(mapItem instanceof Map)) return
+        def m = mapItem.get("value") instanceof Map ? mapItem.get("value") : mapItem
+        if (m == null || !(m instanceof Map)) return
+        def modules = m.get("modules")
+        if (!(modules instanceof List) || modules.isEmpty()) return
+        out.add([
+            document_name: (m.get("document_name") ?: "").toString(),
+            platform: (m.get("platform") ?: "{{platform}}").toString(),
+            module_count: modules.size(),
+            modules: modules
+        ])
+    }
+    if (out.isEmpty()) {
+        throw new RuntimeException("【MAP·系统级】single_doc_maps 为空或无有效模块")
+    }
+    return out
+'''
+
+// LLM: Merge into system-level map
+n_system_map, tpl_build_system_map, psr_json
+
+// Validate system map
+n_system_map_validate,act_func?script='''
+    def raw = n_system_map
+    def m = null
+    if (raw instanceof Map) {
+        def inner = raw.get("value")
+        m = (inner instanceof Map && inner.get("modules") instanceof List) ? inner : raw
+    } else if (raw instanceof List && raw.size() > 0 && raw[0] instanceof Map) {
+        m = raw[0]
+    }
+    if (m == null || !(m instanceof Map)) {
+        throw new RuntimeException("【MAP·系统级】LLM 未返回有效系统级 map——请检查 prompt 约束是否足够、输入文档 map 是否过大")
+    }
+    def modules = m.get("modules")
+    if (!(modules instanceof List) || modules.isEmpty()) {
+        throw new RuntimeException("【MAP·系统级】system_map.modules 为空——所有输入文档均未提取到有效模块")
+    }
+    int totalSubmodules = 0
+    modules.each { mod ->
+        if (!(mod instanceof Map)) return
+        def subs = mod.get("submodules")
+        if (subs instanceof List) totalSubmodules += subs.size()
+    }
+    if (totalSubmodules == 0) {
+        throw new RuntimeException("【MAP·系统级】模块数=" + modules.size() + " 但子模块总数为 0——模块层级结构异常")
+    }
+    m.put("_meta", [
+        platform: "{{platform}}",
+        system_name: "{{systemName}}",
+        input_doc_count: n_maps_normalized.size(),
+        module_count: modules.size(),
+        submodule_count: totalSubmodules
+    ])
+    return m
+'''
+
+assign("system_map_result", '{{n_system_map_validate}}')
+
+// Template: Build system-level map
+define('tpl_build_system_map', '''
+You are merging multiple single-document maps into ONE **system-level map**. Do NOT generate design points or test cases.
+
+# System: {{systemName}}
+# Platform: {{platform}}
+
+# Single-document maps to merge
+<single_doc_maps>
+{{n_maps_normalized}}
+</single_doc_maps>
+
+# Your task
+
+Merge these single-document maps into a unified system-level structural index.
+
+**硬约束**：输出合法 JSON。第一个字符 `{`，最后一个 `}`。`modules` 不能为空。
+
+## Merging rules
+
+1. **Same module across documents**: When two or more documents describe the same module, merge them into ONE module entry. Identify:
+   - Which document provides the **primary** definition
+   - Which documents provide **supplementary** details, rules, or constraints
+   - Preserve source document and page references for each contribution
+
+2. **Different modules**: Keep distinct modules separate. Do not merge modules just because they are adjacent.
+
+3. **Submodule deduplication**: When the same submodule appears in multiple documents, merge its capabilities, rules, and criteria. Preserve ALL source page references.
+
+4. **Source roles**: For each submodule, annotate the source role:
+   - `primary_definition`: the document that first/mainly defines this submodule
+   - `supplementary_rules`: documents that add business rules
+   - `supplementary_criteria`: documents that add acceptance criteria
+   - `supplementary_context`: documents that add background or dependencies
+
+## Anti-over-merge rules（防止过度归并）
+
+5. **禁止万能兜底模块名**：不得使用 "Stakeholder Requirements"、"Other Requirements"、"General Functions"、"Miscellaneous" 等语义空洞的模块名。每个 module_name 必须体现具体的功能领域（如 "FX Transaction Processing"、"User Permission Management"、"Report Generation"、"Client Onboarding"）。
+
+6. **不同功能领域不得合并**：如果两份文档描述的是不同的功能领域（例如一份描述交易处理，另一份描述报表查询），它们必须属于不同模块。不能因为都提到了"数据校验"或"合规要求"就把它们合并。
+
+7. **单文档专属模块不得被吸收**：如果某个模块只出现在一份文档中，且语义与其他文档的模块明显不同，保留其原始的 module_name 和结构，不要强行"统一"到其他模块下。
+
+8. **跨领域模块数下限**：如果输入文档涉及明显不同的功能领域（如一份是交易处理、另一份是报表系统、第三份是用户管理），输出模块数不应显著少于领域数。同一领域的多份文档合并后模块减少是正常的，但不同领域的文档不得合并到同一个模块下。
+
+## What NOT to do
+
+- Do NOT generate design points or test cases.
+- Do NOT create a full-text summary combining all documents.
+- Do NOT invent modules not present in the source maps.
+- Keep the output as a STRUCTURAL INDEX, not a narrative document.
+
+## source 引用格式（硬约束）
+
+- 所有 `primary_source`、`supplementary_sources`、`all_source_pages`、`source_roles` 中的文档引用**必须使用上方 <single_doc_maps> 中的原始 document_name 值**，逐字符一致。
+- 格式：`原始文档名#PageN`，例如 `CSS-CL GM FX Prompt_Detail ver.docx#Page5`。
+- **禁止**使用缩写、别名或自创简称（如 `DOC_A`、`FUNC`、`BIZ`）。
+- 如果同一个文档名在多个 single_doc_map 中出现，必须保持原文一致。
+
+## Output format（严格遵守）
+
+只输出一个 JSON 对象。不要 ```json 代码块包裹、不要解释文字、不要 markdown。输出的第一个字符必须是 `{`，最后一个必须是 `}`。
+
+{
+  "platform": "{{platform}}",
+  "system_name": "{{systemName}}",
+  "modules": [
+    {
+      "module_name": "...",
+      "module_description": "...",
+      "primary_source": "原始文档名",
+      "supplementary_sources": ["原始文档名"],
+      "branch_summary": "...",
+      "submodules": [
+        {
+          "submodule_name": "...",
+          "description": "...",
+          "primary_source": "原始文档名#PageX",
+          "source_roles": {
+            "primary_definition": "原始文档名#PageX",
+            "supplementary_rules": [],
+            "supplementary_criteria": [],
+            "supplementary_context": []
+          },
+          "capabilities": [],
+          "business_rules": [],
+          "acceptance_criteria": [],
+          "dependencies": [],
+          "all_source_pages": ["原始文档名#PageX", "原始文档名#PageY"]
+        }
+      ]
+    }
+  ]
+}
+
+## Language
+
+All user-visible text MUST be in {{outputLanguage}}. Only source references may remain in their original language.
+
+## Quality requirements
+
+- Every submodule must trace back to at least one source document+page using the exact document_name from the input.
+- Module names should use the system's terminology, not a single document's local terms.
+- If two documents describe the same thing with different names, use the most authoritative name as the primary and note the alias.
+''')

@@ -1,0 +1,28 @@
+/*{
+  "title": "Foreach Loop Demo",
+  "description": "Nested foreach example for a two-dimensional array",
+  "parameter": [],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+
+ 
+// 下载：将知识空间 /docs/report.pdf 下载到本地 D 盘
+act_rpa.send?command=DownloadFromKB&parameters='{"localPath":"C:\Users\ahrli\Documents\trae_projects\gen_agent_code\agent\test\","kbPath":"/test_req_poc/image_white.jpg"}'
+// 下载：将知识空间 /docs/report.pdf 下载到本地 D 盘 返回数据: ["downloaded to C:/Users/ahrli/Downloads/个人活期结算开户时间查询功能需求说明书_20260513181608.docx"]
+act_rpa.send?command=DownloadFromKB&parameters='{"localPath":"C:\Users\ahrli\Downloads","kbPath":"/test_req_poc/个人活期结算开户时间查询功能需求说明书_20260513181608.docx"}'
+
+act_rpa.send?command=DownloadFromKB&parameters='{"localPath":"C:\Users\ahrli\Downloads","kbPath":"/test_req_poc/mongo_data_1.xlsx"}'
+
+act_rpa.send?command=DownloadFromKB&parameters='{"localPath":"C:\Users\ahrli\Downloads","kbPath":"/test_req_poc/CloudBank_PRD_20250818154832.pdf"}'
+
+act_rpa.send?command=DownloadFromKB&parameters='{"localPath":"C:\Users\ahrli\Downloads","kbPath":"/test_req_poc/agt_pdf_pipeline.txt"}'
+
+act_rpa.send?command=DownloadFromKB&parameters='{"localPath":"C:\Users\ahrli\Downloads","kbPath":"/test_req_poc/image_white.jpg"}'
+
+// 上传：将本地 C:/data/config.json 上传到知识空间 /backup/ 返回数据data 对应文件id:  [{"traceId":"44f427cc16dd409aad262d172af8d2ea","code":200,"message":"Request successful","data":[{"agent使用说明.docx":"277465107248463872"}]}]
+act_rpa.send?command=UploadToKB&parameters='{"localPath":"C:\Users\ahrli\Downloads\ReferenceNumber.png","kbPath":"/test_req_poc"}'
+act_rpa.send?command=UploadToKB&parameters='{"localPath":"C:\Users\ahrli\Downloads\agent使用说明.docx","kbPath":"/test_req_poc"}'
+
+

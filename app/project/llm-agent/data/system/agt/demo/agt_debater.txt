@@ -1,0 +1,33 @@
+/*
+{
+	"title":"通用辩手",
+	"parameter":[
+		{
+			"name":"topic",
+			"required":true,
+			"type":"text"
+		},
+		{
+			"name":"opponent_speech",
+			"required":true,
+			"type":"textarea"
+		},
+		{
+			"name":"prompt",
+			"required":false,
+			"type":"textarea"
+		}
+	],
+	"displayOrder":0,
+	"version":1
+}
+*/
+define('tpl_debate', '''
+{{prompt}}
+辩论主题：{{topic}}
+对方辩友刚才说：{{opponent_speech}}
+请根据你的人设和观点进行回应。要求：限制在150字以内，单行，不使用双引号。
+''')
+n_reply, tpl_debate, psr_all
+//## 最终输出
+assign('final_output', '{{n_reply}}')

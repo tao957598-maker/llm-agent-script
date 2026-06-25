@@ -1,0 +1,19 @@
+/*
+{
+  "title":"COBOL2Java Phase7 Gate Generator",
+  "description":"P1：汇总 Phase 7 全部数据（manifest/Surefire/诊断/覆盖率/Golden可信度），按加权公式生成标准化质量门控 JSON 和 Markdown 报告。完全确定性。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"}
+  ],
+  "version":1,
+  "resultPlan":"n_phase7_gate_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}')
+
+n_phase7_gate_report, act_func.run?expression=phase7_gate_generator_json

@@ -1,0 +1,43 @@
+/*
+{
+	"title":"文件收集子Agent",
+	"parameter":"{\"name\":\"kb_folder\",\"label\":\"知识空间文件夹路径\",\"type\":\"text\",\"required\":true}",
+	"displayOrder":0,
+	"version":24
+}
+*/
+// 1. 列出所有文件
+n_file_list, act_artifact.list?filepath='{{kb_folder}}'&maxDepth=1
+
+// 2. 初始化临时文件（确保 tmp 目录存在并清空文件）
+n_init, act_func?script='''
+    def dir = new File("tmp")
+    if (!dir.exists()) dir.mkdirs()
+    new File("tmp/all_code.txt").write("", "UTF-8")
+    return "OK"
+'''
+
+// 3. 循环读取每个 .txt 文件，追加写入临时文件
+foreach('n_file_list', 'n_file_list', {
+    assign('current_file', '{{n_file_list.item}}')
+    when ("current_file.endsWith('.txt')", {
+        // 读取文件内容
+        n_content, act_artifact.read?filepath='{{current_file}}'
+        // Groovy 脚本：提取文件名、转义双引号、追加写入临时文件，返回 "OK"
+        n_ok, act_func?script='''
+            def raw = n_content.toString()
+            def escaped = raw.replaceAll("\"", "\\\\\"")
+            def p = current_file
+            def name = p.contains("/") ? p.substring(p.lastIndexOf("/") + 1) : p
+            def block = "===FILENAME:${name}===\n${escaped}\n\n"
+            new File("tmp/all_code.txt").append(block, "UTF-8")
+            return "OK"
+        '''
+    })
+})
+
+// 4. 读取拼接好的完整文本（作为最终输出）
+n_all_text, act_artifact.read?filepath='tmp/all_code.txt'
+
+//## 最终输出
+assign('final_output', '{{n_all_text}}')

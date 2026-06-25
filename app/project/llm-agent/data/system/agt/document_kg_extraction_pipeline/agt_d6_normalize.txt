@@ -1,0 +1,636 @@
+/*{
+  "title": "标准化与消歧",
+  "description": "对候选实体/关系/事件进行标准化处理：实体同名归并与类型纠正、关系方向校验、时间标准化",
+  "parameter": [
+    {"name":"ksDir","label":"输出目录","required":false,"description":"知识空间输出目录，默认 document_kg_extraction"}
+  ],
+  "version": 1,
+  "resultPlan": "n_output"
+}*/
+
+// 设置默认输出目录
+when('!fn.hasValue(ksDir)', {
+  assign("ksDir", "document_kg_extraction")
+})
+
+// 读取阶段三输出的entities_raw.json
+n_entities_raw, act_artifact.read?filepath='{{ksDir}}/03_extraction/entities_raw.json'&maxLength=635555
+
+// 读取阶段三输出的relations_raw.json
+n_relations_raw, act_artifact.read?filepath='{{ksDir}}/03_extraction/relations_raw.json'&maxLength=635555
+
+// 读取阶段三输出的events_raw.json
+n_events_raw, act_artifact.read?filepath='{{ksDir}}/03_extraction/events_raw.json'&maxLength=635555
+
+// 读取阶段三输出的attributes_raw.json（用于参考）
+n_attributes_raw, act_artifact.read?filepath='{{ksDir}}/03_extraction/attributes_raw.json'&maxLength=635555
+
+// 检查输入文件是否可读
+when('!fn.hasValue(n_entities_raw) || !fn.hasValue(n_relations_raw) || !fn.hasValue(n_events_raw)', {
+  // 输入文件缺失则终止流程
+  act_flow.fail?result='无法读取阶段三输出文件，请确认 agt_d3/d4/d5 已执行完成，ksDir={{ksDir}}'
+})
+
+// ===== Phase 1: Entity normalization =====
+
+// 统计原始实体数量
+n_raw_entity_count, act_func?script='''
+  return n_entities_raw?.size() ?: 0
+'''
+
+// Groovy: 归一化实体名称并按键分组（小写trim精确匹配）
+n_entity_name_groups, act_func?script='''
+  def entities = n_entities_raw ?: []
+  def groups = [:]
+  entities.each { ent ->
+    def key = (ent.name ?: "").trim().toLowerCase()
+    if (!groups[key]) {
+      groups[key] = []
+    }
+    groups[key].add(ent)
+  }
+  return groups
+'''
+
+// Groovy: 从分组中提取合并候选（同组实体数>1的组）
+n_merge_candidates, act_func?script='''
+  def groups = n_entity_name_groups
+  def candidates = []
+  groups.each { key, ents ->
+    if (ents.size() > 1) {
+      candidates.add([
+        normalized_name: key,
+        representative_name: ents[0].name,
+        entity_count: ents.size(),
+        entities: ents.collect { ent ->
+          [
+            entity_id: ent.entity_id,
+            name: ent.name,
+            entity_type: ent.entity_type,
+            confidence: ent.confidence ?: 0.0
+          ]
+        }
+      ])
+    }
+  }
+  return candidates
+'''
+
+// 统计合并候选数
+n_candidate_count, act_func?script='''
+  return n_merge_candidates?.size() ?: 0
+'''
+
+// Groovy: 为LLM准备所有实体的精简列表（用于类型审查）
+n_entity_summary, act_func?script='''
+  def entities = n_entities_raw ?: []
+  return entities.collect { ent ->
+    return [
+      entity_id: ent.entity_id,
+      name: ent.name,
+      entity_type: ent.entity_type,
+      confidence: ent.confidence ?: 0.0
+    ]
+  }
+'''
+
+// LLM: 实体合并决策 + 类型纠正
+n_normalize_result, tpl_normalize_entities, psr_json
+
+// Groovy: 应用实体合并决策
+n_entities_merged, act_func?script='''
+  def entities = n_entities_raw ?: []
+  def mergeGroups = n_normalize_result?.merge_groups ?: []
+  def typeCorrections = n_normalize_result?.type_corrections ?: []
+
+  // 构建ID映射表：old_id → canonical_id
+  def idMapping = [:]
+  mergeGroups.each { group ->
+    def ids = group.entity_ids_to_merge ?: []
+    if (ids.size() > 0) {
+      def canonicalId = ids[0]
+      ids.each { oldId ->
+        idMapping[oldId] = canonicalId
+      }
+    }
+  }
+
+  // 构建类型纠正映射表
+  def typeMap = [:]
+  typeCorrections.each { corr ->
+    if (corr.entity_id && corr.corrected_type) {
+      typeMap[corr.entity_id] = corr.corrected_type
+    }
+  }
+
+  // 应用合并：构建标准化实体列表
+  def normalizedEntities = []
+  def canonicalSeen = [] as Set
+
+  entities.each { ent ->
+    def mappedId = idMapping[ent.entity_id] ?: ent.entity_id
+
+    // 应用类型纠正
+    if (typeMap[ent.entity_id]) {
+      ent.entity_type = typeMap[ent.entity_id]
+    }
+
+    if (idMapping.containsKey(ent.entity_id) && idMapping[ent.entity_id] != ent.entity_id) {
+      // 此实体被合并到canonical实体中 — 追加证据
+      def canonical = normalizedEntities.find { it.entity_id == mappedId }
+      if (canonical) {
+        // 合并evidence
+        if (ent.evidence) {
+          canonical.evidence = (canonical.evidence ?: []) + ent.evidence
+        }
+        // 合并aliases
+        if (ent.aliases) {
+          canonical.aliases = ((canonical.aliases ?: []) + ent.aliases).unique()
+        }
+        // 合并attributes（后者覆盖前者）
+        if (ent.attributes) {
+          canonical.attributes = (canonical.attributes ?: [:]) + ent.attributes
+        }
+        // 取最高置信度
+        if ((ent.confidence ?: 0) > (canonical.confidence ?: 0)) {
+          canonical.confidence = ent.confidence
+        }
+      }
+    } else {
+      // Canonical或非合并实体
+      ent.entity_id = mappedId
+      normalizedEntities.add(ent)
+      canonicalSeen.add(mappedId)
+    }
+  }
+
+  // 应用合并组中的canonical_name和canonical_type
+  mergeGroups.each { group ->
+    def ids = group.entity_ids_to_merge ?: []
+    if (ids.size() > 0) {
+      def canonicalId = ids[0]
+      def canonical = normalizedEntities.find { it.entity_id == canonicalId }
+      if (canonical) {
+        if (group.canonical_name) {
+          canonical.name = group.canonical_name
+        }
+        if (group.canonical_type) {
+          canonical.entity_type = group.canonical_type
+        }
+        // 以合并组提供的aliases替换
+        if (group.unified_aliases) {
+          canonical.aliases = group.unified_aliases
+        }
+      }
+    }
+  }
+
+  return normalizedEntities
+'''
+
+// Groovy: 构建ID映射表（供后续relation/event重映射使用）
+n_id_mapping, act_func?script='''
+  def mergeGroups = n_normalize_result?.merge_groups ?: []
+  def mapping = [:]
+  mergeGroups.each { group ->
+    def ids = group.entity_ids_to_merge ?: []
+    if (ids.size() > 0) {
+      def canonicalId = ids[0]
+      ids.each { oldId ->
+        mapping[oldId] = canonicalId
+      }
+    }
+  }
+  return mapping
+'''
+
+// 统计合并后实体数量
+n_normalized_entity_count, act_func?script='''
+  return n_entities_merged?.size() ?: 0
+'''
+
+// ===== Phase 2: Relation normalization =====
+
+// Groovy: 重映射关系中的实体引用（应用ID映射表）
+n_relations_remapped, act_func?script='''
+  def relations = n_relations_raw ?: []
+  def idMapping = n_id_mapping ?: [:]
+
+  def remapped = relations.collect { rel ->
+    def newRel = [:] + rel
+    if (idMapping.containsKey(rel.source_entity_id)) {
+      newRel.source_entity_id = idMapping[rel.source_entity_id]
+    }
+    if (idMapping.containsKey(rel.target_entity_id)) {
+      newRel.target_entity_id = idMapping[rel.target_entity_id]
+    }
+    return newRel
+  }
+
+  // 去除source==target的自环关系（合并可能导致）
+  def filtered = remapped.findAll { rel ->
+    rel.source_entity_id != rel.target_entity_id
+  }
+
+  return filtered
+'''
+
+// Groovy: 为LLM准备关系精简列表
+n_relation_summary, act_func?script='''
+  def relations = n_relations_remapped ?: []
+  def entityMap = [:]
+  // 构建entity_id → name的快速查询表
+  def entities = n_entities_merged ?: []
+  entities.each { ent ->
+    entityMap[ent.entity_id] = ent.name
+  }
+
+  return relations.collect { rel ->
+    return [
+      relation_id: rel.relation_id,
+      relation_type: rel.relation_type,
+      source_entity_id: rel.source_entity_id,
+      source_entity_name: entityMap[rel.source_entity_id] ?: "Unknown",
+      target_entity_id: rel.target_entity_id,
+      target_entity_name: entityMap[rel.target_entity_id] ?: "Unknown",
+      confidence: rel.confidence ?: 0.0
+    ]
+  }
+'''
+
+// LLM: 关系类型与方向校验
+n_relation_fixes, tpl_normalize_relations, psr_json
+
+// Groovy: 应用关系修正
+n_relations_normalized, act_func?script='''
+  def relations = n_relations_remapped ?: []
+  def typeCorrections = n_relation_fixes?.type_corrections ?: []
+  def directionFlips = n_relation_fixes?.direction_flips ?: []
+  def invalidIds = n_relation_fixes?.invalid_relation_ids ?: []
+
+  // 构建修正和翻转查询表
+  def typeFixMap = [:]
+  typeCorrections.each { corr ->
+    if (corr.relation_id && corr.corrected_type) {
+      typeFixMap[corr.relation_id] = corr.corrected_type
+    }
+  }
+  def flipSet = [] as Set
+  directionFlips.each { flip ->
+    if (flip.relation_id) {
+      flipSet.add(flip.relation_id)
+    }
+  }
+  def invalidSet = [] as Set
+  invalidIds.each { id ->
+    invalidSet.add(id)
+  }
+
+  // 应用修正
+  def normalized = []
+  relations.each { rel ->
+    // 跳过标记为无效的关系
+    if (invalidSet.contains(rel.relation_id)) {
+      return
+    }
+    // 应用类型修正
+    if (typeFixMap.containsKey(rel.relation_id)) {
+      rel.relation_type = typeFixMap[rel.relation_id]
+    }
+    // 应用方向翻转
+    if (flipSet.contains(rel.relation_id)) {
+      def tmp = rel.source_entity_id
+      rel.source_entity_id = rel.target_entity_id
+      rel.target_entity_id = tmp
+    }
+    normalized.add(rel)
+  }
+
+  return normalized
+'''
+
+// ===== Phase 3: Event normalization =====
+
+// Groovy: 重映射事件中的实体引用
+n_events_remapped, act_func?script='''
+  def events = n_events_raw ?: []
+  def idMapping = n_id_mapping ?: [:]
+
+  return events.collect { evt ->
+    def newEvt = [:] + evt
+    // 重映射participants中的entity_id
+    if (newEvt.participants) {
+      newEvt.participants = newEvt.participants.collect { p ->
+        def newP = [:] + p
+        if (idMapping.containsKey(p.entity_id)) {
+          newP.entity_id = idMapping[p.entity_id]
+        }
+        return newP
+      }
+    }
+    return newEvt
+  }
+'''
+
+// Groovy: 为LLM准备事件精简列表
+n_event_summary, act_func?script='''
+  def events = n_events_remapped ?: []
+  return events.collect { evt ->
+    return [
+      event_id: evt.event_id,
+      event_type: evt.event_type,
+      trigger: evt.trigger,
+      time_original: evt.time?.original ?: "",
+      time_normalized: evt.time?.normalized ?: "",
+      participant_count: evt.participants?.size() ?: 0,
+      confidence: evt.confidence ?: 0.0
+    ]
+  }
+'''
+
+// LLM: 事件时间标准化
+n_event_fixes, tpl_normalize_events, psr_json
+
+// Groovy: 应用事件修正（时间标准化 + 类型修正）
+n_events_normalized, act_func?script='''
+  def events = n_events_remapped ?: []
+  def timeNormalizations = n_event_fixes?.time_normalizations ?: []
+  def typeCorrections = n_event_fixes?.type_corrections ?: []
+
+  // 构建查询表
+  def timeMap = [:]
+  timeNormalizations.each { tn ->
+    if (tn.event_id && tn.normalized_time) {
+      timeMap[tn.event_id] = tn.normalized_time
+    }
+  }
+  def typeMap = [:]
+  typeCorrections.each { corr ->
+    if (corr.event_id && corr.corrected_type) {
+      typeMap[corr.event_id] = corr.corrected_type
+    }
+  }
+
+  return events.collect { evt ->
+    if (timeMap.containsKey(evt.event_id)) {
+      if (!evt.time) evt.time = [:]
+      evt.time.normalized = timeMap[evt.event_id]
+    }
+    if (typeMap.containsKey(evt.event_id)) {
+      evt.event_type = typeMap[evt.event_id]
+    }
+    return evt
+  }
+'''
+
+// ===== Phase 4: Write outputs =====
+
+// 写入entities_normalized.json
+act_artifact.write?filepath='{{ksDir}}/04_normalization/entities_normalized.json'&data='{{n_entities_merged}}'
+
+// 写入relations_normalized.json
+act_artifact.write?filepath='{{ksDir}}/04_normalization/relations_normalized.json'&data='{{n_relations_normalized}}'
+
+// 写入events_normalized.json
+act_artifact.write?filepath='{{ksDir}}/04_normalization/events_normalized.json'&data='{{n_events_normalized}}'
+
+// ===== Phase 5: Output summary =====
+
+// 输出阶段四标准化结果
+n_output, act_func?script='''
+  def result = [:]
+  result.success = true
+  result.stage = "d6_normalize"
+
+  // 实体统计
+  result.entities = [
+    raw_count: n_entities_raw?.size() ?: 0,
+    normalized_count: n_entities_merged?.size() ?: 0,
+    merges_applied: n_normalize_result?.merge_groups?.size() ?: 0,
+    type_corrections: n_normalize_result?.type_corrections?.size() ?: 0
+  ]
+
+  // 关系统计
+  result.relations = [
+    raw_count: n_relations_raw?.size() ?: 0,
+    normalized_count: n_relations_normalized?.size() ?: 0,
+    type_corrections: n_relation_fixes?.type_corrections?.size() ?: 0,
+    direction_flips: n_relation_fixes?.direction_flips?.size() ?: 0,
+    invalid_removed: n_relation_fixes?.invalid_relation_ids?.size() ?: 0
+  ]
+
+  // 事件统计
+  result.events = [
+    raw_count: n_events_raw?.size() ?: 0,
+    normalized_count: n_events_normalized?.size() ?: 0,
+    time_normalizations: n_event_fixes?.time_normalizations?.size() ?: 0,
+    type_corrections: n_event_fixes?.type_corrections?.size() ?: 0
+  ]
+
+  result.output_files = [
+    ksDir + "/04_normalization/entities_normalized.json",
+    ksDir + "/04_normalization/relations_normalized.json",
+    ksDir + "/04_normalization/events_normalized.json"
+  ]
+  return result
+'''
+
+// 异常处理：捕获错误并返回失败信息
+on_failure({
+  // 构造错误输出
+  n_output, act_func?script='''
+    def result = [:]
+    result.success = false
+    result.stage = "d6_normalize"
+    result.error = fn.str(sys_failure_task?.result ?: "Unknown error")
+    return result
+  '''
+  // 跳转到流程结束
+  act_flow.go?plan=end
+})
+
+// ===== LLM Templates =====
+
+// 实体标准化模板：合并决策 + 类型纠正
+define('tpl_normalize_entities', '''
+你是知识图谱实体标准化专家。请对以下候选实体列表进行合并决策和类型审核。
+
+## 任务一：同名实体合并
+
+以下是按名称分组后存在多个候选项的实体组。请判断每组内的实体是否指向同一真实世界对象，并给出合并建议。
+
+合并候选组：
+{{n_merge_candidates}}
+
+判断标准：
+1. 名称完全相同或仅大小写/空格差异 → merge
+2. 名称相同但类型不同 → 判断是否为同一对象（如某公司既是Organization也是Project），若不同则 keep_separate
+3. 名称相同但来自不同chunk → 通常是同一对象，merge
+4. Document和Section类型实体不参与合并
+
+## 任务二：实体类型纠正
+
+以下是所有候选实体列表。请审查每个实体的entity_type是否正确，对错误的类型给出纠正建议。
+
+所有实体：
+{{n_entity_summary}}
+
+类型纠正标准：
+- Person：必须是具体人物或职位
+- Organization：公司、机构、部门、团队
+- Product：产品、服务、解决方案
+- Project：项目、工程、计划
+- Technology：技术、方法、框架、系统
+- Metric：指标、KPI、度量值
+- Risk：风险项、隐患描述
+- Requirement：需求、约束条件
+- Time：时间表达（日期、时段等）
+- Term：专有术语、概念定义
+- Document / Section：结构实体，不接受纠正
+
+## 输出格式
+
+严格按以下JSON格式输出，不要任何解释或额外文字：
+
+```json
+{
+  "merge_groups": [
+    {
+      "canonical_name": "统一后的标准名称",
+      "canonical_type": "Organization",
+      "entity_ids_to_merge": ["ent_0001_001", "ent_0003_002"],
+      "unified_aliases": ["别名1", "别名2"],
+      "reason": "合并原因简述"
+    }
+  ],
+  "type_corrections": [
+    {
+      "entity_id": "ent_0002_003",
+      "current_type": "Product",
+      "corrected_type": "Technology",
+      "reason": "该实体描述的是技术架构而非产品"
+    }
+  ]
+}
+```
+
+字段说明：
+- merge_groups：需要合并的实体组列表，不需要合并的组不要列出
+- canonical_name：合并后的标准名称
+- canonical_type：合并后的实体类型
+- entity_ids_to_merge：需要合并的实体ID列表（至少2个）
+- unified_aliases：合并后的统一别名列表
+- type_corrections：类型纠正列表，无纠正则为空数组
+- reason：简短说明原因
+
+仅输出 JSON，不要解释。
+''')
+
+// 关系标准化模板：类型校验 + 方向校验
+define('tpl_normalize_relations', '''
+你是知识图谱关系校验专家。请对以下候选关系列表进行类型和方向审核。
+
+## 关系列表
+
+{{n_relation_summary}}
+
+## 有效关系类型
+
+MENTIONS, BELONGS_TO, PART_OF, RELATED_TO, AUTHORED_BY, WORKS_FOR, PRODUCES, USES, DEPENDS_ON, IMPLEMENTS, REQUIRES, CAUSES, AFFECTS, MEASURED_BY, HAS_RISK, HAS_TIME, HAS_PARTICIPANT, PRECEDES, FOLLOWS
+
+## 审核任务
+
+1. **类型校验**：检查relation_type是否与source和target的语义匹配
+   - 例：Person → Organization 不应是 PART_OF，应为 WORKS_FOR 或 BELONGS_TO
+   - 例：Project → Technology 常为 USES，不应是 IMPLEMENTS
+   - 例：风险与项目之间应为 HAS_RISK
+2. **方向校验**：检查source→target方向是否合理
+   - 例：A IMPLEMENTS B 表示 A实施B，如方向反了应标记翻转
+   - 例：A PART_OF B 表示 A是B的一部分
+3. **无效标记**：标记明显错误或无意义的关系
+
+## 输出格式
+
+```json
+{
+  "type_corrections": [
+    {
+      "relation_id": "rel_0001_001",
+      "current_type": "PART_OF",
+      "corrected_type": "BELONGS_TO",
+      "reason": "员工归属于部门，应使用BELONGS_TO"
+    }
+  ],
+  "direction_flips": [
+    {
+      "relation_id": "rel_0002_001",
+      "reason": "A生产B，但方向为B→A，应翻转"
+    }
+  ],
+  "invalid_relation_ids": ["rel_0003_005"]
+}
+```
+
+注意：
+- 不需要修正的关系不要列出
+- invalid_relation_ids 中列出应删除的关系ID
+- direction_flips 表示该关系的source和target应对调
+
+仅输出 JSON，不要解释。
+''')
+
+// 事件标准化模板：时间标准化 + 类型审核
+define('tpl_normalize_events', '''
+你是事件标准化专家。请对以下候选事件列表进行时间标准化和类型审核。
+
+## 事件列表
+
+{{n_event_summary}}
+
+## 任务一：时间标准化
+
+将事件时间统一为 YYYY-MM-DD 格式：
+- "2026年5月1日" → "2026-05-01"
+- "2026-05" → "2026-05-01"（缺省取首日）
+- "2026年Q3" → "2026-07-01"（季度取首日）
+- "2026年5月初" → "2026-05-01"
+- "近期""日前"等模糊表述 → 保持原值，不做转换
+- 无时间信息 → 保持空
+
+## 任务二：事件类型审核
+
+检查事件类型标签是否合理：
+- 事件类型应为2-6字的中文概括性标签
+- 示例：签约、上线、变更、评审、发布、启动、故障、合并、投资、任命
+- 太泛的类型（如"事件""活动"）应具体化
+- 太细的类型可保持
+
+## 输出格式
+
+```json
+{
+  "time_normalizations": [
+    {
+      "event_id": "evt_0001_001",
+      "original_time": "2026年5月1日",
+      "normalized_time": "2026-05-01"
+    }
+  ],
+  "type_corrections": [
+    {
+      "event_id": "evt_0002_001",
+      "current_type": "事件",
+      "corrected_type": "签约",
+      "reason": "原文描述签署合同，应为签约"
+    }
+  ]
+}
+```
+
+注意：
+- time_normalizations 只列出需要转换的时间
+- 已经是 YYYY-MM-DD 格式的时间不需要列出
+- type_corrections 只列出需要纠正的类型
+
+仅输出 JSON，不要解释。
+''')

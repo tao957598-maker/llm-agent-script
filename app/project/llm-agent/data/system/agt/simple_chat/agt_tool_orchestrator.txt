@@ -1,0 +1,87 @@
+/*{
+  "title":"Simple Chat Tool Orchestrator",
+  "description":"顺序执行 task_plan 并统一标准化 step_result 与 execution_result。",
+  "parameter":[
+    {"name":"taskPlan","label":"任务计划JSON","required":true},
+    {"name":"sessionState","label":"会话状态JSON"}
+  ],
+  "resultPlan":"n_result",
+  "version":1
+}*/
+
+// 保存任务计划
+assign('task_plan', '{{taskPlan}}')
+
+// 保存会话状态
+assign('session_state', '{{fn.optional(sessionState, "{}")}}')
+
+// 执行编排生成
+n_result,tpl_tool_orchestrator,psr_json
+
+// 定义编排模板
+define('tpl_tool_orchestrator', '''
+你是 simple_chat 的任务编排器。
+
+请根据 `taskPlan` 和 `sessionState`，模拟执行每个 step，并输出严格 JSON。
+
+# 目标
+输出：
+- task_id
+- status
+- step_results
+- execution_result
+- new_artifacts
+
+# 规则
+1. 只支持 MVP 中这些步骤名：
+   - extract_query_target
+   - fetch_query_result
+   - format_query_result
+   - summarize_query_result
+   - get_conversation_scope
+   - summarize_conversation
+   - generate_conversation_summary
+   - decide_document_target
+   - determine_document_path
+   - write_markdown_document
+   - write_markdown_file
+2. `query_and_summarize` 场景可以使用一个固定 mock 结果：
+   - orderId: A123
+   - status: delivered
+   - signedAt: 2026-06-25 14:20:00
+3. `summarize_and_write` 场景需要从 sessionState.messages 中抽取最近对话，生成一段 Markdown 摘要。
+4. 每个 step_result 至少包含：
+   - step_id
+   - producer
+   - result_type
+   - status
+   - raw_data
+   - summary
+   - key_fields
+   - store_as_artifact
+5. 若步骤产生 API 结果，则写入一个 artifact_type = api_result 的 artifact。
+6. 若步骤产生摘要，则写入一个 artifact_type = summary 的 artifact。
+7. 若步骤涉及写文档，则写入一个 artifact_type = document 的 artifact。
+8. `execution_result.final_summary` 应优先给出最后可面向用户展示的结论。
+9. 仅输出 JSON，不要解释。
+
+# taskPlan
+{{task_plan}}
+
+# sessionState
+{{session_state}}
+
+# 输出格式示例
+{
+  "task_id": "task_001",
+  "status": "success",
+  "step_results": [],
+  "execution_result": {
+    "task_id": "task_001",
+    "status": "success",
+    "step_results": [],
+    "final_summary": "执行完成"
+  },
+  "new_artifacts": []
+}
+''')

@@ -1,0 +1,62 @@
+/*
+{
+	"title": "智能任务执行与知识空间同步",
+	"description": "基于用户输入的指令需求(复杂得任务或者需求)，执行智能化任务（如文档生成、代码编写、数据分析等），并将生成的结果文件自动同步到指定的知识空间目录中",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求"
+		},
+		{
+			"name":"kbSpaceId",
+			"label":"目录ID",
+			"type":"knowledge_fold"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space"
+		}
+	],
+	"displayOrder":0,
+	"version":1
+}
+*/
+// workspace 例如知识空间 /claude_code workspace=claude_code
+
+// 根据文件ID查询知识空间目录名称。
+n_result, act_kb.selectBy?sql='''SELECT full_path      FROM llm_agent.kb_spaces_folder t    WHERE id= {{kbSpaceId}}'''
+
+assign('workspace', '{{n_result[0].full_path}}')
+// 任务 根据这个PPT md文档内容 生成PPT文件
+assign('message', '{{userInput}}')
+// 知识空间目录 不要`/`开头
+assign('cwd', '{{workspace}}')
+assign('wait', '{"bool":false}')
+assign('codex_param', '{{fn.json("message, message, wait, wait.bool,cwd,cwd")}}')
+
+// 执行任务 remote RunShell api res
+n_api_result, act_api.doExecuteDynamic?name='send_codex_msg'&dynamicParamData='{{codex_param}}'
+
+assign('thread_id', '{{n_api_result.thread_id}}')
+assign('turn_id', '{{n_api_result.turn_id}}')
+// 远端入参
+assign('codex_param', '{{fn.json("thread_id, thread_id, turn_id, turn_id")}}')
+// Cloud Shell Res
+n_codex_result_origin, act_api.doExecuteDynamic?name='get_codex_msg'&dynamicParamData='{{codex_param}}'
+when('n_codex_result_origin.output.is_complete == false', {
+    // 
+	act_flow.wait?second=10
+    act_flow.go?plan=n_codex_result_origin
+})
+// 文件扫描到知识空间接口文档
+act_kbs.fileWalkToKbs?fullPath={{workspace}}
+assign("need_define_last_result", "true")
+// diff格式数据
+assign("define_last_result", "{{n_codex_result_origin.output.diff}}")
+assign("need_chat_last_result", "true")
+
+assign("chat_last_result", "{{n_codex_result_origin.output.text}}")
+assign("is_final_result", "true")
+// 最后总结
+assign("final_result", "{{fn.json('need_define_last_result,need_define_last_result,define_last_result,define_last_result,need_chat_last_result,need_chat_last_result,chat_last_result,chat_last_result,is_final_result,is_final_result')}}")

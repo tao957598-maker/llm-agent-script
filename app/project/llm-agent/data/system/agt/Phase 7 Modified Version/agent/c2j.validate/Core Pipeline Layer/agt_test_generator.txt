@@ -1,0 +1,363 @@
+/*
+{
+  "title":"COBOL2Java Test Generator (Cucumber manifest → JUnit)",
+  "description":"第七阶段 P0：读取 cucumber-manifest 与 .feature，生成 Spring MockMvc API 集成 JUnit（含 UNMAPPED 显式失败用例）。",
+  "parameter":[
+    {"name":"projectKey", "label":"项目标识", "required":true},
+    
+    {"name":"projectRoot", "label":"迁移工作区根目录", "required":true},
+    {"name":"irVersion", "required":false, "default":"v1"},
+    {"name":"cucumberManifestRel", "required":false, "default":"test/equivalence/cucumber-manifest-v1.json"},
+    {"name":"javaTestPackage", "required":false, "default":"com.bank.equivalence"},
+    {"name":"useVerificationRuntime", "label":"业务 /api 未落地时回退 POST /verification/runtime/execute", "required":false, "default":"true"}
+  ],
+  "version":1,
+  "resultPlan":"n_test_generator_report"
+}
+*/
+
+assign('n_project_key', '{{projectKey}}',
+       'n_project_root', '{{projectRoot}}',
+       'n_source_root_rel', '{{n_project_root}}/source',
+       'n_ir_version', '{{fn.optional(irVersion, "v1")}}',
+       'n_java_test_package', '{{fn.optional(javaTestPackage, "com.bank.equivalence")}}',
+       'n_use_verification_runtime', '{{fn.optional(useVerificationRuntime, "true")}}')
+assign('n_cucumber_manifest_rel', '{{fn.optional(cucumberManifestRel, "")}}')
+when('{{!fn.hasValue(n_cucumber_manifest_rel)}}', {
+  assign('n_cucumber_manifest_rel', 'test/equivalence/cucumber-manifest-{{n_ir_version}}.json')
+})
+
+assign('n_manifest_path', '{{n_project_root}}/{{n_cucumber_manifest_rel}}')
+assign('n_cucumber_manifest_status', 'READY')
+
+n_manifest_exists, act_func.run?script='''
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def manifestPath = fn.str(fn.get("n_manifest_path"))
+def p = java.nio.file.Path.of(rootDir, manifestPath.replace("/", java.io.File.separator)).toAbsolutePath().normalize()
+return java.nio.file.Files.isRegularFile(p) ? "true" : "false"
+'''
+when('{{!fn.bool(n_manifest_exists)}}', {
+  assign('n_cucumber_manifest_status', 'SKIPPED_NO_CUCUMBER_MANIFEST')
+})
+
+n_test_generator_report, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONArray
+import com.alibaba.fastjson2.JSONObject
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Instant
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectKey = fn.str(fn.get("n_project_key"))?.trim(); if (!projectKey) throw new IllegalStateException("Missing required parameter: projectKey")
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim(); if (!projectRoot) throw new IllegalStateException("Missing required parameter: projectRoot")
+def version = fn.str(fn.get("n_ir_version")) ?: "v1"
+def manifestRel = fn.str(fn.get("n_cucumber_manifest_rel")) ?: "test/equivalence/cucumber-manifest-${version}.json"
+def testPackage = fn.str(fn.get("n_java_test_package")) ?: "com.bank.equivalence"
+def useVerificationRuntime = (fn.str(fn.get("n_use_verification_runtime")) ?: "true").toBoolean()
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def javaRoot = base.resolve("implementation/java")
+def rel = { String r -> base.resolve(r.replace("/", java.io.File.separator)).normalize() }
+def readJson = { String r -> JSON.parseObject(Files.readString(rel(r), StandardCharsets.UTF_8)) }
+def writeText = { Path p, String text ->
+    Files.createDirectories(p.getParent())
+    Files.writeString(p, text, StandardCharsets.UTF_8)
+}
+def javaIdent = { String s ->
+    def t = (s ?: "x").replaceAll("[^a-zA-Z0-9]", "_")
+    if (t.isEmpty() || !Character.isJavaIdentifierStart(t.charAt(0))) t = "s_" + t
+    return t
+}
+def escJava = { String s ->
+    if (s == null) return ""
+    return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "")
+}
+def jsonArray = { JSONObject o, String k -> o?.getJSONArray(k) ?: new JSONArray() }
+def asList = { JSONArray a ->
+    def out = []
+    if (a != null) for (int i = 0; i < a.size(); i++) out.add(a.get(i))
+    return out
+}
+
+if (!Files.isRegularFile(rel(manifestRel))) {
+    def reportRel = "test/equivalence/test-generator-report-${version}.md"
+    def report = """# ${projectKey} Test Generator ${version}
+
+- status: `SKIPPED_NO_CUCUMBER_MANIFEST`
+- reason: missing cucumber manifest
+- missingManifest: `${manifestRel}`
+- next: run `agt_equivalence_validator.c2j.validate` after trace scenarios are available
+"""
+    writeText(rel(reportRel), report)
+    fn.put("n_test_generator_mapped_count", 0)
+    fn.put("n_test_generator_gap_count", 0)
+    return report
+}
+def manifest = readJson(manifestRel)
+def scenarios = jsonArray(manifest, "scenarios")
+def gapTests = 0
+def mappedTests = 0
+def suiteTests = 0
+def methods = new StringBuilder()
+
+asList(scenarios).each { sc ->
+    if (!(sc instanceof JSONObject)) return
+    def scenarioId = sc.getString("scenarioId") ?: "scenario"
+    def moduleId = sc.getString("moduleId") ?: "module"
+    def mappingStatus = sc.getString("mappingStatus") ?: "gap"
+    def featureFile = sc.getString("featureFile") ?: ""
+    def traceFile = sc.getString("traceFile") ?: ""
+    def methodName = javaIdent(moduleId + "_" + scenarioId)
+
+    if ("suite".equals(mappingStatus)) {
+        suiteTests++
+        methods.append("""
+    /** Cucumber suite: ${featureFile} */
+    @Test
+    @DisplayName("E2E trace chain — ${scenarioId}")
+    void ${methodName}_e2eChainDocumented() {
+        // P0: module-level tests cover chain; see ${featureFile}
+        assertTrue(Files.isRegularFile(projectRoot().resolve("${escJava(featureFile)}")),
+                "Missing Cucumber feature: ${featureFile}");
+    }
+""")
+        return
+    }
+
+    if ("gap".equals(mappingStatus) || "batch-or-none".equals(mappingStatus)) {
+        gapTests++
+        methods.append("""
+    /**
+     * Cucumber: ${featureFile}
+     * Trace: ${traceFile.isEmpty() ? "none" : traceFile}
+     */
+    @Test
+    @DisplayName("UNMAPPED_TRACE: ${moduleId}/${scenarioId}")
+    void ${methodName}_mappingGap() {
+        fail("TRACE_UNMAPPED or missing apiMappingHints — see ${featureFile}");
+    }
+""")
+        return
+    }
+
+    mappedTests++
+    def hints = jsonArray(sc, "apiMappingHints")
+    def hint = hints.isEmpty() ? new JSONObject() : hints.getJSONObject(0)
+    def cap = hint.getString("suggestedCapability")
+    if (cap == null || cap.isEmpty()) {
+        def caps = sc.getJSONArray("capabilities")
+        if (caps != null && !caps.isEmpty()) cap = caps.getString(0)
+    }
+    def targetPath = hint.getString("path") ?: "/api/UNMAPPED"
+    def golden = sc.getJSONObject("goldenApiResponse")
+    def goldenLiteral = escJava(golden != null ? JSON.toJSONString(golden) : "{}")
+
+    if (!useVerificationRuntime || cap == null || cap.isEmpty()) {
+        gapTests++
+        mappedTests--
+        methods.append("""
+    @Test
+    @DisplayName("UNMAPPED_TRACE: ${moduleId}/${scenarioId} — no capability")
+    void ${methodName}_noCapability() {
+        fail("No suggestedCapability — target API ${targetPath}; see ${featureFile}");
+    }
+""")
+        return
+    }
+
+    def paramsBlock = new StringBuilder()
+    def body = hint.getJSONObject("body")
+    def query = hint.getJSONObject("query")
+    if (body != null && !body.isEmpty()) {
+        body.keySet().each { k ->
+            def v = body.get(k)
+            def val = v instanceof String ? "\"${escJava(v.toString())}\"" : v.toString()
+            paramsBlock.append("        params.put(\"${escJava(k.toString())}\", ${val});\n")
+        }
+    }
+    if (query != null && !query.isEmpty()) {
+        query.keySet().each { k ->
+            def v = query.get(k)
+            def val = v instanceof String ? "\"${escJava(v.toString())}\"" : v.toString()
+            paramsBlock.append("        params.put(\"${escJava(k.toString())}\", ${val});\n")
+        }
+    }
+    def pathParams = hint.getJSONObject("pathParams")
+    if (pathParams != null && !pathParams.isEmpty()) {
+        pathParams.keySet().each { k ->
+            def v = pathParams.get(k)
+            def key = "accountNumber".equals(k.toString()) ? "accountId" : k.toString()
+            def val = v instanceof String ? "\"${escJava(v.toString())}\"" : v.toString()
+            paramsBlock.append("        params.put(\"${escJava(key)}\", ${val});\n")
+        }
+    }
+    def cred = sc.getJSONObject("credentials")
+    if (cred != null && !cred.containsKey("customerId") && cred.getString("userId") != null) {
+        paramsBlock.append("        params.put(\"customerId\", \"${escJava(cred.getString("userId"))}\");\n")
+    }
+    if (paramsBlock.length() == 0) {
+        paramsBlock.append("        params.put(\"userId\", \"B0001\");\n")
+        paramsBlock.append("        params.put(\"customerId\", \"B0001\");\n")
+    }
+
+    methods.append("""
+    /**
+     * Cucumber: ${featureFile}
+     * Target API (future): ${targetPath}
+     * P0: POST /verification/runtime/execute capabilityId=${cap}
+     */
+    @Test
+    @DisplayName("${moduleId}/${scenarioId} — trace API equivalence")
+    void ${methodName}_apiEquivalence() throws Exception {
+        java.util.Map<String, Object> params = new java.util.LinkedHashMap<>();
+${paramsBlock}
+        String payload = objectMapper.writeValueAsString(java.util.Map.of(
+                "capabilityId", "${escJava(cap)}",
+                "parameters", params));
+        var result = mockMvc.perform(post("/verification/runtime/execute")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(payload))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.capabilityId").value("${escJava(cap)}"))
+                .andReturn();
+        String responseBody = result.getResponse().getContentAsString();
+        assertNotNull(responseBody);
+        assertFalse(responseBody.contains("ERROR:"), () -> "Capability execution failed: " + responseBody);
+        assertGolden_${methodName}(responseBody);
+    }
+
+    private void assertGolden_${methodName}(String responseBody) throws Exception {
+        JSONObject golden = JSON.parseObject("${goldenLiteral}");
+        if (golden == null || golden.isEmpty()) {
+            return;
+        }
+        JSONObject envelope = JSON.parseObject(responseBody);
+        String summary = envelope != null ? envelope.getString("resultSummary") : null;
+        if (golden.getBooleanValue("authenticated")) {
+            assertNotNull(summary);
+            assertFalse(summary.startsWith("ERROR"), () -> summary);
+        }
+        JSONArray accounts = golden.getJSONArray("accounts");
+        if (accounts != null && !accounts.isEmpty()) {
+            assertNotNull(summary);
+            accounts.forEach { acc ->
+                if (acc instanceof JSONObject) {
+                    String acctNo = acc.getString("accountNumber");
+                    if (acctNo != null) {
+                        assertTrue(summary.contains(acctNo) || responseBody.contains(acctNo),
+                                () -> "Expected account " + acctNo + " in response");
+                    }
+                }
+            };
+        }
+    }
+""")
+}
+
+def className = "Wc3270TraceEquivalenceTest"
+def pkgPath = testPackage.replace(".", "/")
+def javaFile = javaRoot.resolve("src/test/java").resolve(pkgPath).resolve(className + ".java")
+
+def pom = javaRoot.resolve("pom.xml")
+def pomText = Files.isRegularFile(pom) ? Files.readString(pom, StandardCharsets.UTF_8) : ""
+if (!pomText.contains("spring-boot-starter-test")) {
+    if (pomText.contains("<dependencies>") && !pomText.contains("spring-boot-starter-test")) {
+        def testDep = """
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <version>\${spring.boot.version}</version>
+      <scope>test</scope>
+    </dependency>"""
+        pomText = pomText.replace("<dependencies>", "<dependencies>" + testDep)
+        Files.writeString(pom, pomText, StandardCharsets.UTF_8)
+    }
+}
+
+def javaSource = """package ${testPackage};
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONArray;
+import com.alibaba.fastjson2.JSONObject;
+import com.bank.Application;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+
+/**
+ * Generated from wc3270 trace Cucumber features.
+ * Manifest: ${manifestRel}
+ * Generator: agt_test_generator.c2j.validate
+ */
+@SpringBootTest(classes = Application.class)
+@AutoConfigureMockMvc
+@DisplayName("Phase 7 — wc3270 trace API equivalence")
+class ${className} {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    private static Path projectRoot() {
+        String rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir();
+        return Path.of(rootDir, "${escJava(projectRoot)}").toAbsolutePath().normalize();
+    }
+${methods}
+}
+"""
+
+writeText(javaFile, javaSource)
+
+def indexRel = "test/equivalence/generated-tests-index-${version}.json"
+def index = [
+        schema          : "cobol2java.generated-tests-index",
+        version         : version,
+        projectKey      : projectKey,
+        generatedBy     : "agt_test_generator.c2j.validate",
+        generatedAt     : Instant.now().toString(),
+        cucumberManifest: manifestRel,
+        javaTestClass   : "implementation/java/src/test/java/${pkgPath}/${className}.java",
+        stats           : [
+                mappedTests: mappedTests,
+                gapTests   : gapTests,
+                suiteTests : suiteTests
+        ]
+]
+writeText(rel(indexRel), JSON.toJSONString(index))
+
+def reportRel = "test/equivalence/test-generator-report-${version}.md"
+def report = """# ${projectKey} Test Generator ${version}
+
+- javaTestClass: `implementation/java/src/test/java/${pkgPath}/${className}.java`
+- mappedTests: `${mappedTests}`
+- gapTests (explicit fail): `${gapTests}`
+- suiteTests: `${suiteTests}`
+- cucumberManifest: `${manifestRel}`
+
+Run: `mvn -f implementation/java test -Dtest=${className}`
+"""
+writeText(rel(reportRel), report)
+
+fn.put("n_test_generator_java_class", "${pkgPath}/${className}.java")
+fn.put("n_test_generator_mapped_count", mappedTests)
+fn.put("n_test_generator_gap_count", gapTests)
+return report
+'''

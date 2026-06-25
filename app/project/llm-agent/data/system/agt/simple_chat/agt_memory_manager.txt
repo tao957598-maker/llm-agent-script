@@ -1,0 +1,103 @@
+/*{
+  "title":"Simple Chat Memory Manager",
+  "description":"维护 session_state，并支持最近结果检索与状态写回。",
+  "parameter":[
+    {"name":"action","label":"操作类型","required":true},
+    {"name":"sessionState","label":"会话状态JSON"},
+    {"name":"userMessage","label":"用户消息"},
+    {"name":"assistantMessage","label":"助手消息"},
+    {"name":"intentResult","label":"意图结果JSON"},
+    {"name":"taskRecord","label":"任务记录JSON"},
+    {"name":"newArtifacts","label":"产物列表JSON"}
+  ],
+  "resultPlan":"n_result",
+  "version":1
+}*/
+
+// 保存操作类型
+assign('memory_action', '{{action}}')
+
+// 保存会话状态
+assign('session_state', '{{fn.optional(sessionState, "{}")}}')
+
+// 保存用户消息
+assign('user_message', '{{fn.optional(userMessage, "无")}}')
+
+// 保存助手消息
+assign('assistant_message', '{{fn.optional(assistantMessage, "无")}}')
+
+// 保存意图结果
+assign('intent_result', '{{fn.optional(intentResult, "{}")}}')
+
+// 保存任务记录
+assign('task_record', '{{fn.optional(taskRecord, "{}")}}')
+
+// 保存产物列表
+assign('new_artifacts', '{{fn.optional(newArtifacts, "[]")}}')
+
+// 执行记忆管理
+n_result,tpl_memory_manager,psr_json
+
+// 定义记忆管理模板
+define('tpl_memory_manager', '''
+你是 simple_chat 的会话记忆管理器。
+
+请根据 `action`、现有 `session_state`、本轮消息、任务记录和产物列表，输出严格 JSON。
+
+# action 支持
+- update
+- recall_last_result
+- recall_last_summary
+
+# 规则
+1. `session_state` 至少应包含：
+   - session_id
+   - messages
+   - intent_history
+   - task_history
+   - artifacts
+   - last_api_result_id
+   - last_user_visible_summary_id
+   - last_document_id
+2. 如果 action 是 `update`：
+   - 把 userMessage 和 assistantMessage 作为两条消息追加到 messages；当值为“无”时忽略
+   - 把 intentResult 追加到 intent_history（如果为空对象则忽略）
+   - 把 taskRecord 追加到 task_history（如果为空对象则忽略）
+   - 把 newArtifacts 追加到 artifacts
+   - 如果 newArtifacts 中有 artifact_type = api_result，则更新 last_api_result_id
+   - 如果 newArtifacts 中有 artifact_type = summary，则更新 last_user_visible_summary_id
+   - 如果 newArtifacts 中有 artifact_type = document，则更新 last_document_id
+   - 返回 {"updated_session_state": {...}}
+3. 如果 action 是 `recall_last_result`：
+   - 优先根据 last_api_result_id 从 artifacts 找最近 api_result
+   - 如果没有 api_result，但 userMessage 明显是在追问历史回复（如“你第一次回答了什么”“你刚才怎么说”“你前面说了什么”），则从 session_state.messages 中检索 assistant 消息
+   - 如果提到“第一次”，优先返回第一条 assistant 消息；如果提到“刚才/前面/上一句”，优先返回最近一条 assistant 消息
+   - 如果命中历史 assistant 消息，请包装成统一 artifact，例如：{"artifact_id":"msg_001","artifact_type":"message_recall","source":"conversation_memory","summary":"第一次 assistant 回复内容","raw_data":{"message":"..."}}
+   - 如果仍然找不到，再返回 {"artifact": null, "reason": "当前会话里没有可回溯的结果或历史回复", "updated_session_state": {...}}
+4. 如果 action 是 `recall_last_summary`：
+   - 逻辑同上，但优先检索 summary 类型 artifact
+5. 无论哪种 recall 动作，输出里都必须显式包含 `artifact` 字段；找不到时也要返回 `artifact: null`
+6. 如果输入为空，请自动补齐默认结构。
+7. 仅输出 JSON，不要解释。
+
+# action
+{{memory_action}}
+
+# session_state
+{{session_state}}
+
+# userMessage
+{{user_message}}
+
+# assistantMessage
+{{assistant_message}}
+
+# intentResult
+{{intent_result}}
+
+# taskRecord
+{{task_record}}
+
+# newArtifacts
+{{new_artifacts}}
+''')

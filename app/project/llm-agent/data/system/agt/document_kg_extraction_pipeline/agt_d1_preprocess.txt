@@ -1,0 +1,171 @@
+/*{
+  "title": "文档预处理",
+  "description": "清洗文档文本、提取基础元数据，输出结构化JSON供下游阶段使用",
+  "parameter": [
+    {"name":"documentId","label":"文档ID","required":true,"description":"待处理文档的唯一标识"},
+    {"name":"ksDir","label":"输出目录","required":false,"description":"知识空间输出目录，默认 document_kg_extraction"}
+  ],
+  "version": 1,
+  "resultPlan": "n_output"
+}*/
+
+// 设置默认输出目录
+when('!fn.hasValue(ksDir)', {
+  assign("ksDir", "document_kg_extraction")
+})
+
+// 查询文档基础信息
+n_doc_info_raw, act_kb.selectBy?sql='SELECT id as document_id, knowledge_name as title, extension, store_uri as source_path FROM kb_spaces_folder_knowledge WHERE id="{{documentId}}"'
+
+// 提取文档信息（取第一条记录）
+n_doc_info, act_func?script='''
+  if (n_doc_info_raw && n_doc_info_raw.size() > 0) {
+    return n_doc_info_raw[0]
+  }
+  return [document_id: documentId, title: "Unknown", extension: "", source_path: ""]
+'''
+
+// 查询页面数据（优先使用 analysis_content，否则用 content）
+n_pages_raw, act_kb.selectBy?sql='SELECT page, COALESCE(analysis_content, content) AS text FROM kbs_doc_page_parse WHERE documentId = {{documentId}} ORDER BY page ASC'
+
+// 检查页面数据是否存在
+when('!fn.hasValue(n_pages_raw) || n_pages_raw?size == 0', {
+  // 无页面数据则终止流程
+  act_flow.fail?result='无法获取文档页面数据，documentId={{documentId}}'
+})
+
+// 提取前5页拼接为元数据抽取样本
+n_sample_pages, act_func?script='''
+  def sample = n_pages_raw.take(5)
+  return sample.collect { "--- Page " + it.page + " ---\n" + it.text }.join("\n\n")
+'''
+
+// 计算页面总数
+n_page_count, act_func?script='''
+  return n_pages_raw.size()
+'''
+
+// LLM提取文档元数据
+n_metadata_result, tpl_extract_metadata, psr_json
+
+// 初始化清洗页面累积列表
+n_init_cleaned, act_func?script='''
+  fn.put("cleaned_pages", [])
+  return "ok"
+'''
+
+// 逐页执行基础文本清洗
+foreach('n_page_loop', 'n_pages_raw', {
+  // 当前迭代的页面数据
+  assign("current_page", "{{n_page_loop.item}}")
+
+  // Groovy基础文本清洗：统一换行符、压缩空白、trim
+  n_cleaned_text, act_func?script='''
+    def text = current_page.text ?: ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    def lines = text.split("\n")
+    lines = lines.collect { it.trim() }
+    text = lines.join("\n")
+    while (text.contains("\n\n\n")) {
+      text = text.replace("\n\n\n", "\n\n")
+    }
+    text = text.trim()
+    return text
+  '''
+
+  // 将清洗后的页面累积到列表
+  act_func?script='''
+    def pages = fn.get("cleaned_pages")
+    pages.add([page_no: current_page.page, text: n_cleaned_text])
+    fn.put("cleaned_pages", pages)
+    return "ok"
+  '''
+})
+
+// 获取累积的清洗后页面列表
+n_cleaned_pages, act_func?script='''
+  return fn.get("cleaned_pages") ?: []
+'''
+
+// 组装document.json数据结构
+n_document_json, act_func?script='''
+  def doc = [:]
+  doc.document_id = n_doc_info.document_id ?: documentId
+  doc.title = n_metadata_result?.title ?: n_doc_info?.title ?: ""
+  doc.language = n_metadata_result?.language ?: "zh"
+  doc.page_count = n_page_count
+  doc.author = n_metadata_result?.author ?: ""
+  doc.date = n_metadata_result?.date ?: ""
+  doc.document_number = n_metadata_result?.document_number ?: ""
+  doc.source_system = n_metadata_result?.source_system ?: ""
+  doc.extension = n_doc_info?.extension ?: ""
+  doc.source_path = n_doc_info?.source_path ?: ""
+  doc.pipeline_version = "1.0"
+  return doc
+'''
+
+// 组装pages_cleaned.json数据结构
+n_pages_cleaned, act_func?script='''
+  def result = [:]
+  result.document_id = n_doc_info?.document_id ?: documentId
+  result.page_count = n_page_count
+  result.pages = n_cleaned_pages
+  return result
+'''
+
+// 写入document.json到知识空间
+act_artifact.write?filepath='{{ksDir}}/01_document/document.json'&data='{{n_document_json}}'
+
+// 写入pages_cleaned.json到知识空间
+act_artifact.write?filepath='{{ksDir}}/01_document/pages_cleaned.json'&data='{{n_pages_cleaned}}'
+
+// 输出阶段一执行结果
+n_output, act_func?script='''
+  def result = [:]
+  result.success = true
+  result.stage = "d1_preprocess"
+  result.document_id = n_doc_info?.document_id ?: documentId
+  result.page_count = n_page_count
+  result.output_files = [
+    ksDir + "/01_document/document.json",
+    ksDir + "/01_document/pages_cleaned.json"
+  ]
+  return result
+'''
+
+// 异常处理：捕获错误并返回失败信息
+on_failure({
+  // 构造错误输出
+  n_output, act_func?script='''
+    def result = [:]
+    result.success = false
+    result.stage = "d1_preprocess"
+    result.error = fn.str(sys_failure_task?.result ?: "Unknown error")
+    return result
+  '''
+  // 跳转到流程结束
+  act_flow.go?plan=end
+})
+
+// 元数据提取LLM模板
+define('tpl_extract_metadata', '''
+从以下文档的前几页内容中提取文档元数据。
+
+要求：
+1. 仅基于输入内容提取，无法确定的字段设为空字符串 ""
+2. 严格按 JSON 格式输出，不要任何解释或额外文字
+
+提取字段：
+- title: 文档标题（字符串）
+- language: 文档主要语言代码，zh/en/ja 等（字符串）
+- author: 作者或创建者名称（字符串）
+- date: 文档日期，统一格式 YYYY-MM-DD（字符串）
+- document_number: 文档编号或文号（字符串）
+- source_system: 来源系统名称（字符串）
+- keywords: 文档核心关键词列表，5-10个（字符串数组）
+
+文档内容：
+{{n_sample_pages}}
+
+仅输出 JSON，不要解释。
+''')

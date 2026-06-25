@@ -1,0 +1,21 @@
+/*
+{
+  "title":"COBOL2Java Feedback Loop Orchestrator",
+  "description":"P0：读取诊断报告，根据失败分类自动触发修正。GOLDEN_MISMATCH→标记强制重译；API_NOT_FOUND→触发映射解析；CODE_BUG→通知Phase6。修正后写运行记录，超次升级人工。完全确定性。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"maxRetryCycles","label":"最大自动修正循环次数","required":false,"default":"3"}
+  ],
+  "version":1,
+  "resultPlan":"n_feedback_loop_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_max_retry_cycles','{{fn.optional(maxRetryCycles,"3")}}')
+
+n_feedback_loop_report, act_func.run?expression=feedback_loop_orchestrator_json

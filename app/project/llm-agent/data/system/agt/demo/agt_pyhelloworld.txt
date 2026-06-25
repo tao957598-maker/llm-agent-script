@@ -1,0 +1,29 @@
+/*
+{
+	"title":"文件收集子Agent",
+	"parameter":"{\"name\":\"kb_folder\",\"label\":\"知识空间文件夹路径\",\"type\":\"text\",\"required\":true}",
+	"displayOrder":0,
+	"version":23
+}
+*/
+// 1. 列出所有文件
+n_file_list, act_artifact.list?filepath='{{kb_folder}}'&maxDepth=1
+
+// 2. 初始化空字符串
+assign('all_text', '')
+
+// 3. 循环读取每个 .txt 文件，直接拼接
+foreach('n_file_list', 'n_file_list', {
+    assign('current_file', '{{n_file_list.item}}')
+    when ("current_file.endsWith('.txt')", {
+        n_content, act_artifact.read?filepath='{{current_file}}'
+        n_basename, act_func?script='''
+            def p = current_file
+            return p.contains("/") ? p.substring(p.lastIndexOf("/") + 1) : p
+        '''
+        assign('all_text', '{{all_text}}===FILENAME:{{n_basename}}===\n{{n_content}}\n\n')
+    })
+})
+
+//## 最终输出
+assign('final_output', '{{all_text}}')

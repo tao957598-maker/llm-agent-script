@@ -1,0 +1,36 @@
+/*
+{
+	"title":"意图解析器",
+	"parameter":[
+		{
+			"name":"question",
+			"required":true,
+			"type":"text"
+		},
+		{
+			"name":"history",
+			"required":false,
+			"type":"textarea"
+		}
+	],
+	"displayOrder":0,
+	"version":3
+}
+*/
+define('tpl_parse_intent', '''
+你是一个意图解析器。根据【历史对话】和【用户当前问题】，判断用户想要查询的 JSONPlaceholder 资源，并输出一个JSON对象，包含以下字段：
+- resource: 必须是 "posts"、"users" 或 "comments" 中的一个。
+- query_id: 要查询的具体 ID，如果没有指定则返回空字符串 ""。
+- request: 对数据的分析要求，如“用中文翻译”、“列出所有姓名”等。
+
+【历史对话】
+{{history}}
+
+【用户当前问题】
+{{question}}     // 改为 question
+
+直接输出JSON，不要加任何解释。示例输出：{"resource":"posts","query_id":"2","request":"用中文翻译"}
+''')
+n_intent_json, tpl_parse_intent, psr_json
+//## 最终输出
+assign('final_output', '{{n_intent_json}}')

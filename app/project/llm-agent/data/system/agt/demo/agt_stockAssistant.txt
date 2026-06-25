@@ -1,0 +1,69 @@
+/*
+{
+	"title":"股票助手",
+	"parameter":[
+		{
+			"name":"InputNumber",
+			"label":"输入条件数值",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"GoalType",
+			"label":"选择输出目标类型（Date，OpenPrice,ClosePrice,DailyTradingVolume, DailyTradingAmount,HighestPrice,LowestPrice）",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"InputType",
+			"label":"选择初始目标类型（Date，OpenPrice,ClosePrice,DailyTradingVolume, DailyTradingAmount,HighestPrice,LowestPrice）",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		}
+	],
+	"displayOrder":0,
+	"version":71
+}
+*/
+assign('userQuestion', "查询{{InputType}}为{{InputNumber}}下的{{GoalType}}" )
+//## 第一步：将自然语言需求转换为 MongoDB 查询语句
+n_table_search_data,agt_text_to_mongoql.report?kbsFileName="wp_demo/wp_demo2"&indicatorDesc="{{userQuestion}}"
+
+// ##第二步：执行 MongoDB 查询，获取原始数据
+n_sql_result, act_api.doExecuteDynamic?name=ReportDataSearch&dynamicParamData='{{fn.json("searchMQL, n_table_search_data", true)}}'
+
+log('final result={{n_sql_result.data[0].%{GoalType}%}}')
+
+// ##第三步：从返回结果中直接提取目标参数{{GoalType}}
+n_final, act_func.run?script='''
+    def raw = fn.get("n_sql_result")
+	def data=n_sql_result.data[0]
+    def value = data.get(GoalType)
+'''
+
+assign('output', '{{n_final}}')
+
+
+define('tpl_finance_expert', '''
+	你是一位拥有20年经验的资深金融分析师。请根据下面的查询信息，用**专业、严谨且易懂的中文**给出分析。
+	查询信息：{{output}}
+	要求：
+	- 如果结果包含数字，请解释它在当日行情中的意义（如开盘价、成交量等）。
+	- 语气冷静客观，不要预测未来走势。
+	- 如果数据异常，请指出并分析可能的原因。
+	- 回复控制在150字以内。
+''')
+
+// 调用大模型生成分析
+n_expert_answer,tpl_finance_expert,psr_all
+//##输出最终结果
+assign('value','{{n_expert_answer}}')

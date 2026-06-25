@@ -1,0 +1,338 @@
+/*{
+    "title":"Build module evidence pack",
+    "description":"For each module from the system-level map, produce a module evidence pack that Step2 can consume directly. The evidence pack contains module name, submodule details, source document references, page citations, business rules, acceptance criteria, dependencies, and conflict notes.",
+    "parameter":[
+        {
+            "name":"system_module",
+            "label":"Single module from system-level map"
+        },
+        {
+            "name":"platform",
+            "label":"Platform name"
+        },
+        {
+            "name":"documentId",
+            "label":"Document ID for DB contract"
+        },
+        {
+            "name":"version",
+            "label":"Version for DB contract"
+        },
+        {
+            "name":"outputLanguage",
+            "label":"Output Language",
+            "type":"select",
+            "defaultValue":"en",
+            "args":[
+                {"label":"English","value":"en"},
+                {"label":"Chinese","value":"zh"},
+                {"label":"Traditional Chinese","value":"tw"}
+            ]
+        }
+    ],
+    "llmType":"alias.highquality",
+    "life":6000,
+    "version":1
+}*/
+//# Agent status
+assign("status", 'Agent is running')
+
+// Normalize input module
+n_module_normalized,act_func?script='''
+    def raw = system_module
+    def m = null
+    if (raw instanceof Map) {
+        m = raw.get("value") instanceof Map ? raw.get("value") : raw
+    } else if (raw instanceof List && raw.size() > 0 && raw[0] instanceof Map) {
+        m = raw[0]
+    }
+    if (m == null || !(m instanceof Map)) {
+        throw new RuntimeException("【EVIDENCE】system_module 无效或为空")
+    }
+    def subs = m.get("submodules")
+    if (!(subs instanceof List) || subs.isEmpty()) {
+        throw new RuntimeException("【EVIDENCE】模块 " + (m.get("module_name") ?: "?") + " 无子模块")
+    }
+    return m
+'''
+
+// Estimate evidence pack size for guard
+n_pack_input_size_guard,act_func?script='''
+    def m = n_module_normalized
+    def txt = m == null ? "" : m.toString()
+    int len = txt.length()
+    // 模块输入大小仅记录，过大时由入口层按子模块拆分后分批调用
+    if (len > 180000) {
+        println("[WARN][EVIDENCE] 模块 " + (m.get("module_name") ?: "?") + " 输入 chars=" + len + " 超 180K，依赖入口拆分")
+    }
+    return len
+'''
+
+// LLM: Produce evidence pack from system module
+n_evidence_pack, tpl_build_evidence_pack, psr_json
+
+// Validate evidence pack and normalize to kb_gen_test_module compatible rows
+n_evidence_pack_validate,act_func?script='''
+    def raw = n_evidence_pack
+    def m = null
+    if (raw instanceof Map) {
+        def inner = raw.get("value")
+        m = (inner instanceof Map && inner.get("data") instanceof List) ? inner : raw
+    } else if (raw instanceof List && raw.size() > 0 && raw[0] instanceof Map) {
+        m = raw[0]
+    }
+    if (m == null || !(m instanceof Map)) {
+        throw new RuntimeException("【EVIDENCE】LLM 未返回有效证据包")
+    }
+    def data = m.get("data")
+    if (!(data instanceof List) || data.isEmpty()) {
+        throw new RuntimeException("【EVIDENCE】evidence_pack.data 为空")
+    }
+    def moduleInput = n_module_normalized instanceof Map ? n_module_normalized : [:]
+    def stripChunkSuffix = { name ->
+        def t = (name ?: "").toString().trim()
+        if (!t) return t
+        return t
+    }
+    def defaultDocName = stripChunkSuffix(
+        moduleInput.get("_document_name")
+            ?: moduleInput.get("document_name")
+            ?: moduleInput.get("primary_source")
+    )
+    def expandPages = { rawPage ->
+        def out = []
+        if (rawPage == null) return out
+        def txt = rawPage.toString().trim()
+        if (!txt) return out
+        def nums = []
+        (txt =~ /\d+/).each { nums.add(it.toString()) }
+        if (nums.isEmpty()) return out
+        if (nums.size() == 1) {
+            out.add("Page" + Integer.parseInt(nums[0]))
+            return out
+        }
+        if (nums.size() == 2 && txt.contains("-")) {
+            int start = Integer.parseInt(nums[0])
+            int end = Integer.parseInt(nums[1])
+            if (end < start) { int tmp = start; start = end; end = tmp }
+            for (int i = start; i <= end; i++) out.add("Page" + i)
+        }
+        return out
+    }
+    def collectRefs = { value, fallbackDocName ->
+        def refs = new LinkedHashSet()
+        def docName = stripChunkSuffix(fallbackDocName)
+        def addToken
+        addToken = { token ->
+            def t = (token == null ? "" : token.toString().trim())
+            if (!t) return
+            def idx = t.toLowerCase().lastIndexOf("#page")
+            if (idx > 0) {
+                def fn = stripChunkSuffix(t.substring(0, idx))
+                def pagePart = t.substring(idx + 5).trim()
+                def expanded = expandPages(pagePart)
+                if (!expanded.isEmpty()) {
+                    expanded.each { pg -> refs.add(fn + "#" + pg) }
+                    return
+                }
+                refs.add(fn + "#" + pagePart)
+                return
+            }
+            def expanded = expandPages(t)
+            if (!expanded.isEmpty()) {
+                if (docName) {
+                    expanded.each { pg -> refs.add(docName + "#" + pg) }
+                } else {
+                    expanded.each { pg -> refs.add(pg) }
+                }
+                return
+            }
+            refs.add(t)
+        }
+        if (value instanceof List) {
+            value.each { v -> addToken(v) }
+        } else if (value instanceof Map) {
+            value.values().each { v ->
+                if (v instanceof List) v.each { x -> addToken(x) }
+                else addToken(v)
+            }
+        } else if (value != null) {
+            value.toString().split(/[;,]/).each { part -> addToken(part) }
+        }
+        return refs
+    }
+    def joinRefs = { refs -> refs == null || refs.isEmpty() ? "" : refs.join("; ") }
+    def firstPageFromRefs = { refs ->
+        if (refs == null) return ""
+        for (def ref : refs) {
+            def t = (ref ?: "").toString().trim()
+            def idx = t.toLowerCase().lastIndexOf("#page")
+            if (idx > 0) return t.substring(idx + 1)
+            def pages = expandPages(t)
+            if (!pages.isEmpty()) return pages[0]
+        }
+        return ""
+    }
+    def moduleRefs = new LinkedHashSet()
+    moduleRefs.addAll(collectRefs(moduleInput.get("all_source_pages"), defaultDocName))
+    if (moduleRefs.isEmpty()) moduleRefs.addAll(collectRefs(moduleInput.get("source_pages"), defaultDocName))
+    if (moduleRefs.isEmpty()) moduleRefs.addAll(collectRefs(moduleInput.get("primary_source"), defaultDocName))
+    // Build kb_gen_test_module compatible rows
+    def rows = []
+    data.each { item ->
+        if (!(item instanceof Map)) return
+        def subName = (item.get("submodule_name") ?: "").toString().trim()
+        if (!subName) return
+        def matchedSub = null
+        def subs = moduleInput.get("submodules")
+        if (subs instanceof List) {
+            matchedSub = subs.find { s ->
+                (s instanceof Map) && ((s.get("submodule_name") ?: "").toString().trim() == subName)
+            }
+        }
+        def subDocName = stripChunkSuffix(
+            matchedSub instanceof Map
+                ? (matchedSub.get("_document_name") ?: matchedSub.get("document_name") ?: defaultDocName)
+                : defaultDocName
+        )
+        def mainRefs = new LinkedHashSet()
+        mainRefs.addAll(collectRefs(item.get("main_module_source"), defaultDocName))
+        if (mainRefs.isEmpty()) mainRefs.addAll(moduleRefs)
+        def subRefs = new LinkedHashSet()
+        subRefs.addAll(collectRefs(item.get("submodule_source"), subDocName))
+        if (subRefs.isEmpty() && matchedSub instanceof Map) {
+            subRefs.addAll(collectRefs(matchedSub.get("all_source_pages"), subDocName))
+            if (subRefs.isEmpty()) subRefs.addAll(collectRefs(matchedSub.get("source_roles"), subDocName))
+            if (subRefs.isEmpty()) subRefs.addAll(collectRefs(matchedSub.get("primary_source"), subDocName))
+            if (subRefs.isEmpty()) subRefs.addAll(collectRefs(matchedSub.get("source_pages"), subDocName))
+        }
+        if (subRefs.isEmpty()) subRefs.addAll(mainRefs)
+        def pageVal = (item.get("page") ?: "").toString().trim()
+        if (!pageVal) pageVal = firstPageFromRefs(subRefs)
+        rows.add([
+            platform: "{{platform}}",
+            main_module_name: (item.get("module_name") ?: m.get("module_name") ?: "").toString().trim(),
+            main_module_source: joinRefs(mainRefs),
+            submodule_name: subName,
+            submodule_description: (item.get("submodule_description") ?: item.get("description") ?: "").toString().trim(),
+            submodule_source: joinRefs(subRefs),
+            source_type: "web",
+            change_type: "NEW",
+            page: pageVal,
+            documentId: "{{documentId}}",
+            version: "{{version}}"
+        ])
+    }
+    if (rows.isEmpty()) {
+        throw new RuntimeException("【EVIDENCE】证据包展开后无有效模块行")
+    }
+    fn.put("evidence_module_rows", rows)
+    m.put("_module_rows", rows)
+    return m
+'''
+
+assign("evidence_pack_result", '{{n_evidence_pack_validate}}')
+
+// Template: Build module evidence pack
+define('tpl_build_evidence_pack', '''
+You are producing a **module evidence pack** for ONE module from the system-level map. This evidence pack will be consumed by downstream test design (Step2) and test case (Step3) generation.
+
+# Module to process
+<system_module>
+{{n_module_normalized}}
+</system_module>
+
+# Your task
+
+Convert this module into a set of **flattened submodule evidence rows**. Each row is a self-contained unit that Step2 can process independently.
+
+## For each submodule, produce
+
+1. **module_name**: The parent module name (consistent across submodules in this pack).
+2. **submodule_name**: The submodule name (MUST be unique within this module; if duplicates exist, disambiguate with context suffix).
+3. **submodule_description**: 2-4 sentence summary synthesizing:
+   - What this submodule does
+   - Key capabilities it supports
+   - How it fits in the broader module
+   - If the submodule has `constraints`, append them at the end: "Constraints: [type] [value] — [condition]" (one per constraint)
+4. **main_module_source**: Consolidated source page references for the parent module。**必须使用输入中的原始文档名**（例如 `CSS-CL GM FX Prompt_Detail ver.docx#Page5`），禁止使用缩写或别名。
+5. **submodule_source**: Source page references specific to this submodule。同上，必须使用原始文档名。
+6. **page**: The primary page reference (first page cited).
+7. **constraints**: (Optional) The constraints array from the submodule, if present in the source map. Pass through unchanged — do not modify, merge, or invent.
+
+## Evidence synthesis rules
+
+1. When multiple documents contribute to the same submodule:
+   - Merge their capabilities, rules, and criteria (do not duplicate).
+   - Preserve ALL source document+page references.
+   - Note any conflicts or gaps between source documents at the end of the description.
+
+2. When a submodule appears in only one document:
+   - Use that document's description as the base.
+   - Note any context that neighboring submodules or supplementary documents add.
+
+3. Description quality:
+   - Prefer concrete over generic (e.g., "Validates that email field rejects input without @" not "Validates input").
+   - Preserve original terminology from the documents.
+   - Include the purpose (WHY this submodule matters), not just the mechanism.
+
+## What NOT to do
+
+- Do NOT generate test cases or design points.
+- Do NOT expand descriptions into multi-paragraph narratives.
+- Do NOT invent business rules or dependencies not present in the source maps.
+- Do NOT omit source page references — every submodule row must trace back to concrete evidence.
+
+## Output format（严格遵守）
+
+只输出一个 JSON 对象。不要 ```json 代码块包裹、不要解释文字、不要 markdown。输出的第一个字符必须是 `{`，最后一个必须是 `}`。
+
+{
+  "module_name": "...",
+  "data": [
+    {
+      "module_name": "...",
+      "submodule_name": "...",
+      "submodule_description": "...",
+      "main_module_source": "原始文档名.docx#PageX; 另一文档名.docx#PageY",
+      "submodule_source": "原始文档名.docx#PageX",
+      "page": "PageX",
+      "source_type": "web",
+      "constraints": [
+        {
+          "type": "time_window",
+          "value": "4:55 PM",
+          "condition": "same-day pricing cutoff",
+          "source_page": "PageX"
+        }
+      ]
+    }
+  ]
+}
+
+## Language
+
+All text MUST be in {{outputLanguage}}. Only source references may remain in original form.
+
+## 子模块拆分规则（重要）
+
+每个 submodule 通常产出 1 行 data。但如果某个 submodule 覆盖了多个在功能上明显不同的区域、通道或能力，必须拆分为多行——一行对应一个独立的功能区域。
+
+### 需要拆分的信号
+
+- submodule 同时覆盖多个**不同的 intake 通道**（如 SWIFT、eFax、手动输入、IGTB），各自有独立的校验规则和处理流程
+- submodule 同时覆盖**不同方向的验证逻辑**（如正向校验 vs 负向拒绝），且各自的规则集差异较大
+- submodule 同时覆盖**不同的处理路径**（如同步 vs 异步、自动触发 vs 手动触发）
+- submodule 的 description 中出现了 "A and B"、"A/B" 等并列结构，且 A 和 B 各有独立的业务规则
+
+### 拆分时的要求
+
+- 子模块名使用后缀区分，例如 `Multi-channel Intake - SWIFT`、`Multi-channel Intake - Manual entry`
+- 每行只包含该功能区域专属的 capabilities、business_rules、acceptance_criteria
+- 每行保留属于自己的 source page references，不要跨行复制所有来源页
+- 原子级子模块不拆分——只拆真正复合的
+
+### 冲突处理
+
+If source documents describe the same submodule with conflicting information, note the conflict in submodule_description and keep it as a single row.
+''')

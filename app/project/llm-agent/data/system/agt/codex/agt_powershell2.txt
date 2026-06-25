@@ -1,0 +1,27 @@
+/*
+{
+	"title":"test demo tmp",
+	"description":"test demo tmp",
+	"resultPlan":"s",
+	"parameter":[
+		
+	],
+	"displayOrder":0,
+	"version":3
+}
+*/
+// userInputuserInput
+assign('userInputuserInput',"{{userInput}}")
+
+ 
+// n_collect_data
+n_collect_data, act_rpa.send?command=PowershellCommand&parameters='{"command":"{{userInput}}"}'
+assign('n_collect_datan_collect_data',"{{n_collect_data}}")
+// n_collect_datan_collect_data22
+assign('n_collect_datan_collect_data22',"{{n_collect_data}}")
+// 回车
+act_rpa.send?command=PowershellCommand&parameters='{"key_actions":["ENTER"]}' 
+// 
+act_rpa.send?command=PowershellCommand&parameters='{"command":"非常好","append_enter":false}'
+act_rpa.send?command=PowershellCommand&parameters='{"command":"顺便帮我构建测试用例"}'
+act_rpa.send?command=PowershellCommand&parameters='{"command":"{{userInput}}","key_actions":["ENTER"],"append_enter":false}'

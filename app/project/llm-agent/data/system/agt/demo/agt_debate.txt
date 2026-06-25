@@ -1,0 +1,181 @@
+/*
+{
+	"title":"agt辩论赛（最终版）",
+	"parameter":[
+		{
+			"name":"topic",
+			"label":"辩论主题",
+			"required":true,
+			"type":"text"
+		},
+		{
+			"name":"max_round",
+			"label":"辩论轮数",
+			"required":true,
+			"type":"text"
+		},
+		{
+			"name":"first_speech",
+			"label":"第一个发言（可选，留空则自动生成中立开场白）",
+			"required":false,
+			"type":"text"
+		},
+		{
+			"name":"debater1_prompt",
+			"label":"正方提示词（人设、立场）",
+			"required":false,
+			"type":"textarea"
+		},
+		{
+			"name":"debater2_prompt",
+			"label":"反方提示词（人设、立场）",
+			"required":false,
+			"type":"textarea"
+		},
+		{
+			"name":"opener_prompt",
+			"label":"开场白提示词（留空则中立）",
+			"required":false,
+			"type":"textarea"
+		},
+		{
+			"name":"save_folder",
+			"label":"Word报告保存目录",
+			"required":false,
+			"type":"text",
+			"default":"wp_demo"
+		}
+	],
+	"displayOrder":0,
+	"version":31
+}
+*/
+// 1. 设置默认提示词
+assign('d1_default', '你是一个乐观、理性的辩手，支持正方观点。')
+assign('d2_default', '你是一个悲观、批判性的辩手，支持反方观点。')
+assign('op_default', '你是一个辩论赛主持人，请围绕主题发表一个引人入胜的开场白，介绍辩题背景，吸引观众，但不偏向任何一方。')
+
+assign('d1_prompt', '{{fn.optional(debater1_prompt, d1_default)}}')
+assign('d2_prompt', '{{fn.optional(debater2_prompt, d2_default)}}')
+assign('op_prompt', '{{fn.optional(opener_prompt, op_default)}}')
+
+// 2. 生成中立开场白
+when ("first_speech == '' || first_speech == null", {
+    n_first_speech, agt_opener?topic={{topic}}&prompt={{op_prompt}}
+    assign('opening_speech', '{{n_first_speech}}')
+}, {
+    assign('opening_speech', '{{first_speech}}')
+})
+
+// 初始化正反方发言为空字符串
+assign('speech_a', '')
+assign('speech_b', '')
+
+// 3. 动态生成轮次列表（从1开始，用于显示）
+n_round_list, act_func?script='''
+    def n = max_round as int
+    def list = []
+    for (int i = 1; i <= n; i++) {
+        list.add(i)
+    }
+    return list
+'''
+
+assign('history', '')
+// 记录主持人开场
+assign('opening_log', '''
+**主持人开场**：
+{{opening_speech}}
+''')
+assign('history', '''{{history}}
+
+{{opening_log}}''')
+
+// 4. 循环辩论（正方先发言，反方后回应）
+foreach('n_round_list', 'n_round_list', {
+    // ---------- 正方发言 ----------
+    when ("{{n_round_list.index}} == 0", {
+        // 首轮正方立论：只用角色提示词，不含对方发言
+        assign('d1_full_prompt', '''{{d1_prompt}}
+【重要】这是你的立论发言，请从全新的角度阐述你的核心观点，为后续辩论奠定基础。''')
+    }, {
+        // 后续轮次：传入反方上一轮完整发言 + 避重指令
+        assign('d1_full_prompt', '''{{d1_prompt}}
+对方上一轮的发言：
+{{speech_b}}
+【避免重复】请从新的角度、更深的层次来回应对方的观点，不要重复已经说过的话。''')
+    })
+
+    // 正方发言，opponent_speech 首轮传占位符
+    n_good, agt_debater?topic={{topic}}&opponent_speech={{fn.optional(speech_b, "对方尚未发言")}}&prompt={{d1_full_prompt}}
+    assign('speech_a', '{{n_good}}')
+
+    // ---------- 反方发言 ----------
+    when ("{{n_round_list.index}} == 0", {
+        // 首轮反方：人设 + 正方立论全文
+        assign('d2_full_prompt', '''{{d2_prompt}}
+【正方立论】
+{{speech_a}}
+请针对以上立论进行反驳，**抓住具体漏洞进行攻击**，你的回复必须严格遵循你被赋予的角色设定。''')
+    }, {
+        // 后续轮次：传入正方上一轮完整发言 + 避重指令
+        assign('d2_full_prompt', '''{{d2_prompt}}
+正方上一轮的发言：
+{{speech_a}}
+【避免重复】请从新的角度、更深的层次来回应对方的观点，不要重复已经说过的话。''')
+    })
+
+    n_bad, agt_debater?topic={{topic}}&opponent_speech={{speech_a}}&prompt={{d2_full_prompt}}
+    assign('speech_b', '{{n_bad}}')
+
+    // 记录本轮
+    assign('round_log', '''
+**--- 第{{n_round_list.item}}轮 ---**
+
+**正方**：
+{{speech_a}}
+
+**反方**：
+{{speech_b}}
+''')
+    assign('history', '''{{history}}
+
+{{round_log}}''')
+})
+
+// 5. 生成总结陈词
+define('tpl_summ', '''
+你是一个辩论赛的总结者。请站在{{summ_side}}的立场上，根据以下完整的辩论记录，总结{{summ_side}}的核心观点，要求语言精炼，不超过100字。
+辩论记录：
+{{history}}
+''')
+
+// 正方总结
+assign('summ_side', '正方')
+n_summ1, tpl_summ, psr_all
+// 反方总结
+assign('summ_side', '反方')
+n_summ2, tpl_summ, psr_all
+
+// 将总结追加到历史记录
+assign('summ_log', '''
+**--- 正方总结 ---**
+{{n_summ1}}
+
+**--- 反方总结 ---**
+{{n_summ2}}
+''')
+assign('history', '''{{history}}
+
+{{summ_log}}''')
+
+// 6. 准备文件名（清理辩论主题中的非法字符）
+n_safe_topic, act_func?script='''
+    def t = topic
+    return t.replaceAll("[^a-zA-Z0-9\\u4e00-\\u9fa5]", "_")
+'''
+assign('my_file_name', 'debate-{{n_safe_topic}}')
+assign('report_title', '辩论报告：{{topic}}')
+
+// 7. 调用通用存档子Agent，将完整辩论记录保存为Word报告
+n_file_id, agt_content_to_word?content={{history}}&title={{report_title}}&folder={{fn.optional(save_folder, "wp_demo")}}&file_name={{my_file_name}}

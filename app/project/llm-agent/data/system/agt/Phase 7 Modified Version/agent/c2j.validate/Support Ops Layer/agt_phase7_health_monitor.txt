@@ -1,0 +1,25 @@
+/*
+{
+  "title":"COBOL2Java Phase7 Health Monitor",
+  "description":"P2：收集所有 Agent 的执行统计（成功率、耗时、跳过率、重试次数），检测异常模式并主动告警。完全确定性，不消耗 LLM。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"alertThresholdRetranslation","label":"连续重译告警阈值","required":false,"default":"3"},
+    {"name":"alertThresholdDeadLink","label":"死链数量告警阈值","required":false,"default":"5"},
+    {"name":"alertThresholdSkipRate","label":"跳过率告警阈值","required":false,"default":"0.9"}
+  ],
+  "version":1,
+  "resultPlan":"n_health_monitor_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_alert_threshold_retranslation','{{fn.optional(alertThresholdRetranslation,"3")}}',
+       'n_alert_threshold_dead_link','{{fn.optional(alertThresholdDeadLink,"5")}}',
+       'n_alert_threshold_skip_rate','{{fn.optional(alertThresholdSkipRate,"0.9")}}')
+
+n_health_monitor_report, act_func.run?expression=health_monitor_json

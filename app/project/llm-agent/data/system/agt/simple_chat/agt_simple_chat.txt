@@ -1,0 +1,271 @@
+/*{
+  "title":"Simple Chat Main Agent",
+  "description":"simple_chat 主入口，支持多轮聊天、查询摘要、结果追问与总结写文档。",
+  "parameter":[
+    {"name":"userInput","label":"用户输入","required":true},
+    {"name":"sessionState","label":"会话状态JSON"}
+  ],
+  "resultPlan":"n_result",
+  "version":1
+}*/
+
+// 保存用户输入
+assign('user_input', '{{userInput}}')
+
+// 保存会话状态
+assign('session_state', '{{fn.optional(sessionState, "{}")}}')
+
+// 定义全局短期记忆 key
+assign('simple_chat_global_key', 'simple_chat_session_state')
+assign('simple_chat_first_reply_key', 'simple_chat_first_assistant_reply')
+assign('simple_chat_last_reply_key', 'simple_chat_last_assistant_reply')
+
+// 读取全局短期记忆
+n_global_session_state,act_memory.retrieve?var=simple_chat_session_state&global=true
+n_global_first_reply,act_memory.retrieve?var=simple_chat_first_assistant_reply&global=true
+n_global_last_reply,act_memory.retrieve?var=simple_chat_last_assistant_reply&global=true
+
+// 判断是否需要复用全局短期记忆
+n_use_global_state,act_func?script='''
+def globalState = fn.get('n_global_session_state')
+return (session_state == null || (session_state instanceof Map && session_state.isEmpty()) || session_state.toString().trim() == '{}' || session_state.toString().trim().isEmpty()) && globalState != null
+'''
+
+// 如果当前未传入有效 session_state，则优先复用全局短期记忆
+when('n_use_global_state==true', {
+  assign('session_state', '{{fn.get("n_global_session_state")}}')
+})
+
+// 初始化状态
+n_memory_init,agt_memory_manager?action='update'&sessionState={{session_state}}&userMessage='无'&assistantMessage='无'&intentResult='{}'&taskRecord='{}'&newArtifacts='[]'
+
+// 保存初始化状态
+assign('current_session_state', '{{n_memory_init.updated_session_state}}')
+
+// 调用意图路由器
+n_intent,agt_intent_router?userMessage={{user_input}}&recentMessages={{n_memory_init.updated_session_state.messages}}&taskHistory={{n_memory_init.updated_session_state.task_history}}&artifacts={{n_memory_init.updated_session_state.artifacts}}
+
+// 默认结果
+assign('n_result', '{"assistant_message":"处理中","intent":"{{n_intent.intent}}","updated_session_state":{{current_session_state}}}')
+
+// 处理聊天意图
+when('n_intent.intent == "chat"', {
+  //# 调用聊天模板
+  n_chat_reply,tpl_chat_reply,psr_all
+
+  // 回写聊天消息
+  n_memory_chat,agt_memory_manager?action='update'&sessionState={{current_session_state}}&userMessage={{user_input}}&assistantMessage={{n_chat_reply}}&intentResult={{n_intent}}&taskRecord='{}'&newArtifacts='[]'
+
+  // 组装全局短期记忆
+  assign('global_chat_state', '{{fn.json("session_id,n_memory_chat.updated_session_state.session_id,messages,n_memory_chat.updated_session_state.messages,intent_history,n_memory_chat.updated_session_state.intent_history,task_history,n_memory_chat.updated_session_state.task_history,artifacts,n_memory_chat.updated_session_state.artifacts,last_api_result_id,n_memory_chat.updated_session_state.last_api_result_id,last_user_visible_summary_id,n_memory_chat.updated_session_state.last_user_visible_summary_id,last_document_id,n_memory_chat.updated_session_state.last_document_id")}}')
+
+  // 同步全局短期记忆
+  act_memory.assign?var=simple_chat_session_state&value={{global_chat_state}}&global=true
+  act_memory.assign?var=simple_chat_last_assistant_reply&value={{n_chat_reply}}&global=true
+  when('!fn.hasValue(n_global_first_reply)', {
+    act_memory.assign?var=simple_chat_first_assistant_reply&value={{n_chat_reply}}&global=true
+  })
+
+  // 生成最终结果
+  assign('n_result', '{"assistant_message":"{{n_chat_reply}}","intent":"{{n_intent.intent}}","updated_session_state":{{n_memory_chat.updated_session_state}}}')
+})
+
+// 处理最近结果追问意图
+when('n_intent.intent == "recall_last_result"', {
+  // 检索最近结果
+  n_recall,agt_memory_manager?action='recall_last_result'&sessionState={{current_session_state}}&userMessage={{user_input}}&assistantMessage='无'&intentResult='{}'&taskRecord='{}'&newArtifacts='[]'
+
+  // 生成追问文本兜底
+  n_recall_reply,act_func?script='''
+  def fallback = '当前会话里还没有可回溯的结果或历史回答。'
+  def artifact = null
+  if(n_recall instanceof Map) {
+    artifact = n_recall.artifact
+  }
+  if(artifact instanceof Map) {
+    if(artifact.summary) {
+      return artifact.summary.toString()
+    }
+    if(artifact.raw_data instanceof Map && artifact.raw_data.message) {
+      return artifact.raw_data.message.toString()
+    }
+  }
+  def firstReply = fn.get('n_global_first_reply')
+  def lastReply = fn.get('n_global_last_reply')
+  if(user_input.contains('第一次') && firstReply != null && firstReply.toString().trim()) {
+    return firstReply.toString()
+  }
+  if((user_input.contains('刚才') || user_input.contains('前面') || user_input.contains('上次')) && lastReply != null && lastReply.toString().trim()) {
+    return lastReply.toString()
+  }
+  def messages = []
+  if(current_session_state instanceof Map && current_session_state.messages instanceof List) {
+    messages = current_session_state.messages
+  }
+  def assistantMessages = []
+  messages.each { item ->
+    if(item instanceof Map && item.role == 'assistant' && item.content) {
+      assistantMessages << item.content.toString()
+    }
+  }
+  if(assistantMessages.isEmpty()) {
+    return fallback
+  }
+  if(user_input.contains('第一次')) {
+    return assistantMessages[0]
+  }
+  return assistantMessages[-1]
+  '''
+
+  // 回写追问消息
+  n_memory_recall,agt_memory_manager?action='update'&sessionState={{current_session_state}}&userMessage={{user_input}}&assistantMessage={{n_recall_reply}}&intentResult={{n_intent}}&taskRecord='{}'&newArtifacts='[]'
+
+  // 组装全局短期记忆
+  assign('global_chat_state', '{{fn.json("session_id,n_memory_recall.updated_session_state.session_id,messages,n_memory_recall.updated_session_state.messages,intent_history,n_memory_recall.updated_session_state.intent_history,task_history,n_memory_recall.updated_session_state.task_history,artifacts,n_memory_recall.updated_session_state.artifacts,last_api_result_id,n_memory_recall.updated_session_state.last_api_result_id,last_user_visible_summary_id,n_memory_recall.updated_session_state.last_user_visible_summary_id,last_document_id,n_memory_recall.updated_session_state.last_document_id")}}')
+
+  // 同步全局短期记忆
+  act_memory.assign?var=simple_chat_session_state&value={{global_chat_state}}&global=true
+  act_memory.assign?var=simple_chat_last_assistant_reply&value={{n_recall_reply}}&global=true
+  when('!fn.hasValue(n_global_first_reply)', {
+    act_memory.assign?var=simple_chat_first_assistant_reply&value={{n_recall_reply}}&global=true
+  })
+
+  // 生成最终结果
+  assign('n_result', '{"assistant_message":"{{n_recall_reply}}","intent":"{{n_intent.intent}}","updated_session_state":{{n_memory_recall.updated_session_state}},"recall_payload":{{n_recall}}}')
+})
+
+// 处理查询并摘要意图
+when('n_intent.intent == "query_and_summarize"', {
+  // 生成任务计划
+  n_task_plan,agt_task_planner?intentResult={{n_intent}}&userRequest={{user_input}}&sessionState={{current_session_state}}
+
+  // 执行任务编排
+  n_exec_result,agt_tool_orchestrator?taskPlan={{n_task_plan}}&sessionState={{current_session_state}}
+
+  // 生成执行任务记录
+  assign('task_record_json', '{{fn.json("task_id,n_exec_result.task_id,intent,n_intent.intent,status,n_exec_result.status")}}')
+
+  // 生成摘要回复
+  n_summary_reply,tpl_execution_reply,psr_all
+
+  // 回写执行消息
+  n_memory_exec,agt_memory_manager?action='update'&sessionState={{current_session_state}}&userMessage={{user_input}}&assistantMessage={{n_summary_reply}}&intentResult={{n_intent}}&taskRecord={{task_record_json}}&newArtifacts={{n_exec_result.new_artifacts}}
+
+  // 组装全局短期记忆
+  assign('global_chat_state', '{{fn.json("session_id,n_memory_exec.updated_session_state.session_id,messages,n_memory_exec.updated_session_state.messages,intent_history,n_memory_exec.updated_session_state.intent_history,task_history,n_memory_exec.updated_session_state.task_history,artifacts,n_memory_exec.updated_session_state.artifacts,last_api_result_id,n_memory_exec.updated_session_state.last_api_result_id,last_user_visible_summary_id,n_memory_exec.updated_session_state.last_user_visible_summary_id,last_document_id,n_memory_exec.updated_session_state.last_document_id")}}')
+
+  // 同步全局短期记忆
+  act_memory.assign?var=simple_chat_session_state&value={{global_chat_state}}&global=true
+  act_memory.assign?var=simple_chat_last_assistant_reply&value={{n_summary_reply}}&global=true
+  when('!fn.hasValue(n_global_first_reply)', {
+    act_memory.assign?var=simple_chat_first_assistant_reply&value={{n_summary_reply}}&global=true
+  })
+
+  // 生成最终结果
+  assign('n_result', '{"assistant_message":"{{n_summary_reply}}","intent":"{{n_intent.intent}}","task_id":"{{n_exec_result.task_id}}","updated_session_state":{{n_memory_exec.updated_session_state}}}')
+})
+
+// 处理总结并写文档意图
+when('n_intent.intent == "summarize_and_write"', {
+  // 生成任务计划
+  n_task_plan_doc,agt_task_planner?intentResult={{n_intent}}&userRequest={{user_input}}&sessionState={{current_session_state}}
+
+  // 执行任务编排
+  n_exec_doc,agt_tool_orchestrator?taskPlan={{n_task_plan_doc}}&sessionState={{current_session_state}}
+
+  // 提取写入内容
+  n_doc_content,tpl_doc_content,psr_all
+
+  // 调用文档写入器
+  n_doc_write,agt_document_writer?documentType='markdown'&mode='append_or_create'&targetFile='docs/chat_summary.md'&content={{n_doc_content}}
+
+  // 生成任务记录
+  assign('task_record_doc_json', '{{fn.json("task_id,n_exec_doc.task_id,intent,n_intent.intent,status,n_exec_doc.status")}}')
+
+  // 生成回复
+  n_doc_reply,tpl_document_reply,psr_all
+
+  // 回写消息
+  n_memory_doc,agt_memory_manager?action='update'&sessionState={{current_session_state}}&userMessage={{user_input}}&assistantMessage={{n_doc_reply}}&intentResult={{n_intent}}&taskRecord={{task_record_doc_json}}&newArtifacts={{n_exec_doc.new_artifacts}}
+
+  // 组装全局短期记忆
+  assign('global_chat_state', '{{fn.json("session_id,n_memory_doc.updated_session_state.session_id,messages,n_memory_doc.updated_session_state.messages,intent_history,n_memory_doc.updated_session_state.intent_history,task_history,n_memory_doc.updated_session_state.task_history,artifacts,n_memory_doc.updated_session_state.artifacts,last_api_result_id,n_memory_doc.updated_session_state.last_api_result_id,last_user_visible_summary_id,n_memory_doc.updated_session_state.last_user_visible_summary_id,last_document_id,n_memory_doc.updated_session_state.last_document_id")}}')
+
+  // 同步全局短期记忆
+  act_memory.assign?var=simple_chat_session_state&value={{global_chat_state}}&global=true
+  act_memory.assign?var=simple_chat_last_assistant_reply&value={{n_doc_reply}}&global=true
+  when('!fn.hasValue(n_global_first_reply)', {
+    act_memory.assign?var=simple_chat_first_assistant_reply&value={{n_doc_reply}}&global=true
+  })
+
+  // 生成最终结果
+  assign('n_result', '{"assistant_message":"{{n_doc_reply}}","intent":"{{n_intent.intent}}","task_id":"{{n_exec_doc.task_id}}","updated_session_state":{{n_memory_doc.updated_session_state}}}')
+})
+
+// 定义聊天回复模板
+define('tpl_chat_reply', '''
+你是一个简洁、友好的中文助手。
+
+用户输入：
+{{user_input}}
+
+请直接回复用户，不要输出额外说明。
+{{fn.chatFlag(20)}}
+''')
+
+// 定义结果追问回复模板
+define('tpl_recall_reply', '''
+你是一个会复用历史结果的中文助手。
+
+用户输入：
+{{user_input}}
+
+记忆检索结果：
+{{n_recall}}
+
+如果 `artifact.summary` 存在，优先直接转述它。
+如果 `artifact.raw_data.message` 存在，优先回答那条历史 assistant 回复。
+如果 artifact 为 null，请明确说明当前会话里还没有可回溯的结果或历史回答。
+请直接输出回复文本，不要解释。
+''')
+
+// 定义执行结果回复模板
+define('tpl_execution_reply', '''
+你是一个结果反馈助手。
+
+用户输入：
+{{user_input}}
+
+执行结果：
+{{n_exec_result.execution_result}}
+
+请用简洁中文回复用户，优先给出结论。如果结果中有 `final_summary`，请优先使用它。
+不要输出 JSON，不要解释。
+''')
+
+// 定义文档内容模板
+define('tpl_doc_content', '''
+请从下面执行结果中提取适合写入 Markdown 文档的正文内容。
+如果有 `summary_markdown`，直接输出该内容；否则输出一个简短 Markdown 总结。
+只输出 Markdown 正文，不要解释。
+
+执行结果：
+{{n_exec_doc.execution_result}}
+''')
+
+// 定义文档写入回复模板
+define('tpl_document_reply', '''
+你是一个文档写入反馈助手。
+
+用户输入：
+{{user_input}}
+
+执行结果：
+{{n_exec_doc.execution_result}}
+
+文档写入结果：
+{{n_doc_write}}
+
+请用简洁中文告诉用户是否已经总结并写入文档；如果成功，带上文件路径。
+不要输出 JSON，不要解释。
+''')

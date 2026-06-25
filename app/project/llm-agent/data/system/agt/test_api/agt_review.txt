@@ -1,0 +1,81 @@
+/*{
+  "title": "API Test Review Agent",
+  "description": "Perform quality review on generated API test cases and report issues without rewriting the logic.",
+  "parameter": [
+    {
+      "name": "testCasesJsonPath",
+      "label": "测试用例JSON路径",
+      "required": true
+    },
+    {
+      "name": "apiCatalogJsonPath",
+      "label": "API目录JSON路径",
+      "required": true
+    },
+    {
+      "name": "testRequirementsJsonPath",
+      "label": "测试需求JSON路径",
+      "required": true
+    }
+  ],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+// Read the generated test cases JSON directly from the knowledge-space file path.
+n_test_cases_file_content, act_func.read?filename='{{testCasesJsonPath}}'
+
+// Bind the generated test cases JSON content for template use.
+assign('test_cases_json', '{{n_test_cases_file_content}}')
+
+// Read the API catalog JSON directly from the knowledge-space file path.
+n_api_catalog_file_content, act_func.read?filename='{{apiCatalogJsonPath}}'
+
+// Bind the API catalog JSON content for template use.
+assign('api_catalog_json', '{{n_api_catalog_file_content}}')
+
+// Read the test requirements JSON directly from the knowledge-space file path.
+n_test_requirements_file_content, act_func.read?filename='{{testRequirementsJsonPath}}'
+
+// Bind the test requirements JSON content for template use.
+assign('test_requirements_json', '{{n_test_requirements_file_content}}')
+
+// Generate the review report JSON.
+n_payload, tpl_review_report, psr_json
+
+// Prepare file content for persistence.
+assign('file_content', '{{fn.str(n_payload)}}')
+
+// Persist the generated review report JSON into the knowledge space file.
+n_result, act_func.write?filename='test_api_codex/review_report.json'&data='{{file_content}}'&syncKbs=true
+
+// Prompt template for quality review.
+define('tpl_review_report', '''
+你是 API 测试用例复核器。只做质量检查，不改主逻辑，不重写用例，不补充新步骤。
+输入的 test cases JSON：{{test_cases_json}}
+输入的 API catalog JSON：{{api_catalog_json}}
+输入的 test requirements JSON：{{test_requirements_json}}
+
+输出要求：
+1. 只输出一个合法 JSON 对象。
+2. 对问题进行分类汇总，保持结构化。
+3. 如果没有问题，对应数组输出为空数组。
+4. 不要输出 Markdown、代码块或额外文本。
+
+JSON 结构必须为：
+{
+  "review_report": {
+    "issues": [],
+    "coverage_gaps": [],
+    "duplicates": [],
+    "missing_preconditions": [],
+    "unreachable_steps": []
+  }
+}
+
+每个数组元素建议使用对象，至少包含：
+- id
+- severity
+- message
+- refs
+''')

@@ -1,0 +1,19 @@
+/*{
+  "title":"Async Global Var Reader",
+  "description":"Async child agent reads a global value from the parent, then writes a global marker back for verification.",
+  "parameter":[
+    {"name":"waitSeconds", "label":"等待秒数", "type":"number", "default":1}
+  ],
+  "tag":"cases",
+  "life":100,
+  "version":1,
+  "resultPlan":"n_result"
+}*/
+// ⏳ 先等一下，确保这是一个真正的异步子 agent 场景
+act_flow.wait?second={{waitSeconds}}
+// 👀 重点看这里：子 agent 读取入口 agent 写入的全局变量
+n_parent_global, act_memory.retrieve?var=async_demo_global&global=true
+// ✍️ 再写一个全局变量回去，父 agent 会回读它
+act_memory.assign?var=async_demo_child_seen&value=child-saw-{{n_parent_global}}&global=true
+// child result
+assign('n_result', 'child-saw-{{n_parent_global}}')

@@ -1,0 +1,20 @@
+/*
+{
+	"title": "基于表格生成操作代码",
+	"parameter": [
+    	{
+			"name": "message",
+			"label": "message"
+		},{
+			"name": "wait",
+			"label": "wait",
+			"default":"false"
+		}
+	],
+	"version": 1
+}
+*/
+
+n_result, act_api.doExecuteDynamic?name="codex_msg"&dynamicParamData='{"message":"{{message}}","wait":"{{wait}}"}'
+
+log({{n_result}})

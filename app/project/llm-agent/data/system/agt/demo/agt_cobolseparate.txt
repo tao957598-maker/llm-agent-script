@@ -1,0 +1,239 @@
+/*
+{
+	"title":"COBOL程序智能分类Agent（细粒度聚类版）",
+	"parameter":[
+		{
+			"name":"kb_folder",
+			"label":"知识空间文件夹路径",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"cluster_k",
+			"label":"期望的分组数 (留空则自动，最少8组)",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		}
+	],
+	"displayOrder":0,
+	"version":65
+}
+*/
+// 1. 列出所有文件
+n_file_list, act_artifact.list?filepath='{{kb_folder}}'&maxDepth=1
+
+// 2. 过滤出 .txt 文件
+n_txt_files, act_func?script='''
+    def all = n_file_list
+    def txtList = []
+    for (name in all) {
+        if (name.endsWith(".txt")) {
+            txtList.add(name)
+        }
+    }
+    return txtList
+'''
+
+// 3. 初始化空字符串
+assign('all_code', '')
+
+// 4. 循环读取每个 .txt 文件，拼接
+foreach('n_txt_files', 'n_txt_files', {
+    assign('current_file', '{{n_txt_files.item}}')
+    
+    n_content, act_artifact.read?filepath='{{current_file}}'
+    
+    n_basename, act_func?script='''
+        def p = current_file
+        return p.contains("/") ? p.substring(p.lastIndexOf("/") + 1) : p
+    '''
+    
+    assign('all_code', '{{all_code}}===FILENAME:{{n_basename}}===\n{{n_content}}\n\n')
+})
+
+// 5. 检查 all_code 是否为空
+when ("all_code == ''", {
+    act_say "错误：未找到任何 .txt 文件或所有文件均为空"
+    act_flow.go?plan=end
+})
+
+// === Step 1: LLM 定义特征（保持强化版提示词） ===
+define('tpl_feature_def', '''
+你是一个 COBOL 代码分析专家。请阅读下面所有程序的源代码，分析其中出现的不同技术模式和业务功能，定义一组用于区分程序功能的特征向量。
+
+【强制要求】
+1. 特征必须覆盖代码中实际存在的所有程序类型，包括但不限于：
+   - CICS 在线屏幕交互（SEND MAP, RECEIVE MAP）
+   - CICS 后台业务逻辑（LINK, XCTL, RETURN 等）
+   - 文件读写操作（OPEN, READ, WRITE, CLOSE, SELECT）
+   - SQL 数据库访问（EXEC SQL 的各种语句）
+   - 批处理/报表/数据抽取（EXEC PARM, SORT, MERGE, 打印逻辑等）
+   - 工具/转换/安全子程序（日期转换、字符集转换、加密等）
+   - 主控/调度程序（协调多个 CALL 或 LINK）
+   - 拷贝簿/仅数据结构定义（程序极短，主要包含 COPY 和变量定义）
+2. 必须包含以下维度的特征（每类至少 2 个，总数不少于 20 个）：
+   - CICS 交互相关
+   - 文件操作相关
+   - 数据库/SQL 相关
+   - 程序调用（CALL/LINK）相关
+   - 批处理/排序相关
+   - 程序命名前缀（基于 PROGRAM-ID 的第一个字符或前缀）
+   - 异常处理/终止相关
+   - 一个名为 "is_unknown" 的兜底特征：当程序不属于任何明确类别时，该特征为 1，否则为 0
+3. 每个特征包含 "name" 和 "desc" 字段，值必须用双引号。
+4. 所有特征都应该是可以用 0 或 1 判断的二值特征。
+5. 直接输出 JSON 数组，不要任何解释。
+
+程序代码：
+{{all_code}}
+
+输出示例：
+[
+  {"name": "has_cics_send_map", "desc": "是否包含 EXEC CICS SEND MAP"},
+  {"name": "has_file_open", "desc": "是否包含 OPEN 语句"},
+  ...
+]
+直接输出JSON数组。
+''')
+n_feature_defs, tpl_feature_def, psr_json
+
+// Step 2: 收集子Agent返回的原始字符串（纯文本块方式）
+assign('raw_data_block', '')
+
+foreach('n_txt_files', 'n_txt_files', {
+    assign('current_file', '{{n_txt_files.item}}')
+    n_combined, agt_vector_generator?file_path={{current_file}}&feature_defs={{n_feature_defs}}
+    n_new_block, act_func?script='''
+        def line = n_combined.toString()
+        if (line != null && line.contains("::")) {
+            def existing = raw_data_block
+            return (existing != null && !existing.isEmpty()) ? existing + "\n" + line : line
+        }
+        return raw_data_block
+    '''
+    assign('raw_data_block', '{{n_new_block}}')
+})
+
+n_file_count, act_func?script='''
+    def block = raw_data_block
+    if (block == null || block.isEmpty()) return 0
+    return block.split("\n").length
+'''
+assign('file_count', '{{n_file_count}}')
+
+when ("{{file_count}} == 0", {
+    act_say "错误：没有成功生成任何向量"
+    act_flow.go?plan=end
+})
+
+// === Step 3: 增强聚类（全维度 + 标准化 + 动态k最少8组） ===
+n_py_file, act_python.writeTmp?requirement='聚类'&path='tmp/cluster_analysis.py'&sourceCode='''
+import json, math, random, sys
+
+raw_block = """{{raw_data_block}}"""
+
+vectors = []
+file_names = []
+for line in raw_block.strip().split("\n"):
+    line = line.strip()
+    if not line: continue
+    idx = line.index("::")
+    fname = line[:idx].strip()
+    vec_str = line[idx+2:].strip()
+    vec = json.loads(vec_str)
+    vec = [float(x) for x in vec]
+    vectors.append(vec)
+    file_names.append(fname)
+
+if not vectors:
+    print("ERROR: no vectors")
+    sys.exit(0)
+
+n = len(vectors)
+d = len(vectors[0])
+
+# 关键改进1：使用全部维度，不做硬截断
+X = [v[:] for v in vectors]
+
+# 关键改进2：Z-score 标准化，消除量纲差异
+means = [sum(vals)/n for vals in zip(*X)]
+stds = []
+for j in range(d):
+    var = sum((v[j]-means[j])**2 for v in X) / n
+    stds.append(var**0.5)
+for v in X:
+    for j in range(d):
+        v[j] = (v[j] - means[j]) / (stds[j] if stds[j] > 0 else 1.0)
+
+def kmeans(X, k, max_iters=100):   # 迭代次数增至100
+    random.seed(42)
+    centers = random.sample(X, k)
+    labels = [0] * len(X)
+    for _ in range(max_iters):
+        changed = False
+        for i, point in enumerate(X):
+            dists = [sum((p-c)**2 for p,c in zip(point, center)) for center in centers]
+            new_label = dists.index(min(dists))
+            if new_label != labels[i]:
+                labels[i] = new_label
+                changed = True
+        if not changed: break
+        for ci in range(k):
+            pts = [X[j] for j in range(len(X)) if labels[j] == ci]
+            if pts:
+                centers[ci] = [sum(dim)/len(pts) for dim in zip(*pts)]
+    return labels
+
+k_input = sys.argv[1] if len(sys.argv) > 1 else None
+# 关键改进3：自动k值下限提升至8，上限20，公式 sqrt(n)
+if k_input and k_input.strip():
+    k = int(k_input)
+else:
+    k = max(8, min(20, int(math.sqrt(n))))
+k = min(k, n)
+
+labels = kmeans(X, k)
+
+clusters = {}
+for i, lbl in enumerate(labels):
+    clusters.setdefault(str(lbl), []).append(file_names[i])
+output = [{"cluster_id": cid, "members": members} for cid, members in clusters.items()]
+print(json.dumps(output, ensure_ascii=False))
+'''
+
+n_cluster_json, act_python.run?filepath='{{n_py_file.kbspath}}'&argument='{{cluster_k}}'
+
+// 空值检查
+n_is_empty, act_func?script='''
+    def val = n_cluster_json
+    if (val == null) return "1"
+    def str = val.toString().trim()
+    return (str.isEmpty()) ? "1" : "0"
+'''
+
+when ("{{n_is_empty}} == '1'", {
+    act_say "聚类失败，Python 没有输出结果"
+    act_flow.go?plan=end
+})
+
+// === Step 4: LLM 生成簇标签 ===
+define('tpl_labels', '''
+根据以下聚类结果，为每个簇生成简短的业务功能标签和描述。
+聚类结果：
+{{n_cluster_json}}
+输出JSON数组：[{"cluster_id":"0", "label":"...", "desc":"..."}, ...]
+直接输出JSON。
+''')
+n_labels, tpl_labels, psr_json
+
+// === Step 5: 合并结果并保存 Word ===
+assign('final_json', '{"clusters": {{n_labels}}, "details": {{n_cluster_json}}}')
+n_file_id, agt_content_to_word?content='{{final_json}}'&title=COBOL程序分类报告&folder=wp_demo&file_name=cobol_classification
+
+act_say "分类完成！报告ID：{{n_file_id}}，共处理 {{file_count}} 个程序。"

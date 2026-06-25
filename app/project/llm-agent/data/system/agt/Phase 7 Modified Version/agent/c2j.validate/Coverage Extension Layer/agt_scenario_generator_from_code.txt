@@ -1,0 +1,125 @@
+/*
+{
+  "title":"COBOL2Java Scenario Generator from Code",
+  "description":"P1：读取 C1 覆盖分析报告中的 CRITICAL/HIGH 未覆盖分支，用 LLM 从 COBOL 源码推断测试场景，生成标记为 CODE_INFERRED 的补充 scenario.json。置信度上限 0.75。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"coverageReportRel","label":"覆盖分析报告路径","required":false,"default":"test/equivalence/coverage-analysis-v1.json"},
+    {"name":"maxScenarios","label":"最多生成场景数","required":false,"default":"10"}
+  ],
+  "version":1,
+  "resultPlan":"n_scenario_generator_from_code_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_coverage_report_rel','{{fn.optional(coverageReportRel,"test/equivalence/coverage-analysis-v1.json")}}',
+       'n_max_scenarios','{{fn.optional(maxScenarios,"10")}}')
+
+//# 读取覆盖分析报告，筛选 CRITICAL/HIGH 的未覆盖分支
+n_actionable_branches, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONArray
+import com.alibaba.fastjson2.JSONObject
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim()
+def coverageRel = fn.str(fn.get("n_coverage_report_rel")) ?: "test/equivalence/coverage-analysis-v1.json"
+def maxScenarios = 10
+try { maxScenarios = Integer.parseInt((fn.str(fn.get("n_max_scenarios")) ?: "10").trim()) } catch (Throwable ignored) {}
+
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def reportPath = base.resolve(coverageRel.replace("/", java.io.File.separator))
+if (!Files.isRegularFile(reportPath)) return "[]"
+
+def report = JSON.parseObject(Files.readString(reportPath, StandardCharsets.UTF_8))
+def actions = report.getJSONArray("recommendedActions") ?: new JSONArray()
+def filtered = new JSONArray()
+
+for (int i = 0; i < actions.size() && filtered.size() < maxScenarios; i++) {
+    def a = actions.getJSONObject(i)
+    if (a.getString("action") == "GENERATE_SCENARIO_FROM_CODE") {
+        def priority = a.getString("priority") ?: "HIGH"
+        if ("CRITICAL".equals(priority) || "HIGH".equals(priority)) {
+            // 附加上下文：找到对应的 COBOL 源文件
+            def moduleId = a.getString("branchId")?.split("-")?.size() > 1 ? a.getString("branchId").split("-")[1] : "unknown"
+            def cobolRel = null
+            def sourceRoot = base.resolve("source")
+            if (Files.isDirectory(sourceRoot)) {
+                def found = Files.walk(sourceRoot).filter { it.fileName.toString().toUpperCase().contains(moduleId) && it.toString().endsWith(".cbl") }.findFirst()
+                if (found.isPresent()) cobolRel = base.relativize(found.get()).toString()
+            }
+            a.put("moduleId", moduleId)
+            a.put("cobolSourceRel", cobolRel)
+            filtered.add(a)
+        }
+    }
+}
+
+fn.put("n_actionable_branches_count", String.valueOf(filtered.size()))
+return JSON.toJSONString(filtered)
+'''
+
+//# 使用 LLM 为每个分支生成 scenario
+foreach('n_branch', 'n_actionable_branches', {
+    assign('n_current_branch_id', '{{n_branch.item.branchId}}')
+    assign('n_current_cobol_rel', '{{n_branch.item.cobolSourceRel}}')
+
+    // 读取 COBOL 源码片段
+    n_cobol_snippet, act_artifact.read?filepath='{{n_project_root}}/{{n_current_cobol_rel}}'&maxLength=80000
+
+    // LLM 生成 scenario
+    n_generated_scenario_json, tpl_generate_scenario_from_code, psr_json?required='schema,moduleId,scenarioId', \
+      vrf_flag?value='fn.hasValue(sys_last_result,"moduleId") && fn.hasValue(sys_last_result,"scenarioId")'
+
+    // 落盘为 scenario.json，标记 CODE_INFERRED
+    n_scenario_write_result, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONObject
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim()
+def sc = JSON.parseObject(fn.str(fn.get("n_generated_scenario_json")))
+sc.put("schema", "cobol2java.wc3270-scenario")
+sc.put("version", "v1")
+sc.put("scenarioSource", "CODE_INFERRED")
+sc.put("traceFile", null)
+def meta = sc.getJSONObject("goldenMetadata") ?: new JSONObject()
+meta.put("goldenSource", "code-analysis")
+if (sc.getDoubleValue("confidence") > 0.75) sc.put("confidence", 0.75)
+sc.put("goldenMetadata", meta)
+
+def moduleId = sc.getString("moduleId") ?: "inferred"
+def scenarioId = sc.getString("scenarioId") ?: "scenario"
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def outRel = "verification/trace-scenarios/by-module/${moduleId}/${scenarioId}-code-inferred.scenario.json"
+def out = base.resolve(outRel.replace("/", java.io.File.separator))
+Files.createDirectories(out.getParent())
+Files.writeString(out, JSON.toJSONString(sc), StandardCharsets.UTF_8)
+return "wrote " + outRel
+'''
+})
+
+assign('n_scenario_generator_from_code_report', '''# 代码推断场景生成报告
+
+- 覆盖缺口来源: {{n_coverage_report_rel}}
+- 待处理分支数: {{n_actionable_branches_count}}
+- 生成场景数: {{n_actionable_branches_count}}
+
+所有生成的 scenario 标记为 CODE_INFERRED（traceFile=null, confidence≤0.75）。
+''')
+
+define('tpl_generate_scenario_from_code', '''
+你是 COBOL2Java 测试场景生成器。根据 COBOL 源码片段推断测试场景。
+
+# COBOL 源码片段

@@ -1,0 +1,79 @@
+/*{
+  "title": "Weather Chat Demo",
+  "description": "Simple weather conversation demo that extracts a city, calls tool_get_weather, and returns a short Chinese reply.",
+  "parameter": [
+    {"name":"userInput","label":"用户输入","required":true}
+  ],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+//# 天气查询 Chat Demo
+//## 输入准备
+//$ userInput
+assign('user_input', '{{userInput}}')
+
+//## 城市抽取
+//# 将用户输入整理成结构化 JSON，判断是否已经包含城市
+n_extract, tpl_extract_city, psr_json
+
+//## 条件分支
+//# 如果没有识别到城市，就直接返回澄清问题
+when('n_extract.needClarify==true', {
+  //## 追问结果
+  //$ n_extract.reply
+  assign('n_result', '{{n_extract.reply}}')
+}, {
+  //## 调用天气工具
+  //$ n_extract.city
+  assign('city', '{{n_extract.city}}')
+
+  //## 组装参数
+  //$ city
+  assign('weather_params', '{{fn.jsonObj("city, city")}}')
+
+  //# 调用 API 工具 tool_get_weather，并传入 city 参数
+  n_weather_data, act_api.doExecuteDynamic?name="tool_get_weather"&dynamicParamData={{weather_params}}
+
+  //## 保存天气结果
+  //$ n_weather_data
+  assign('weather_raw', '{{n_weather_data}}')
+
+  //## 生成最终回复
+  n_result, tpl_weather_reply, psr_all
+})
+
+//## 城市抽取模板
+define('tpl_extract_city', '''
+你是一个天气查询助手的参数抽取器。
+请根据用户输入判断是否已经给出了城市名。
+
+用户输入：
+{{user_input}}
+
+输出要求：
+1. 只返回 JSON
+2. JSON 格式固定为：
+   {"needClarify": true/false, "city": "城市名或空字符串", "reply": "需要追问时的中文一句话"}
+3. 如果能识别到城市，needClarify 必须是 false，city 填城市名，reply 置空字符串
+4. 如果识别不到城市，needClarify 必须是 true，city 置空字符串，reply 给出简短追问，例如“请告诉我你要查询的城市名”
+''')
+
+//## 天气回复模板
+define('tpl_weather_reply', '''
+你是一个简洁的中文天气查询助手。
+请根据城市和工具返回结果，输出一句自然、简短的回复，不要展示推理过程。
+
+城市：
+{{city}}
+
+工具返回结果：
+{{weather_raw}}
+
+要求：
+1. 只输出最终回复
+2. 语气自然，像对话一样
+3. 如果工具结果信息足够，就直接总结天气
+4. 如果工具结果信息不足，也要尽量给出友好的说明
+{{fn.chatFlag(20)}}
+''')

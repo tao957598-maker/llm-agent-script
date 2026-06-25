@@ -1,0 +1,54 @@
+/*{
+  "title": "Test Requirement Parse Agent",
+  "description": "Extract structured API test requirements from a requirement markdown document.",
+  "parameter": [
+    {
+      "name": "requirementDocContent",
+      "label": "测试需求文档内容",
+      "required": true
+    }
+  ],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+// Bind the raw requirement document text for template use.
+assign('requirement_doc_content', '{{requirementDocContent}}')
+
+// Generate structured test requirement JSON from the source document.
+n_payload, tpl_test_requirements, psr_json
+
+// Prepare file content for persistence.
+assign('file_content', '{{fn.str(n_payload)}}')
+
+// Persist the generated test requirements JSON into the knowledge space file.
+n_result, act_func.write?filename='test_api_codex/test_requirements.json'&data='{{file_content}}'&syncKbs=true
+
+// Prompt template for test requirement extraction.
+define('tpl_test_requirements', '''
+你是 API 测试需求解析器。
+只根据输入内容整理测试需求清单，不要匹配接口，不要写测试步骤，不要推测。
+
+输入的测试需求文档内容：
+{{requirement_doc_content}}
+
+输出要求：
+1. 只输出一个合法 JSON 对象。
+2. 如果文档包含多个需求，请在 test_requirements 数组中逐条输出。
+3. 缺失字段必须保留，无法提取时使用空字符串、空数组或空对象，不要猜测。
+4. 不要输出 Markdown、代码块或额外文本。
+
+JSON 结构必须为：
+{
+  "test_requirements": [
+    {
+      "requirement_id": "",
+      "feature": "",
+      "scenario": "",
+      "priority": "",
+      "expected_result": "",
+      "constraints": []
+    }
+  ]
+}
+''')

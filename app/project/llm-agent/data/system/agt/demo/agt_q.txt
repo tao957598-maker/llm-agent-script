@@ -1,0 +1,44 @@
+/*
+{
+	"title":"Data Fetcher",
+	"parameter":[
+		{
+			"name":"resource",
+			"label":"资源类型",
+			"args":[
+				{
+					"label":"帖子",
+					"value":"posts"
+				},
+				{
+					"label":"用户",
+					"value":"users"
+				},
+				{
+					"label":"评论",
+					"value":"comments"
+				}
+			],
+			"required":true,
+			"type":"select"
+		},
+		{
+			"name":"query_id",
+			"label":"指定ID (留空则返回列表)",
+			"required":false,
+			"type":"text"
+		}
+	],
+	"displayOrder":0,
+	"version":1
+}
+*/
+// 构造请求路径
+assign('endpoint', '{{resource}}')
+when ("query_id != ''", {
+    assign('endpoint', '{{resource}}/{{query_id}}')
+})
+// 调用 JSONPlaceholder API
+n_raw_data, act_api.doExecuteDynamic?name='jsonplaceholder'&dynamicParamData='{"resource":"{{endpoint}}"}'
+//## 最终输出
+assign('final_output', '{{n_raw_data}}')

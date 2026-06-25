@@ -1,0 +1,14 @@
+/*{
+  "title": "Seed auto_test.kb_test student data",
+  "description": "Write sample student rows into system/db/sql/auto_test/kb_test with act_artifact.write",
+  "parameter": [],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+// Set the target table mount path system/db/sql/schema_xxx/table_xxx
+assign('file_path', 'system/db/sql/llm_agent/kbs_student_info')
+// Build sample student rows
+assign('file_content', '[{"student_no":"S001","student_name":"Alice","gender":"F","age":20,"grade":"Sophomore","class_name":"CS-1","major":"Computer Science"},{"student_no":"S002","student_name":"Bob","gender":"M","age":19,"grade":"Freshman","class_name":"SE-2","major":"Software Engineering"},{"student_no":"S003","student_name":"Cindy","gender":"F","age":21,"grade":"Junior","class_name":"AI-1","major":"Artificial Intelligence"},{"student_no":"S004","student_name":"David","gender":"M","age":20,"grade":"Sophomore","class_name":"DS-1","major":"Data Science"},{"student_no":"S005","student_name":"Ethan","gender":"M","age":18,"grade":"Freshman","class_name":"IS-1","major":"Information Security"}]')
+// Write to auto_test.kb_test
+n_result, act_artifact.write?filepath='{{file_path}}'&data='{{file_content}}'

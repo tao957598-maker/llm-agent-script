@@ -1,0 +1,60 @@
+/*{
+  "title":"Simple Chat Result Summarizer",
+  "description":"将原始结果、长文本或对话内容总结为用户可读的结构化摘要。",
+  "parameter":[
+    {"name":"sourceType","label":"来源类型","required":true},
+    {"name":"rawData","label":"原始数据","required":true},
+    {"name":"userIntent","label":"用户意图"},
+    {"name":"summaryStyle","label":"摘要风格"}
+  ],
+  "resultPlan":"n_result",
+  "version":1
+}*/
+
+// 保存来源类型
+assign('source_type', '{{sourceType}}')
+
+// 保存原始数据
+assign('raw_data', '{{rawData}}')
+
+// 保存用户意图
+assign('user_intent', '{{fn.optional(userIntent, "query_and_summarize")}}')
+
+// 保存摘要风格
+assign('summary_style', '{{fn.optional(summaryStyle, "concise")}}')
+
+// 调用摘要模板
+n_result,tpl_result_summarizer,psr_json
+
+// 定义摘要模板
+define('tpl_result_summarizer', '''
+你是结果摘要模块，需要把原始结果转成用户可读说明。
+
+# 要求
+1. 保留原始含义，不要篡改数据。
+2. 如果 `summaryStyle` 为 `concise`，输出简短结论。
+3. 如果 `summaryStyle` 为 `document_markdown`，输出适合文档写入的 Markdown 内容。
+4. 如果 `summaryStyle` 为 `bullet_points`，输出条目式摘要。
+5. 尽量抽取关键字段；如果数据是长文本或对话，请总结核心内容。
+6. `can_show_raw` 根据是否适合直接展示原始结果判断。
+7. 仅输出 JSON，不要解释。
+
+# sourceType
+{{source_type}}
+
+# userIntent
+{{user_intent}}
+
+# summaryStyle
+{{summary_style}}
+
+# rawData
+{{raw_data}}
+
+# 输出格式
+{
+  "summary_text": "摘要文本",
+  "key_points": ["要点1", "要点2"],
+  "can_show_raw": true
+}
+''')

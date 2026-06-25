@@ -1,0 +1,129 @@
+/*
+{
+	"title":"动态通用特征向量生成器",
+	"parameter":[
+		{
+			"name":"file_path",
+			"label":"文件路径",
+			"required":true,
+			"type":"text"
+		},
+		{
+			"name":"feature_list",
+			"label":"技术特征列表(逗号分隔)",
+			"required":true,
+			"type":"text"
+		},
+		{
+			"name":"semantic_names",
+			"label":"语义特征名列表(逗号分隔)",
+			"required":true,
+			"type":"text"
+		}
+	],
+	"displayOrder":0,
+	"version":1
+}
+*/
+// 1. 读取文件内容
+n_content, act_artifact.read?filepath='{{file_path}}'
+
+// 2. 提取纯文件名
+assign('full_path', '{{file_path}}')
+n_basename, act_func?script='''
+    def p = full_path
+    return p.contains("/") ? p.substring(p.lastIndexOf("/") + 1) : p
+'''
+
+// 3. 将内容保存为变量
+assign('code', '{{n_content}}')
+
+// 4. 技术特征提取：根据feature_list中每个特征名判断0/1
+n_tech_vec, act_func?script='''
+    def code_s = code
+    def featStr = feature_list
+    if (featStr == null || featStr.isEmpty()) {
+        return "0"
+    }
+    def features = featStr.split(",")
+    def results = []
+    for (fname in features) {
+        fname = fname.trim()
+        if (fname.isEmpty()) {
+            results.add(0)
+        } else if (fname.startsWith("has_")) {
+            // has_execcics_sendmap -> 检测 "SEND MAP"
+            def keyword = fname.substring(4).replace('_', ' ').toUpperCase()
+            results.add(code_s.contains(keyword) ? 1 : 0)
+        } else if (fname.startsWith("prefix_")) {
+            def expected = fname.substring(7)
+            def matcher = (code_s =~ /PROGRAM-ID\.\s+(\w+)/)
+            if (matcher.find()) {
+                def progId = matcher.group(1)
+                results.add(progId.startsWith(expected) ? 1 : 0)
+            } else {
+                results.add(0)
+            }
+        } else {
+            results.add(0)
+        }
+    }
+    return results.join(",")
+'''
+
+// 5. 语义特征提取：LLM判断
+define('tpl_sem_vec', '''
+分析下面的COBOL程序代码，判断它是否符合下列每一项业务功能描述。
+请严格按照顺序输出一个包含15个数字的数组，每个数字为0或1。
+顺序对应：
+1.is_online_screen(在线屏幕交互如SEND/RECEIVE MAP)
+2.is_online_business(在线业务逻辑层)
+3.is_batch_report(批处理报表生成)
+4.is_batch_data_extract(批处理数据抽取转换)
+5.is_data_access_layer(数据访问层)
+6.is_utility_subroutine(通用工具子程序)
+7.is_security(安全/鉴权功能)
+8.is_validation(数据验证或清洗)
+9.is_conversion(数据格式转换)
+10.is_abend_handler(异常终止处理)
+11.is_test_stub(测试桩或空程序)
+12.is_main_controller(主控程序协调多个子程序)
+13.is_scheduler(作业调度或流程控制)
+14.is_user_interface(非CICS的用户界面如菜单)
+15.is_unknown(无法归类到上述任何类型)
+
+程序代码（仅前2000字符）：
+{{code}}
+
+输出示例：[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+只输出数组，不要任何解释。
+''')
+n_sem_vec_raw, tpl_sem_vec, psr_json
+
+// 6. 合并向量
+assign('tech_str', '{{n_tech_vec}}')
+assign('sem_str', '{{n_sem_vec_raw}}')
+n_full_vec, act_func?script='''
+    def techS = tech_str
+    def semS = sem_str.toString()
+    // 清理语义向量：去掉方括号和空格
+    semS = semS.replaceAll("[\\[\\] ]", "")
+    // 确保语义向量有15个值，不足补0
+    def semParts = semS.split(",")
+    def sb = new StringBuilder()
+    for (int i = 0; i < 15; i++) {
+        if (i > 0) sb.append(",")
+        if (i < semParts.length && semParts[i].matches("\\d+")) {
+            sb.append(semParts[i])
+        } else {
+            sb.append("0")
+        }
+    }
+    return "[" + techS + "," + sb.toString() + "]"
+'''
+
+// 7. 输出：文件名::[向量]
+assign('final_vec', '{{n_full_vec}}')
+n_result, act_func?script='''
+    return n_basename + "::" + final_vec
+'''

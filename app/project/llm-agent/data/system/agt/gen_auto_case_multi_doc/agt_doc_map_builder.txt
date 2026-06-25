@@ -1,0 +1,203 @@
+/*{
+    "title":"Build single-document map",
+    "description":"Build a structured index (map) for a single document from its pages, extracting modules, submodules, capabilities, rules, dependencies, and source page references. This is Phase 1 of the Map architecture.",
+    "parameter":[
+        {
+            "name":"document_pages",
+            "label":"Document pages (JSON array)"
+        },
+        {
+            "name":"documentName",
+            "label":"Document file name"
+        },
+        {
+            "name":"platform",
+            "label":"System/Platform name"
+        },
+        {
+            "name":"outputLanguage",
+            "label":"Output Language",
+            "type":"select",
+            "defaultValue":"en",
+            "args":[
+                {"label":"English","value":"en"},
+                {"label":"Chinese","value":"zh"},
+                {"label":"Traditional Chinese","value":"tw"}
+            ]
+        }
+    ],
+    "llmType":"alias.highquality",
+    "life":6000,
+    "version":2
+}*/
+//# Agent status
+assign("status", 'Agent is running')
+
+// Normalize document pages input
+n_pages_normalized,act_func?script='''
+    def raw = document_pages
+    if (raw == null) raw = []
+    if (!(raw instanceof List)) raw = [raw]
+    def out = []
+    raw.each { r ->
+        if (!(r instanceof Map)) return
+        def content = (r.get("content") ?: "").toString().trim()
+        if (!content) return
+        out.add([
+            page: (r.get("page") ?: "").toString().trim(),
+            content: content,
+            source_ref: (r.get("source_ref") ?: r.get("source") ?: "").toString().trim()
+        ])
+    }
+    if (out.isEmpty()) {
+        println("[WARN][MAP·单文件] document_pages 为空（可能 .doc 解析失败），跳过该文档")
+        fn.put("_doc_skip", "true")
+    }
+    return out
+'''
+
+// 空页面跳过 LLM，返回空 map 不阻断其他文档
+n_doc_skip_check,act_func?script='''
+    if (fn.get("_doc_skip") == "true") return "true"
+    return "false"
+'''
+when('n_doc_skip_check == "true"', {
+    n_doc_map_empty,act_func?script='''
+        return [platform: "{{platform}}", document_name: "{{documentName}}", modules: [], _meta: [document_name: "{{documentName}}", platform: "{{platform}}", module_count: 0, submodule_count: 0, input_chars: 0, skipped: true]]
+    '''
+    assign("doc_map_result", '{{n_doc_map_empty}}')
+}, {
+// Validate total input does not exceed reasonable limit
+n_input_guard,act_func?script='''
+    def pages = n_pages_normalized
+    int totalChars = 0
+    pages.each { p -> totalChars += (p.content ?: "").toString().length() }
+    // 字符量仅记录，大文档在入口层拆分后分次调用，此处不再硬阻断
+    if (totalChars > 300000) {
+        println("[WARN][MAP·单文件] document_pages totalChars=" + totalChars + " 超 300K，依赖入口拆分")
+    }
+    return totalChars
+'''
+
+// LLM: Build single-document structured map（不重试，同输入同输出，重试没有意义）
+n_doc_map, tpl_build_doc_map, psr_json
+
+// Validate map result — 格式不对直接失败，不浪费时间重试
+n_doc_map_validate,act_func?script='''
+    def raw = n_doc_map
+    def m = null
+    if (raw instanceof Map) {
+        def inner = raw.get("value")
+        m = (inner instanceof Map && inner.get("modules") instanceof List) ? inner : raw
+    } else if (raw instanceof List && raw.size() > 0 && raw[0] instanceof Map) {
+        m = raw[0]
+    }
+    if (m == null || !(m instanceof Map)) {
+        println("[ERROR][MAP·单文件] LLM 返回无效 map — 文档内容可能无法解析（乱码/格式异常），跳过 " + "{{documentName}}" + "，请检查源文档")
+        return [platform: "{{platform}}", document_name: "{{documentName}}", modules: [], _meta: [document_name: "{{documentName}}", platform: "{{platform}}", module_count: 0, submodule_count: 0, input_chars: 0, skipped: true, skip_reason: "LLM returned invalid JSON — document content may be garbled or unparseable"]]
+    }
+    def modules = m.get("modules")
+    if (!(modules instanceof List) || modules.isEmpty()) {
+        println("[WARN][MAP·单文件] map.modules 为空（文档无有效模块），跳过 " + "{{documentName}}")
+        m.put("_meta", [document_name: "{{documentName}}", platform: "{{platform}}", module_count: 0, submodule_count: 0, input_chars: n_input_guard, skipped: true, skip_reason: "No modules extracted from document"])
+        return m
+    }
+    int totalSubmodules = 0
+    modules.each { mod ->
+        if (!(mod instanceof Map)) return
+        def subs = mod.get("submodules")
+        if (subs instanceof List) totalSubmodules += subs.size()
+    }
+    if (totalSubmodules == 0) {
+        println("[WARN][MAP·单文件] 子模块总数为 0，跳过 " + "{{documentName}}")
+        m.put("_meta", [document_name: "{{documentName}}", platform: "{{platform}}", module_count: modules.size(), submodule_count: 0, input_chars: n_input_guard, skipped: true, skip_reason: "Modules extracted but no submodules"])
+        return m
+    }
+    m.put("_meta", [
+        document_name: "{{documentName}}",
+        platform: "{{platform}}",
+        module_count: modules.size(),
+        submodule_count: totalSubmodules,
+        input_chars: n_input_guard
+    ])
+    return m
+'''
+
+}) // end n_doc_skip_check
+assign("doc_map_result", '{{n_doc_map_validate}}')
+
+// Template: Build single document map
+define('tpl_build_doc_map', '''
+你正在为一份文档构建结构化索引。不要生成测试用例、设计点或测试内容。
+
+文档名：{{documentName}}
+
+<document_pages>
+{{n_pages_normalized}}
+</document_pages>
+
+# 输出格式（严格遵守）
+
+只返回一个 JSON 对象，不要任何解释、说明或 markdown 标记。JSON 必须完整、可解析，最外层大括号必须闭合。
+
+
+```
+{
+  "platform": "{{platform}}",
+  "document_name": "{{documentName}}",
+  "modules": [
+    {
+      "module_name": "模块名称",
+      "module_description": "模块的简要说明",
+      "source_pages": ["PageX", "PageY"],
+      "submodules": [
+        {
+          "submodule_name": "子模块名称",
+          "description": "子模块功能描述",
+          "capabilities": ["能力1", "能力2"],
+          "business_rules": ["规则1"],
+          "acceptance_criteria": ["验收标准1"],
+          "dependencies": ["依赖1"],
+          "source_pages": ["PageX"],
+          "constraints": [
+            {
+              "type": "time_window|amount_threshold|retention_period|sla|compliance|other",
+              "value": "约束的具体值",
+              "condition": "触发条件或适用场景",
+              "source_page": "PageX"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+# 约束与边界条件提取（重要）
+
+从页面内容中识别以下类型的**非功能性但可测试的约束条件**，提取到对应子模块的 `constraints` 字段：
+
+- **时间窗口/截止时间**：如 "before 4:55 PM"、"within 2 hours"、"same-day processing"
+- **金额阈值**：如 "> HKD 5M"、"maximum 10 transactions"
+- **数据保留期限**：如 "7 years"、"90 days"
+- **SLA/性能承诺**：如 "24x7"、"response time < 2 seconds"
+- **合规/安全要求**：如 "data encryption required"、"access control"、"audit trail mandatory"
+
+每个约束条目包含：
+- `type`：约束类型（从上述列表选择，不确定则用 "other"）
+- `value`：约束的具体值（原文中的精确表述）
+- `condition`：触发条件或适用场景
+- `source_page`：原文所在页码
+
+**重要**：不要编造不存在的约束。如果页面中没有明确的可测试约束，`constraints` 可以为空数组 `[]`。只提取原文中明确写出的数值、时间、期限、频率等可度量的约束。
+
+# 必须遵守的硬约束
+
+1. 只输出 JSON 本身。不要输出 ```json 代码块包裹、不要解释文字、不要 markdown。输出的第一个字符必须是 `{`，最后一个字符必须是 `}`。
+2. `modules` 数组不能为空。如果文档确实没有可提取的模块，仍然返回空 `modules: []`，不要省略该字段。
+3. 每个 submodule 必须至少有一个 `source_pages`，格式为 "PageN"（N 为数字）。
+4. 所有用户可见文本（module_name、submodule_name、description、capabilities、business_rules、acceptance_criteria）必须使用 {{outputLanguage}}。constraints 的 value 字段应保留原文精确表述。
+5. 保持描述简洁（每个条目 1-3 句话），不要复制大段原文。
+6. 确保 JSON 语法完整——所有字符串用双引号，数组和对象括号必须配对闭合。
+''')

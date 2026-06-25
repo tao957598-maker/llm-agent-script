@@ -1,0 +1,55 @@
+/*{
+  "title": "API Document Parse Agent",
+  "description": "Extract structured API catalog data from a single API markdown document.",
+  "parameter": [
+    {
+      "name": "apiDocContent",
+      "label": "API文档内容",
+      "required": true
+    }
+  ],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+// Bind the raw API document text for template use.
+assign('api_doc_content', '{{apiDocContent}}')
+
+// Generate structured API catalog JSON from the source document.
+n_payload, tpl_api_catalog, psr_json
+
+// Prepare file content for persistence.
+assign('file_content', '{{fn.str(n_payload)}}')
+
+// Persist the generated API catalog JSON into the knowledge space file.
+n_result, act_func.write?filename='test_api_codex/api_catalog.json'&data='{{file_content}}'&syncKbs=true
+
+// Prompt template for API catalog extraction.
+define('tpl_api_catalog', '''
+你是 API 文档解析器。
+只根据输入内容抽取结构化 JSON，不要解释，不要补充示例，不要推测。
+
+输入的 API 文档内容：
+{{api_doc_content}}
+
+输出要求：
+1. 只输出一个合法 JSON 对象。
+2. 如果文档包含多个接口，请在 api_catalog 数组中逐条输出。
+3. 缺失字段必须保留，无法提取时使用空字符串、空对象或空数组，不要猜测。
+4. 不要输出 Markdown、代码块或额外文本。
+
+JSON 结构必须为：
+{
+  "api_catalog": [
+    {
+      "service_name": "",
+      "endpoint": "",
+      "method": "",
+      "auth": "",
+      "request_schema": {},
+      "response_schema": {},
+      "error_codes": []
+    }
+  ]
+}
+''')

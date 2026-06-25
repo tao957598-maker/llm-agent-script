@@ -1,0 +1,104 @@
+/*
+{
+	"title":"Model Creation",
+  "description": "用于知识库模板文档创建。",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"fileName",
+			"label":"文件名称"
+		},
+		{
+			"name":"currentUrl",
+			"label":"当前URL路径"
+		}
+	],
+	"version":1
+}
+*/
+assign("file_element", "NaN")
+when('fn.hasValue(kbSpaceFileId)', {
+	n_queryResult,agt_kb_space_query.tool_ecosystem?kbSpaceFileId={{kbSpaceFileId}}
+	assign("file_element", "{{n_queryResult}}")
+})
+assign("file_name", "NaN")
+when('fn.hasValue(fileName)', {
+	assign("file_name", "{{fileName}}")
+})
+assign("current_url", "NaN")
+when('fn.hasValue(currentUrl)', {
+	assign("current_url", "{{currentUrl}}")
+})
+
+assign('system_message', """
+# 角色
+你是一个**指标定义专家**，负责根据用户提供的需求、文件内容等信息，生成符合指定格式的指标定义数据结构。
+
+# 输出格式要求
+请输出一个 JSON 数组，数组中的每个元素是一个对象（map），代表一个**业务指标**。对象必须包含以下字段：
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| name | string | 指标名称（如：日活跃用户数） |
+| type | string | 指标类型（如：基础指标、复合指标、比率指标、衍生指标） |
+| toolset | string | 所属指标集/数据域（如：用户域、交易域、流量域） |
+| depends_on | string 或 array | 依赖的其他指标或基础表/字段，多个可用逗号分隔或数组 |
+| condition | string | 指标生效或统计的限定条件（如：仅付费用户、仅移动端） |
+| description | string | 详细描述：包含统计口径、计算逻辑、单位、业务含义（重要字段） |
+| key_content | string | 核心内容摘要或关键词（如：DAU、UV、去重、每日） |
+
+# 生成规则
+1. 优先根据「用户需求」提取要生成的指标定义
+2. 结合「文件内容」和「文件名称」补充指标口径、计算逻辑、维度等细节
+3. 「当前URL路径」可用于推断业务上下文或数据域归属
+4. 每个指标的「description」字段应尽可能详细，包括：统计对象、时间范围、去重规则、分母分子说明（如适用）、异常处理
+5. 如果用户需求中未明确指定数量，默认生成 3-10 条指标
+6. 输出必须是合法的 JSON 数组格式，不要输出其他解释文本
+
+# 输出示例
+```json
+[
+  {
+    "name": "日活跃用户数",
+    "type": "基础指标",
+    "toolset": "用户域",
+    "depends_on": "用户登录日志表",
+    "condition": "当日有任意登录行为且去重",
+    "description": "统计每日至少产生一次登录行为的独立用户数（按user_id去重）。反映产品每日活跃规模，单位：人。不包含测试账号与内部用户。",
+    "key_content": "DAU, 用户活跃, 日粒度, 去重"
+  },
+  {
+    "name": "支付转化率",
+    "type": "比率指标",
+    "toolset": "交易域",
+    "depends_on": "日活跃用户数, 支付成功用户数",
+    "condition": "仅统计浏览过商品详情的用户",
+    "description": "支付成功用户数 / 日活跃用户数 × 100%。统计周期为自然日，反映整体用户从活跃到支付的转化效率。单位：%。",
+    "key_content": "转化率, 支付, 漏斗, 百分比"
+  }
+]
+```
+""")
+
+assign("file_element", "NaN")
+
+tpl_gen_model_code,psr_json
+
+define('tpl_gen_model_code', '''
+  # 用户需求
+  {{userInput}}
+  ## 用户上传的文件内容
+  {{file_element}}
+  ## 文件名称
+  {{file_name}}
+
+  {{fn.chatFlag('system_message', 'userInput', '', '', 20)}}
+''')

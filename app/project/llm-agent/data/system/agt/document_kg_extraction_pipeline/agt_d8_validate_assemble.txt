@@ -1,0 +1,970 @@
+/*
+{
+  "title": "质量校验与图谱装配",
+  "description": "对图谱候选进行多维度质量校验，拆分通过/待审队列，生成可交付的节点/边文件和导入计划",
+  "parameter": [
+    {"name":"ksDir","label":"输出目录","required":false,"description":"知识空间输出目录，默认 document_kg_extraction"},
+    {"name":"confidenceThreshold","label":"置信度阈值","required":false,"description":"低于此阈值的条目移入review_queue，默认0.6"}
+  ],
+  "version": 1,
+  "resultPlan": "n_output"
+}
+*/
+
+// 设置默认输出目录查询类（如agt_kb_space_query）
+when('!fn.hasValue(ksDir)', {
+  assign("ksDir", "document_kg_extraction")
+})
+
+// 设置默认置信度阈值
+when('!fn.hasValue(confidenceThreshold)', {
+  assign("confidenceThreshold", "0.6")
+})
+
+// 读取阶段五输出的graph_candidates.json
+n_graph_candidates, act_artifact.read?filepath='{{ksDir}}/05_graph/graph_candidates.json'&maxLength=635555
+
+// 读取阶段一输出的document.json
+n_document, act_artifact.read?filepath='{{ksDir}}/01_document/document.json'&maxLength=635555
+
+// 读取阶段二输出的document_structure.json
+n_structure, act_artifact.read?filepath='{{ksDir}}/02_chunks/document_structure.json'&maxLength=635555
+
+// 读取阶段二输出的chunks.json
+n_chunks, act_artifact.read?filepath='{{ksDir}}/02_chunks/chunks.json'&maxLength=635555
+
+// 检查输入文件是否可读
+when('!fn.hasValue(n_graph_candidates)', {
+  // 输入文件缺失则终止流程
+  act_flow.fail?result='无法读取graph_candidates.json，请确认 agt_d7_aggregate 已执行完成，ksDir={{ksDir}}'
+})
+
+// 提取图谱数据
+n_entities, act_func?script='''
+  return n_graph_candidates?.entities ?: []
+'''
+
+// 提取关系数据
+n_relations, act_func?script='''
+  return n_graph_candidates?.relations ?: []
+'''
+
+// 提取事件数据
+n_events, act_func?script='''
+  return n_graph_candidates?.events ?: []
+'''
+
+// 提取文档ID
+n_document_id, act_func?script='''
+  return n_graph_candidates?.document_id ?: ""
+'''
+
+// 提取chunk ID集合 用于校验引用合法性
+n_valid_chunk_ids, act_func?script='''
+  def chunks = n_chunks ?: []
+  def ids = [] as Set
+  chunks.each { c ->
+    if (c.chunk_id) ids.add(c.chunk_id)
+  }
+  return ids
+'''
+
+// ===== Phase 1: Groovy mechanical validation =====
+
+// Groovy: 机械校验所有实体
+n_entity_validation, act_func?script='''
+  def entities = n_entities ?: []
+  def threshold = (confidenceThreshold as double) ?: 0.6
+  def validChunkIds = n_valid_chunk_ids ?: []
+  def results = []
+  def seenIds = [] as Set
+
+  entities.each { ent ->
+    def issues = []
+
+    // 必填字段检查
+    if (!ent.entity_id) issues.add("missing entity_id")
+    if (!ent.name || (ent.name as String).trim().isEmpty()) issues.add("missing or empty name")
+    if (!ent.entity_type) issues.add("missing entity_type")
+
+    // 证据检查
+    if (!ent.evidence || ent.evidence.size() == 0) {
+      issues.add("no evidence")
+    } else {
+      // 检查evidence中chunk_id是否有效
+      ent.evidence.each { ev ->
+        if (ev.chunk_id && !validChunkIds.contains(ev.chunk_id)) {
+          issues.add("invalid chunk_id in evidence: " + ev.chunk_id)
+        }
+      }
+    }
+
+    // 置信度检查
+    def conf = (ent.confidence as double) ?: 0.0
+    def belowThreshold = conf < threshold
+
+    // ID重复检查
+    if (seenIds.contains(ent.entity_id)) {
+      issues.add("duplicate entity_id: " + ent.entity_id)
+    }
+    seenIds.add(ent.entity_id)
+
+    // 一致性检查：Document/Section实体必须是结构实体
+    if (ent.entity_type == "Document" && !ent.entity_id?.startsWith("ent_doc_")) {
+      issues.add("non-structural Document entity")
+    }
+
+    results.add([
+      entity_id: ent.entity_id,
+      name: ent.name,
+      entity_type: ent.entity_type,
+      confidence: conf,
+      below_threshold: belowThreshold,
+      evidence_count: ent.evidence?.size() ?: 0,
+      issues: issues,
+      valid: issues.size() == 0 && !belowThreshold
+    ])
+  }
+
+  return results
+'''
+
+// Groovy: 机械校验所有关系
+n_relation_validation, act_func?script='''
+  def relations = n_relations ?: []
+  def threshold = (confidenceThreshold as double) ?: 0.6
+  def validEntityIds = [] as Set
+  n_entities?.each { ent -> if (ent.entity_id) validEntityIds.add(ent.entity_id) }
+
+  def results = []
+  def seenIds = [] as Set
+
+  relations.each { rel ->
+    def issues = []
+
+    // 必填字段检查
+    if (!rel.relation_id) issues.add("missing relation_id")
+    if (!rel.relation_type) issues.add("missing relation_type")
+    if (!rel.source_entity_id) issues.add("missing source_entity_id")
+    if (!rel.target_entity_id) issues.add("missing target_entity_id")
+
+    // 自环检查
+    if (rel.source_entity_id && rel.source_entity_id == rel.target_entity_id) {
+      issues.add("self-loop relation")
+    }
+
+    // 实体引用存在性检查
+    if (rel.source_entity_id && !validEntityIds.contains(rel.source_entity_id)) {
+      issues.add("source entity not found: " + rel.source_entity_id)
+    }
+    if (rel.target_entity_id && !validEntityIds.contains(rel.target_entity_id)) {
+      issues.add("target entity not found: " + rel.target_entity_id)
+    }
+
+    // 置信度检查
+    def conf = (rel.confidence as double) ?: 0.0
+    def belowThreshold = conf < threshold
+
+    // ID重复检查
+    if (seenIds.contains(rel.relation_id)) {
+      issues.add("duplicate relation_id: " + rel.relation_id)
+    }
+    seenIds.add(rel.relation_id)
+
+    results.add([
+      relation_id: rel.relation_id,
+      relation_type: rel.relation_type,
+      source_entity_id: rel.source_entity_id,
+      target_entity_id: rel.target_entity_id,
+      confidence: conf,
+      below_threshold: belowThreshold,
+      issues: issues,
+      valid: issues.size() == 0 && !belowThreshold
+    ])
+  }
+
+  return results
+'''
+
+// Groovy: 机械校验所有事件
+n_event_validation, act_func?script='''
+  def events = n_events ?: []
+  def threshold = (confidenceThreshold as double) ?: 0.6
+  def results = []
+  def seenIds = [] as Set
+
+  events.each { evt ->
+    def issues = []
+
+    // 必填字段检查
+    if (!evt.event_id) issues.add("missing event_id")
+    if (!evt.event_type) issues.add("missing event_type")
+    if (!evt.description || (evt.description as String).trim().isEmpty()) {
+      issues.add("missing or empty description")
+    }
+
+    // 置信度检查
+    def conf = (evt.confidence as double) ?: 0.0
+    def belowThreshold = conf < threshold
+
+    // ID重复检查
+    if (seenIds.contains(evt.event_id)) {
+      issues.add("duplicate event_id: " + evt.event_id)
+    }
+    seenIds.add(evt.event_id)
+
+    results.add([
+      event_id: evt.event_id,
+      event_type: evt.event_type,
+      confidence: conf,
+      below_threshold: belowThreshold,
+      issues: issues,
+      valid: issues.size() == 0 && !belowThreshold
+    ])
+  }
+
+  return results
+'''
+
+// Groovy: 汇总机械校验统计
+n_mechanical_stats, act_func?script='''
+  def entityValid = (n_entity_validation ?: []).findAll { it.valid }.size()
+  def entityInvalid = (n_entity_validation ?: []).size() - entityValid
+  def relationValid = (n_relation_validation ?: []).findAll { it.valid }.size()
+  def relationInvalid = (n_relation_validation ?: []).size() - relationValid
+  def eventValid = (n_event_validation ?: []).findAll { it.valid }.size()
+  def eventInvalid = (n_event_validation ?: []).size() - eventValid
+
+  return [
+    entities: [total: n_entity_validation?.size() ?: 0, valid: entityValid, invalid: entityInvalid],
+    relations: [total: n_relation_validation?.size() ?: 0, valid: relationValid, invalid: relationInvalid],
+    events: [total: n_event_validation?.size() ?: 0, valid: eventValid, invalid: eventInvalid]
+  ]
+'''
+
+// ===== Phase 2: LLM semantic validation =====
+
+// Groovy: 准备语义校验输入只包含机械校验通过的高置信度条目 + 可疑条目标记
+n_semantic_input, act_func?script='''
+  def input = [:]
+  // 所有通过机械校验的实体简报
+  input.entities = n_entity_validation?.findAll { it.valid }?.collect { [
+    entity_id: it.entity_id, name: it.name, entity_type: it.entity_type, confidence: it.confidence
+  ]} ?: []
+
+  // 所有通过机械校验的关系简报
+  input.relations = n_relation_validation?.findAll { it.valid }?.collect { [
+    relation_id: it.relation_id, relation_type: it.relation_type,
+    source_id: it.source_entity_id, target_id: it.target_entity_id, confidence: it.confidence
+  ]} ?: []
+
+  // 所有通过机械校验的事件简报
+  input.events = n_event_validation?.findAll { it.valid }?.collect { [
+    event_id: it.event_id, event_type: it.event_type,
+    participant_count: n_events?.find { e -> e.event_id == it.event_id }?.participants?.size() ?: 0,
+    confidence: it.confidence
+  ]} ?: []
+
+  return input
+'''
+
+// LLM: 语义质量校验
+n_semantic_result, tpl_validate_semantic, psr_json
+
+// Groovy: 将语义校验发现的问题合并到validation结果
+n_entity_validation_final, act_func?script='''
+  def results = n_entity_validation ?: []
+  def semanticIssues = n_semantic_result?.entity_issues ?: []
+  def semanticMap = [:]
+  semanticIssues.each { issue ->
+    if (issue.entity_id) {
+      if (!semanticMap[issue.entity_id]) semanticMap[issue.entity_id] = []
+      semanticMap[issue.entity_id].add(issue.issue_description)
+    }
+  }
+  results.each { r ->
+    if (semanticMap.containsKey(r.entity_id)) {
+      r.issues = (r.issues ?: []) + semanticMap[r.entity_id]
+      r.valid = r.valid && false // 有语义问题则标记为invalid
+    }
+  }
+  return results
+'''
+
+// Groovy: 合并关系校验结果
+n_relation_validation_final, act_func?script='''
+  def results = n_relation_validation ?: []
+  def semanticIssues = n_semantic_result?.relation_issues ?: []
+  def semanticMap = [:]
+  semanticIssues.each { issue ->
+    if (issue.relation_id) {
+      if (!semanticMap[issue.relation_id]) semanticMap[issue.relation_id] = []
+      semanticMap[issue.relation_id].add(issue.issue_description)
+    }
+  }
+  results.each { r ->
+    if (semanticMap.containsKey(r.relation_id)) {
+      r.issues = (r.issues ?: []) + semanticMap[r.relation_id]
+      r.valid = r.valid && false
+    }
+  }
+  return results
+'''
+
+// Groovy: 合并事件校验结果
+n_event_validation_final, act_func?script='''
+  def results = n_event_validation ?: []
+  def semanticIssues = n_semantic_result?.event_issues ?: []
+  def semanticMap = [:]
+  semanticIssues.each { issue ->
+    if (issue.event_id) {
+      if (!semanticMap[issue.event_id]) semanticMap[issue.event_id] = []
+      semanticMap[issue.event_id].add(issue.issue_description)
+    }
+  }
+  results.each { r ->
+    if (semanticMap.containsKey(r.event_id)) {
+      r.issues = (r.issues ?: []) + semanticMap[r.event_id]
+      r.valid = r.valid && false
+    }
+  }
+  return results
+'''
+
+// ===== Phase 3: Split validated vs review_queue =====
+
+// Groovy: 拆分实体通过的进入validated, 未通过的进入review_queue
+n_split_result, act_func?script='''
+  def validEntities = []
+  def reviewEntities = []
+  def validRelations = []
+  def reviewRelations = []
+  def validEvents = []
+  def reviewEvents = []
+
+  // 构建entity_id → issues的查询表
+  def entityIssuesMap = [:]
+  n_entity_validation_final?.each { r ->
+    entityIssuesMap[r.entity_id] = r.issues ?: []
+  }
+  def relationIssuesMap = [:]
+  n_relation_validation_final?.each { r ->
+    relationIssuesMap[r.relation_id] = r.issues ?: []
+  }
+  def eventIssuesMap = [:]
+  n_event_validation_final?.each { r ->
+    eventIssuesMap[r.event_id] = r.issues ?: []
+  }
+
+  // 拆分实体
+  n_entities?.each { ent ->
+    def issues = entityIssuesMap[ent.entity_id] ?: []
+    if (issues.size() == 0 && (ent.confidence ?: 0.0) >= (confidenceThreshold as double)) {
+      ent.validation_status = "validated"
+      validEntities.add(ent)
+    } else {
+      ent.validation_status = "review"
+      ent.validation_issues = issues
+      if ((ent.confidence ?: 0.0) < (confidenceThreshold as double)) {
+        ent.validation_issues = (ent.validation_issues ?: []) + ["confidence below threshold: ${ent.confidence}"]
+      }
+      reviewEntities.add(ent)
+    }
+  }
+
+  // 拆分关系
+  n_relations?.each { rel ->
+    def issues = relationIssuesMap[rel.relation_id] ?: []
+    if (issues.size() == 0 && (rel.confidence ?: 0.0) >= (confidenceThreshold as double)) {
+      rel.validation_status = "validated"
+      validRelations.add(rel)
+    } else {
+      rel.validation_status = "review"
+      rel.validation_issues = issues
+      if ((rel.confidence ?: 0.0) < (confidenceThreshold as double)) {
+        rel.validation_issues = (rel.validation_issues ?: []) + ["confidence below threshold: ${rel.confidence}"]
+      }
+      reviewRelations.add(rel)
+    }
+  }
+
+  // 拆分事件
+  n_events?.each { evt ->
+    def issues = eventIssuesMap[evt.event_id] ?: []
+    if (issues.size() == 0 && (evt.confidence ?: 0.0) >= (confidenceThreshold as double)) {
+      evt.validation_status = "validated"
+      validEvents.add(evt)
+    } else {
+      evt.validation_status = "review"
+      evt.validation_issues = issues
+      if ((evt.confidence ?: 0.0) < (confidenceThreshold as double)) {
+        evt.validation_issues = (evt.validation_issues ?: []) + ["confidence below threshold: ${evt.confidence}"]
+      }
+      reviewEvents.add(evt)
+    }
+  }
+
+  fn.put("valid_entities", validEntities)
+  fn.put("review_entities", reviewEntities)
+  fn.put("valid_relations", validRelations)
+  fn.put("review_relations", reviewRelations)
+  fn.put("valid_events", validEvents)
+  fn.put("review_events", reviewEvents)
+
+  return [
+    validated: [
+      entities: validEntities.size(),
+      relations: validRelations.size(),
+      events: validEvents.size()
+    ],
+    review: [
+      entities: reviewEntities.size(),
+      relations: reviewRelations.size(),
+      events: reviewEvents.size()
+    ]
+  ]
+'''
+
+// 从fn存储中获取拆分明细
+n_validated_entities, act_func?script='''
+  return fn.get("valid_entities") ?: []
+'''
+n_review_entities, act_func?script='''
+  return fn.get("review_entities") ?: []
+'''
+n_validated_relations, act_func?script='''
+  return fn.get("valid_relations") ?: []
+'''
+n_review_relations, act_func?script='''
+  return fn.get("review_relations") ?: []
+'''
+n_validated_events, act_func?script='''
+  return fn.get("valid_events") ?: []
+'''
+n_review_events, act_func?script='''
+  return fn.get("review_events") ?: []
+'''
+
+// ===== Phase 4: Generate nodes.json =====
+
+// Groovy: 生成图谱节点
+n_graph_nodes, act_func?script='''
+  def nodes = []
+  def nextId = 1
+
+  // 文档层节点 — 从document.json
+  def docInfo = n_document ?: [:]
+  nodes.add([
+    node_id: "node_" + String.format("%04d", nextId++),
+    labels: ["Document"],
+    properties: [
+      document_id: n_document_id ?: "",
+      title: docInfo.title ?: "",
+      language: docInfo.language ?: "zh",
+      page_count: docInfo.page_count ?: 0,
+      author: docInfo.author ?: "",
+      date: docInfo.date ?: ""
+    ]
+  ])
+
+  // Section节点 — 从document_structure
+  def structure = n_structure ?: [:]
+  def sections = structure?.sections ?: []
+  def sectionNodeIdMap = [:]
+  sections.each { sec ->
+    def nodeId = "node_" + String.format("%04d", nextId++)
+    sectionNodeIdMap[sec.section_id] = nodeId
+    nodes.add([
+      node_id: nodeId,
+      labels: ["Section"],
+      properties: [
+        section_id: sec.section_id ?: "",
+        title: sec.title ?: "",
+        level: sec.level ?: 1,
+        page_range: sec.page_range ?: [],
+        parent_section_id: sec.parent_section_id ?: null
+      ]
+    ])
+  }
+
+  // Chunk节点 — 从chunks.json
+  def chunks = n_chunks ?: []
+  def chunkNodeIdMap = [:]
+  chunks.each { c ->
+    def nodeId = "node_" + String.format("%04d", nextId++)
+    chunkNodeIdMap[c.chunk_id] = nodeId
+    nodes.add([
+      node_id: nodeId,
+      labels: ["Chunk"],
+      properties: [
+        chunk_id: c.chunk_id ?: "",
+        section_id: c.section_id ?: "",
+        page_range: c.page_range ?: [],
+        char_len: c.char_len ?: 0
+      ]
+    ])
+  }
+
+  // 知识层节点 — Entity (带二级标签)
+  def entityNodeIdMap = [:]
+  n_validated_entities?.each { ent ->
+    def nodeId = "node_" + String.format("%04d", nextId++)
+    entityNodeIdMap[ent.entity_id] = nodeId
+    def labels = ["Entity"]
+    if (ent.entity_type) labels.add(ent.entity_type)
+    nodes.add([
+      node_id: nodeId,
+      labels: labels,
+      properties: [
+        entity_id: ent.entity_id ?: "",
+        name: ent.name ?: "",
+        entity_type: ent.entity_type ?: "",
+        aliases: ent.aliases ?: [],
+        attributes: ent.attributes ?: [:],
+        confidence: ent.confidence ?: 0.0
+      ]
+    ])
+  }
+
+  // Event节点
+  def eventNodeIdMap = [:]
+  n_validated_events?.each { evt ->
+    def nodeId = "node_" + String.format("%04d", nextId++)
+    eventNodeIdMap[evt.event_id] = nodeId
+    nodes.add([
+      node_id: nodeId,
+      labels: ["Event"],
+      properties: [
+        event_id: evt.event_id ?: "",
+        event_type: evt.event_type ?: "",
+        trigger: evt.trigger ?: "",
+        time: evt.time ?: [:],
+        description: evt.description ?: "",
+        confidence: evt.confidence ?: 0.0
+      ]
+    ])
+  }
+
+  // Evidence节点 — 从entity evidence中提取
+  n_validated_entities?.each { ent ->
+    ent.evidence?.eachWithIndex { ev, idx ->
+      nodes.add([
+        node_id: "node_" + String.format("%04d", nextId++),
+        labels: ["Evidence"],
+        properties: [
+          entity_id: ent.entity_id,
+          chunk_id: ev.chunk_id ?: "",
+          page_range: ev.page_range ?: [],
+          quote: ev.quote ?: ""
+        ]
+      ])
+    }
+  }
+
+  // 存入node映射供edges阶段使用
+  fn.put("section_node_map", sectionNodeIdMap)
+  fn.put("chunk_node_map", chunkNodeIdMap)
+  fn.put("entity_node_map", entityNodeIdMap)
+  fn.put("event_node_map", eventNodeIdMap)
+
+  return nodes
+'''
+
+// ===== Phase 5: Generate edges.json =====
+
+// Groovy: 生成图谱边
+n_graph_edges, act_func?script='''
+  def edges = []
+  def nextEdgeId = 1
+
+  def sectionNodeMap = fn.get("section_node_map") ?: [:]
+  def chunkNodeMap = fn.get("chunk_node_map") ?: [:]
+  def entityNodeMap = fn.get("entity_node_map") ?: [:]
+  def eventNodeMap = fn.get("event_node_map") ?: [:]
+
+  // 查找Document节点
+  def docNodeId = ""
+  def nodes = n_graph_nodes ?: []
+  nodes.each { n ->
+    if (n.labels?.contains("Document")) docNodeId = n.node_id
+  }
+
+  // 文档结构边: Document → HAS_SECTION → Section
+  def structure = n_structure ?: [:]
+  def sections = structure?.sections ?: []
+  sections.each { sec ->
+    def secNodeId = sectionNodeMap[sec.section_id]
+    if (docNodeId && secNodeId) {
+      edges.add([
+        edge_id: "edge_" + String.format("%04d", nextEdgeId++),
+        source_id: docNodeId,
+        target_id: secNodeId,
+        type: "HAS_SECTION",
+        properties: [section_id: sec.section_id]
+      ])
+    }
+  }
+
+  // Section层级边: Section → HAS_SUBSECTION → Section
+  sections.each { sec ->
+    if (sec.parent_section_id) {
+      def childNodeId = sectionNodeMap[sec.section_id]
+      def parentNodeId = sectionNodeMap[sec.parent_section_id]
+      if (childNodeId && parentNodeId) {
+        edges.add([
+          edge_id: "edge_" + String.format("%04d", nextEdgeId++),
+          source_id: parentNodeId,
+          target_id: childNodeId,
+          type: "HAS_SUBSECTION",
+          properties: [:]
+        ])
+      }
+    }
+  }
+
+  // Section → HAS_CHUNK → Chunk
+  def chunks = n_chunks ?: []
+  chunks.each { c ->
+    def secNodeId = sectionNodeMap[c.section_id]
+    def chunkNodeId = chunkNodeMap[c.chunk_id]
+    if (secNodeId && chunkNodeId) {
+      edges.add([
+        edge_id: "edge_" + String.format("%04d", nextEdgeId++),
+        source_id: secNodeId,
+        target_id: chunkNodeId,
+        type: "HAS_CHUNK",
+        properties: [chunk_id: c.chunk_id]
+      ])
+    }
+  }
+
+  // 知识关系边: Entity → {relation_type} → Entity
+  n_validated_relations?.each { rel ->
+    def sourceNodeId = entityNodeMap[rel.source_entity_id]
+    def targetNodeId = entityNodeMap[rel.target_entity_id]
+    if (sourceNodeId && targetNodeId) {
+      edges.add([
+        edge_id: "edge_" + String.format("%04d", nextEdgeId++),
+        source_id: sourceNodeId,
+        target_id: targetNodeId,
+        type: rel.relation_type ?: "RELATED_TO",
+        properties: [
+          relation_id: rel.relation_id ?: "",
+          qualifiers: rel.qualifiers ?: [:],
+          confidence: rel.confidence ?: 0.0,
+          implicit: rel.implicit ?: false
+        ]
+      ])
+    }
+  }
+
+  // 事件参与边: Entity → PARTICIPATES_IN → Event
+  n_validated_events?.each { evt ->
+    def evtNodeId = eventNodeMap[evt.event_id]
+    evt.participants?.each { p ->
+      def entityNodeId = entityNodeMap[p.entity_id]
+      if (entityNodeId && evtNodeId) {
+        edges.add([
+          edge_id: "edge_" + String.format("%04d", nextEdgeId++),
+          source_id: entityNodeId,
+          target_id: evtNodeId,
+          type: "PARTICIPATES_IN",
+          properties: [
+            event_id: evt.event_id,
+            role: p.role ?: "",
+            entity_id: p.entity_id ?: ""
+          ]
+        ])
+      }
+    }
+  }
+
+  // 证据边: Chunk → MENTIONS → Entity
+  n_validated_entities?.each { ent ->
+    def entityNodeId = entityNodeMap[ent.entity_id]
+    ent.evidence?.each { ev ->
+      def chunkNodeId = chunkNodeMap[ev.chunk_id]
+      if (chunkNodeId && entityNodeId) {
+        edges.add([
+          edge_id: "edge_" + String.format("%04d", nextEdgeId++),
+          source_id: chunkNodeId,
+          target_id: entityNodeId,
+          type: "MENTIONS",
+          properties: [
+            page_range: ev.page_range ?: [],
+            quote: ev.quote ?: ""
+          ]
+        ])
+      }
+    }
+  }
+
+  return edges
+'''
+
+// ===== Phase 6: Generate import_plan.json =====
+
+// Groovy: 生成Neo4j导入计划
+n_import_plan, act_func?script='''
+  def plan = [:]
+
+  plan.target = "neo4j"
+  plan.generated_at = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new java.util.Date())
+  plan.document_id = n_document_id ?: ""
+  plan.pipeline_version = "1.0"
+
+  // 节点标签映射
+  plan.node_labels = [
+    Document: "文档节点",
+    Section: "章节节点",
+    Chunk: "切片节点",
+    Entity: "知识实体（含二级标签：Person/Organization/Product/Project/Technology/Metric/Risk/Requirement/Time/Term）",
+    Event: "事件节点",
+    Evidence: "证据节点"
+  ]
+
+  // 边类型映射
+  plan.edge_types = [
+    HAS_SECTION: "文档→章节",
+    HAS_SUBSECTION: "父章节→子章节",
+    HAS_CHUNK: "章节→切片",
+    MENTIONS: "切片→实体（证据引用）",
+    RELATED_TO: "实体→实体（通用关联）",
+    BELONGS_TO: "实体→实体（归属）",
+    PART_OF: "实体→实体（组成）",
+    AUTHORED_BY: "实体→实体（创作）",
+    WORKS_FOR: "实体→实体（任职）",
+    PRODUCES: "实体→实体（产出）",
+    USES: "实体→实体（使用）",
+    DEPENDS_ON: "实体→实体（依赖）",
+    IMPLEMENTS: "实体→实体（实施）",
+    REQUIRES: "实体→实体（要求）",
+    CAUSES: "实体→实体（导致）",
+    AFFECTS: "实体→实体（影响）",
+    MEASURED_BY: "实体→实体（度量）",
+    HAS_RISK: "实体→实体（风险）",
+    HAS_TIME: "实体→实体（时间）",
+    HAS_PARTICIPANT: "实体→实体（参与方）",
+    PRECEDES: "实体→实体（先于）",
+    FOLLOWS: "实体→实体（后于）",
+    PARTICIPATES_IN: "实体→事件（参与）"
+  ]
+
+  // 索引建议
+  plan.indexes = [
+    "CREATE INDEX idx_entity_id FOR (n:Entity) ON (n.entity_id)",
+    "CREATE INDEX idx_event_id FOR (n:Event) ON (n.event_id)",
+    "CREATE INDEX idx_document_id FOR (n:Document) ON (n.document_id)",
+    "CREATE INDEX idx_section_id FOR (n:Section) ON (n.section_id)",
+    "CREATE INDEX idx_chunk_id FOR (n:Chunk) ON (n.chunk_id)"
+  ]
+
+  // 约束
+  plan.constraints = [
+    "CREATE CONSTRAINT unique_entity_id FOR (n:Entity) REQUIRE n.entity_id IS UNIQUE",
+    "CREATE CONSTRAINT unique_event_id FOR (n:Event) REQUIRE n.event_id IS UNIQUE",
+    "CREATE CONSTRAINT unique_document_id FOR (n:Document) REQUIRE n.document_id IS UNIQUE"
+  ]
+
+  // 导入参数
+  plan.import_config = [
+    batch_size: 500,
+    nodes_file: ksDir + "/05_graph/nodes.json",
+    edges_file: ksDir + "/05_graph/edges.json",
+    import_command: "neo4j-admin database import full --nodes=" + ksDir + "/05_graph/nodes.json --relationships=" + ksDir + "/05_graph/edges.json"
+  ]
+
+  // 统计
+  plan.statistics = [
+    node_count: n_graph_nodes?.size() ?: 0,
+    edge_count: n_graph_edges?.size() ?: 0,
+    validated_entity_count: n_validated_entities?.size() ?: 0,
+    validated_relation_count: n_validated_relations?.size() ?: 0,
+    validated_event_count: n_validated_events?.size() ?: 0,
+    review_queue_size: (n_review_entities?.size() ?: 0) + (n_review_relations?.size() ?: 0) + (n_review_events?.size() ?: 0)
+  ]
+
+  return plan
+'''
+
+// ===== Phase 7: Write outputs =====
+
+// 组装graph_validated.json
+n_graph_validated, act_func?script='''
+  return [
+    document_id: n_document_id ?: "",
+    pipeline_version: "1.0",
+    validation_summary: n_mechanical_stats,
+    semantic_issues: [
+      entity_issues: n_semantic_result?.entity_issues?.size() ?: 0,
+      relation_issues: n_semantic_result?.relation_issues?.size() ?: 0,
+      event_issues: n_semantic_result?.event_issues?.size() ?: 0
+    ],
+    entities: n_validated_entities,
+    relations: n_validated_relations,
+    events: n_validated_events
+  ]
+'''
+
+// 组装review_queue.json
+n_review_queue, act_func?script='''
+  return [
+    document_id: n_document_id ?: "",
+    pipeline_version: "1.0",
+    total_review_items: (n_review_entities?.size() ?: 0) + (n_review_relations?.size() ?: 0) + (n_review_events?.size() ?: 0),
+    entities: n_review_entities,
+    relations: n_review_relations,
+    events: n_review_events,
+    review_instructions: "请人工审核以下条目的validation_issues，修正后可通过re-run pipeline重新导入"
+  ]
+'''
+
+// 写入graph_validated.json
+act_artifact.write?filepath='{{ksDir}}/05_graph/graph_validated.json'&data='{{n_graph_validated}}'
+
+// 写入review_queue.json
+act_artifact.write?filepath='{{ksDir}}/05_graph/review_queue.json'&data='{{n_review_queue}}'
+
+// 写入nodes.json
+act_artifact.write?filepath='{{ksDir}}/05_graph/nodes.json'&data='{{n_graph_nodes}}'
+
+// 写入edges.json
+act_artifact.write?filepath='{{ksDir}}/05_graph/edges.json'&data='{{n_graph_edges}}'
+
+// 写入import_plan.json
+act_artifact.write?filepath='{{ksDir}}/06_export/import_plan.json'&data='{{n_import_plan}}'
+
+// ===== Phase 8: Output summary =====
+
+// 输出阶段六校验与装配结果
+n_output, act_func?script='''
+  def result = [:]
+  result.success = true
+  result.stage = "d8_validate_assemble"
+  result.document_id = n_document_id ?: ""
+
+  // 校验统计
+  result.validation = [
+    mechanical: n_mechanical_stats,
+    semantic_issues_found: [
+      entity: n_semantic_result?.entity_issues?.size() ?: 0,
+      relation: n_semantic_result?.relation_issues?.size() ?: 0,
+      event: n_semantic_result?.event_issues?.size() ?: 0
+    ]
+  ]
+
+  // 拆分统计
+  result.split = n_split_result
+
+  // 产出统计
+  result.artifacts = [
+    node_count: n_graph_nodes?.size() ?: 0,
+    edge_count: n_graph_edges?.size() ?: 0,
+    node_label_distribution: [
+      Document: 1,
+      Section: n_structure?.sections?.size() ?: 0,
+      Chunk: n_chunks?.size() ?: 0,
+      Entity: n_validated_entities?.size() ?: 0,
+      Event: n_validated_events?.size() ?: 0,
+      Evidence: n_validated_entities?.sum { it.evidence?.size() ?: 0 } ?: 0
+    ]
+  ]
+
+  result.output_files = [
+    ksDir + "/05_graph/graph_validated.json",
+    ksDir + "/05_graph/review_queue.json",
+    ksDir + "/05_graph/nodes.json",
+    ksDir + "/05_graph/edges.json",
+    ksDir + "/06_export/import_plan.json"
+  ]
+  return result
+'''
+
+// 异常处理: 捕获错误并返回失败信息
+on_failure({
+  // 构造错误输出
+  n_output, act_func?script='''
+    def result = [:]
+    result.success = false
+    result.stage = "d8_validate_assemble"
+    result.error = fn.str(sys_failure_task?.result ?: "Unknown error")
+    return result
+  '''
+  // 跳转到流程结束
+  act_flow.go?plan=end
+})
+
+// ===== LLM Template =====
+
+// 语义质量校验模板
+define('tpl_validate_semantic', '''
+你是知识图谱质量审核专家。请对以下图谱候选数据进行语义层面的质量校验。
+
+## 已通过机械校验的数据
+
+实体（{{n_semantic_input.entities?size}}个）：
+{{n_semantic_input.entities}}
+
+关系（{{n_semantic_input.relations?size}}条）：
+{{n_semantic_input.relations}}
+
+事件（{{n_semantic_input.events?size}}个）：
+{{n_semantic_input.events}}
+
+## 校验维度
+
+1. **类型约束**：检查关系类型与源/目标实体类型是否匹配
+   - Person → Organization：应为 WORKS_FOR/BELONGS_TO，不应为 PART_OF
+   - Project → Technology：常为 USES，不应为 IMPLEMENTS（Impl实现的是Project不是Technology）
+   - Metric不应作为 USES 的source
+   - Time实体只应出现在 HAS_TIME 关系中
+
+2. **关系方向**：source→target方向是否语义正确
+   - A PART_OF B：A是B的一部分（小→大）
+   - A HAS_RISK B：A具有风险B
+   - A IMPLEMENTS B：A实施B（实施者→被实施者）
+
+3. **冲突检测**：是否存在矛盾关系
+   - A PART_OF B 和 B PART_OF A 同时存在
+   - A PRECEDES B 和 B PRECEDES A 同时存在
+   - 同一实体对同时有 RELATED_TO 和更具体的关系
+
+4. **事件一致性**：同一事件中参与者类型是否合理
+   - 事件类型与参与方实体类型是否匹配
+   - 事件时间是否在合理范围内
+
+## 输出格式
+
+```json
+{
+  "entity_issues": [
+    {
+      "entity_id": "ent_xxx",
+      "issue_type": "type_mismatch|duplicate|incomplete",
+      "issue_description": "具体问题描述"
+    }
+  ],
+  "relation_issues": [
+    {
+      "relation_id": "rel_xxx",
+      "issue_type": "type_constraint_violation|direction_error|conflict|duplicate",
+      "issue_description": "具体问题描述"
+    }
+  ],
+  "event_issues": [
+    {
+      "event_id": "evt_xxx",
+      "issue_type": "participant_mismatch|time_inconsistency|type_issue",
+      "issue_description": "具体问题描述"
+    }
+  ]
+}
+```
+
+注意：
+- 只列出确实存在问题的条目，正常条目不要列出
+- 描述要具体，明确指出问题所在
+- 若某维度无问题，返回空数组
+
+仅输出 JSON，不要解释。
+''')

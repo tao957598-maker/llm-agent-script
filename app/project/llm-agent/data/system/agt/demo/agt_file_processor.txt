@@ -1,0 +1,26 @@
+/*
+{
+	"title":"特征定义子Agent",
+	"parameter":"{\"name\":\"all_code\",\"label\":\"所有程序拼接文本\",\"type\":\"textarea\",\"required\":true}",
+	"displayOrder":0,
+	"version":3
+}
+*/
+define('tpl_define_features', '''
+你是一个COBOL代码分析专家。请阅读下面所有程序的源代码，分析它们的常见模式，定义一组用于区分程序功能的特征向量。
+输出一个JSON数组，每个元素包含：
+- name: 特征名称（如"contains_SEND_MAP"）
+- desc: 特征描述
+- dimension: 该特征在向量中的索引（从0开始）
+确保能够有效区分屏幕处理、业务逻辑、数据访问、工具类等功能。
+
+程序代码：
+{{all_code}}
+
+直接输出JSON数组，不要解释。
+''')
+
+n_features_def, tpl_define_features, psr_json
+
+//## 最终输出
+assign('final_output', '{{n_features_def}}')

@@ -1,0 +1,517 @@
+/*
+{
+  "title":"COBOL2Java Equivalence Validator (trace → Cucumber)",
+  "description":"第七阶段 P0：读取 verification/trace-scenarios trace-catalog 与各 scenario.json（由 7.0 或人工预置），确定性生成 Gherkin .feature 与 cucumber-manifest，供 agt_test_generator 生成 API 集成测试。",
+  "parameter":[
+    {"name":"projectKey", "label":"项目标识", "required":true},
+    
+    {"name":"projectRoot", "label":"迁移工作区根目录", "required":true},
+    {"name":"irVersion", "required":false, "default":"v1"},
+    {"name":"verificationRoot", "label":"相对 projectRoot 的夹具根", "required":false, "default":"verification"},
+    {"name":"traceCatalogRel", "required":false, "default":"verification/trace-scenarios/trace-catalog.json"},
+    {"name":"failOnUnmappedTrace", "label":"无 apiMappingHints 时是否在 manifest 标为 mapping-gap", "required":false, "default":"true"}
+  ],
+  "version":1,
+  "resultPlan":"n_equivalence_validation_report"
+}
+*/
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+//# 模块 2：变量初始化
+#通俗理解：把参数"注册"成脚本内部可以用的变量。
+#其中最重要的是 n_catalog_path——拼出了 trace-catalog.json 的完整路径
+#后面会用来判断这个文件是否存在。
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+
+assign('n_project_key', '{{projectKey}}',
+       'n_project_root', '{{projectRoot}}',
+       'n_source_root_rel', '{{n_project_root}}/source',
+       'n_ir_version', '{{fn.optional(irVersion, "v1")}}',
+       'n_verification_root', '{{fn.optional(verificationRoot, "verification")}}',
+       'n_trace_catalog_rel', '{{fn.optional(traceCatalogRel, "verification/trace-scenarios/trace-catalog.json")}}',
+       'n_fail_on_unmapped', '{{fn.optional(failOnUnmappedTrace, "true")}}')
+
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+//# 模块 3：监控初始化（E2E 监控）
+#通俗理解：向监控系统报告"我开始干活了"。
+#这是给运维平台看的，告诉它 Phase 7 的 7.1 步骤正在执行。
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+
+assign('n_e2e_request_id', '{{fn.optional(e2eRequestId, "")}}')
+assign('n_e2e_monitor_phase_id', 'phase-7',
+       'n_e2e_monitor_agent_name', 'agt_equivalence_validator.c2j.validate',
+       'n_e2e_monitor_action', 'agentStart')
+n_e2e_monitor_start, act_func.run?expression=e2e_monitor&funcFolder=c2j.runtime
+
+assign('n_catalog_path', '{{n_project_root}}/{{n_trace_catalog_rel}}')
+assign('n_trace_catalog_status', 'READY')
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+//# 模块 4：检查 trace-catalog.json 是否存在
+#通俗理解：先看看 trace-catalog.json 存不存在。
+#如果存在 → n_trace_catalog_status 保持为 'READY'，继续往下走
+#如果不存在 → 标记为 'SKIPPED_NO_TRACE_CATALOG'，后面的主逻辑会直接生成一个跳过报告，不会报错崩溃
+#这就像你到一个图书馆查书，如果目录卡片柜是空的，那就没法查了，只能返回"目录不存在"。
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+
+n_catalog_exists, act_func.run?script='''
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def catalogPath = fn.str(fn.get("n_catalog_path"))
+def p = java.nio.file.Path.of(rootDir, catalogPath.replace("/", java.io.File.separator)).toAbsolutePath().normalize()
+return java.nio.file.Files.isRegularFile(p) ? "true" : "false"
+'''
+when('{{!fn.bool(n_catalog_exists)}}', {
+  assign('n_trace_catalog_status', 'SKIPPED_NO_TRACE_CATALOG')
+})
+
+n_equivalence_validation_report, act_func.run?script='''
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+
+//# 模块 5：主处理脚本（核心）
+
+
+##——————————————————————————————————————————————————————————————————————————————
+
+#子模块 5.1：工具函数准备
+
+#通俗理解：在正式开工之前，先把所有要用到的"小工具"定义好
+
+
+// DETERMINISTIC: wc3270 scenario.json → Gherkin .feature + cucumber-manifest (no LLM).
+
+import com.alibaba.fastjson2.JSON
+import com.alibaba.fastjson2.JSONArray
+import com.alibaba.fastjson2.JSONObject
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Instant
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectKey = fn.str(fn.get("n_project_key"))?.trim(); if (!projectKey) throw new IllegalStateException("Missing required parameter: projectKey")
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim(); if (!projectRoot) throw new IllegalStateException("Missing required parameter: projectRoot")
+def version = fn.str(fn.get("n_ir_version")) ?: "v1"
+def failOnUnmapped = (fn.str(fn.get("n_fail_on_unmapped")) ?: "true").toBoolean()
+def catalogRel = fn.str(fn.get("n_trace_catalog_rel")) ?: "verification/trace-scenarios/trace-catalog.json"
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def projectRootPrefix = projectRoot.replace("\\", "/")
+while (projectRootPrefix.endsWith("/")) projectRootPrefix = projectRootPrefix.substring(0, projectRootPrefix.length() - 1)
+def normalizeProjectRel = { String r ->
+    def s = (r ?: "").replace("\\", "/")
+    return s.startsWith(projectRootPrefix + "/") ? s.substring(projectRootPrefix.length() + 1) : s
+}
+def rel = { String r ->
+    def normalized = normalizeProjectRel(r)
+    def p = Path.of(normalized)
+    return p.isAbsolute() ? p.normalize() : base.resolve(normalized.replace("/", java.io.File.separator)).normalize()
+}
+def readJson = { String r ->
+    def p = rel(r)
+    if (!Files.isRegularFile(p)) throw new IllegalStateException("Missing JSON: " + p)
+    return JSON.parseObject(Files.readString(p, StandardCharsets.UTF_8))
+}
+def writeText = { String r, String text ->
+    def p = rel(r)
+    Files.createDirectories(p.getParent())
+    Files.writeString(p, text, StandardCharsets.UTF_8)
+}
+def esc = { String s -> (s ?: "").replace("\\", "\\\\").replace("\"", "\\\"") }
+def tag = { String s -> (s ?: "unknown").replaceAll("[^a-zA-Z0-9_-]", "-").toLowerCase() }
+def jsonArray = { JSONObject o, String k -> o?.getJSONArray(k) ?: new JSONArray() }
+def asList = { JSONArray a ->
+    def out = []
+    if (a != null) for (int i = 0; i < a.size(); i++) out.add(a.get(i))
+    return out
+}
+def asStringList = { JSONArray a ->
+    def out = []
+    if (a != null) for (int i = 0; i < a.size(); i++) {
+        def v = a.get(i)
+        if (v != null && !String.valueOf(v).isBlank()) out.add(String.valueOf(v))
+    }
+    return out
+}
+def mapOf = { Object... kv ->
+    def m = new java.util.LinkedHashMap()
+    for (int i = 0; i + 1 < kv.length; i += 2) m.put(kv[i], kv[i + 1])
+    return m
+}
+def goldenRows = { JSONObject golden ->
+    def rows = []
+    if (golden == null || golden.isEmpty()) return rows
+    golden.keySet().each { key ->
+        def v = golden.get(key)
+        if ("accounts".equals(key) && v instanceof JSONArray) {
+            for (int i = 0; i < v.size(); i++) {
+                def acc = v.getJSONObject(i)
+                rows.add("| accountNumber | ${acc.getString("accountNumber")} | balance | ${acc.get("balance")} |")
+            }
+        } else if (!(v instanceof JSONObject) && !(v instanceof JSONArray)) {
+            rows.add("| ${key} | ${v} |")
+        }
+    }
+    return rows
+}
+def appendCredentialsTable = { StringBuilder sb, JSONObject cred ->
+    if (cred == null || cred.isEmpty()) return
+    sb.append("    And test credentials:\n")
+    sb.append("      | field | value |\n")
+    cred.keySet().each { k -> sb.append("      | ").append(k).append(" | ").append(cred.get(k)).append(" |\n") }
+}
+def appendApiScenario = { StringBuilder sb, JSONObject hint, JSONObject golden, String mappingStatus ->
+    def path = hint?.getString("path") ?: "/api/UNMAPPED"
+    def method = (hint?.getString("method") ?: "POST").toUpperCase()
+    def op = hint?.getString("suggestedOperation") ?: "execute"
+    def cap = hint?.getString("suggestedCapability") ?: ""
+    sb.append("\n  @api-mapping-${mappingStatus} @operation-").append(tag(op)).append("\n")
+    sb.append("  Scenario: API ").append(op).append(" (").append(path).append(")\n")
+    sb.append("    When the client sends \"").append(method).append("\" to \"").append(path).append("\"")
+    def body = hint?.getJSONObject("body")
+    def query = hint?.getJSONObject("query")
+    def pathParams = hint?.getJSONObject("pathParams")
+    if (body != null && !body.isEmpty()) {
+        sb.append(" with JSON body:\n")
+        body.keySet().each { k -> sb.append("      | ").append(k).append(" | ").append(body.get(k)).append(" |\n") }
+    } else if (query != null && !query.isEmpty()) {
+        sb.append(" with query parameters:\n")
+        query.keySet().each { k -> sb.append("      | ").append(k).append(" | ").append(query.get(k)).append(" |\n") }
+    } else if (pathParams != null && !pathParams.isEmpty()) {
+        sb.append(" with path parameters:\n")
+        pathParams.keySet().each { k -> sb.append("      | ").append(k).append(" | ").append(pathParams.get(k)).append(" |\n") }
+    } else {
+        sb.append("\n")
+    }
+    if ("gap".equals(mappingStatus) || "batch-or-none".equals(mappingStatus) || "mapping-gap".equals(mappingStatus)) {
+        sb.append("    Then the scenario should be marked as mapping-gap (explicit red in JUnit)\n")
+        return
+    }
+    sb.append("    Then the response status should be 200\n")
+    def rows = goldenRows(golden)
+    if (!rows.isEmpty()) {
+        sb.append("    And the JSON body should match golden:\n")
+        sb.append("      | field | expected |\n")
+        rows.each { sb.append("      ").append(it).append("\n") }
+    } else {
+        sb.append("    And the JSON body should satisfy trace-derived expectations\n")
+    }
+    if (cap) sb.append("    # verification-runtime fallback: capabilityId \"").append(cap).append("\"\n")
+}
+def buildFeature = { JSONObject scenario, String featureRel, String mappingStatus ->
+    def moduleId = scenario.getString("moduleId") ?: "unknown"
+    def scenarioId = scenario.getString("scenarioId") ?: "scenario"
+    def bc = scenario.getString("boundedContext") ?: moduleId
+    def traceFile = scenario.getString("traceFile")
+    def desc = scenario.getString("description") ?: ""
+    def validationKind = scenario.getString("validationKind")
+    def sb = new StringBuilder()
+    sb.append("# language: en\n")
+    sb.append("@module-").append(tag(moduleId)).append(" @boundedContext-").append(tag(bc))
+    if (traceFile == null || traceFile.isEmpty()) sb.append(" @no-3270-trace")
+    else sb.append(" @trace-mock")
+    sb.append("\n")
+    sb.append("Feature: ").append(moduleId).append(" / ").append(scenarioId).append("\n")
+    sb.append("  ").append(desc.replace("\n", " ")).append("\n\n")
+    sb.append("  Background:\n")
+    if (traceFile) {
+        sb.append("    Given the wc3270 trace fixture \"").append(traceFile).append("\"\n")
+    } else {
+        sb.append("    Given there is no wc3270 trace for this module\n")
+    }
+    sb.append("    And the legacy trace scenario id \"").append(scenarioId).append("\"\n")
+    def cred = scenario.getJSONObject("credentials")
+    appendCredentialsTable(sb, cred)
+    def pre = scenario.getString("preconditionTrace")
+    if (pre) sb.append("    And the precondition trace \"").append(pre).append("\"\n")
+    def steps = jsonArray(scenario, "steps")
+    if (!steps.isEmpty()) {
+        sb.append("\n  @trace-steps\n  Scenario: Legacy 3270 interaction sequence from trace\n")
+        asList(steps).each { st ->
+            if (!(st instanceof JSONObject)) return
+            def action = st.getString("action") ?: "step"
+            sb.append("    Given trace step ").append(st.getIntValue("stepIndex")).append(" action \"").append(action).append("\"\n")
+            def assertions = st.getJSONObject("assertions")
+            if (assertions != null) {
+                def contains = assertions.getJSONArray("screenContains")
+                if (contains != null) {
+                    for (int i = 0; i < contains.size(); i++) {
+                        sb.append("    Then the trace screen should contain \"").append(contains.getString(i)).append("\"\n")
+                    }
+                }
+            }
+        }
+    }
+    def hints = jsonArray(scenario, "apiMappingHints")
+    def golden = scenario.getJSONObject("goldenApiResponse")
+    if (hints.isEmpty()) {
+        sb.append("\n  @mapping-gap @explicit-fail\n")
+        sb.append("  Scenario: No API mapping hint — must fail until mapped\n")
+        sb.append("    Then the scenario should be marked as mapping-gap (explicit red in JUnit)\n")
+    } else {
+        asList(hints).each { h ->
+            if (h instanceof JSONObject) appendApiScenario(sb, h, golden, mappingStatus)
+        }
+    }
+    if ("batch-equivalence".equals(validationKind)) {
+        sb.append("\n  @batch-equivalence @mapping-gap\n")
+        sb.append("  Scenario: Batch jobs equivalence (no 3270 trace)\n")
+        def jobs = jsonArray(scenario, "batchJobs")
+        asList(jobs).each { j -> sb.append("    Given batch job \"").append(j).append("\" should have Java batch parity\n") }
+        sb.append("    Then the scenario should be marked as mapping-gap until Spring Batch parity exists\n")
+    }
+    writeText(featureRel, sb.toString())
+}
+
+
+
+#子模块 5.2：处理 catalog 不存在的情况
+#通俗理解：如果 trace-catalog.json 不存在，就不继续了。写一份"跳过报告"，把跳过原因写清楚，然后返回。
+#为什么这样设计：这是"优雅降级"——没有输入数据时不报错崩溃，而是明确告诉下游"我没干活，因为没找到原材料"
+
+
+
+def catalogPath = rel(catalogRel)
+if (!Files.isRegularFile(catalogPath)) {
+    def reportRel = "test/equivalence/equivalence-report-${version}.md"
+    def report = """# ${projectKey} Equivalence (Cucumber) ${version}
+
+- status: `SKIPPED_NO_TRACE_CATALOG`
+- reason: missing trace catalog
+- missingCatalog: `${catalogRel}`
+- next: run `agt_wc3270_trace_scenario_builder.c2j.validate` or provide wc3270 trace fixtures under `verification/wc3270`
+"""
+    writeText(reportRel, report)
+    fn.put("n_equivalence_feature_count", 0)
+    fn.put("n_equivalence_mapping_gap_count", 0)
+    return report
+}
+def catalog = readJson(catalogRel)
+
+
+子模块 5.3：读取架构文档，建立模块→能力映射表
+
+
+def archCapsByModule = new java.util.LinkedHashMap()
+try {
+    def architectureRef = catalog.getString("architectureRef") ?: "design/architecture/target-architecture-${version}.json"
+    def arch = readJson(architectureRef)
+    asList(jsonArray(arch, "modules")).each { m ->
+        if (m instanceof JSONObject) {
+            def mid = m.getString("moduleId")
+            def caps = asStringList(m.getJSONArray("capabilities"))
+            if (mid && !caps.isEmpty()) archCapsByModule.put(mid, caps)
+        }
+    }
+    asList(jsonArray(arch, "capabilityAssignments")).each { ca ->
+        if (ca instanceof JSONObject) {
+            def mid = ca.getString("moduleId")
+            def cap = ca.getString("capabilityId")
+            if (mid && cap) {
+                def caps = archCapsByModule.get(mid)
+                if (!(caps instanceof java.util.List)) caps = []
+                if (!caps.contains(cap)) caps.add(cap)
+                archCapsByModule.put(mid, caps)
+            }
+        }
+    }
+} catch (Exception ignored) {}
+def features = []
+def scenarios = []
+def gapCount = 0
+def mappedCount = 0
+def seenScenarioRels = new java.util.LinkedHashSet()
+
+
+#子模块 5.4：注册场景 + 生成 Feature 文件
+#这是最核心的逻辑，分为两个函数
+
+
+def registerScenario = { JSONObject scenario, String featureRel, String traceId, Object fallbackCapabilities ->
+    def scenarioCaps = asStringList(scenario.getJSONArray("capabilities"))
+    def fallbackCaps = []
+    if (fallbackCapabilities instanceof Collection) {
+        fallbackCapabilities.each { c -> if (c != null && !String.valueOf(c).isBlank()) fallbackCaps.add(String.valueOf(c)) }
+    }
+    def effectiveCaps = !scenarioCaps.isEmpty() ? scenarioCaps : fallbackCaps
+    def hints = jsonArray(scenario, "apiMappingHints")
+    if (!effectiveCaps.isEmpty()) {
+        if (hints.isEmpty()) {
+            def h = new JSONObject()
+            h.put("suggestedCapability", effectiveCaps[0])
+            h.put("suggestedOperation", "execute")
+            h.put("method", "POST")
+            h.put("path", "/" + effectiveCaps[0])
+            hints.add(h)
+        }
+        asList(hints).each { h ->
+            if (h instanceof JSONObject && !h.getString("suggestedCapability")) {
+                h.put("suggestedCapability", effectiveCaps[0])
+            }
+            if (h instanceof JSONObject && (!h.getString("method"))) h.put("method", "POST")
+            if (h instanceof JSONObject && (!h.getString("suggestedOperation"))) h.put("suggestedOperation", "execute")
+            if (h instanceof JSONObject && (!h.getString("path") || "/api/UNMAPPED".equals(h.getString("path")))) {
+                h.put("path", "/" + h.getString("suggestedCapability"))
+            }
+        }
+    }
+    def traceFile = scenario.getString("traceFile")
+    def validationKind = scenario.getString("validationKind")
+    def mappingStatus = "batch-equivalence".equals(validationKind) ? "batch-or-none"
+            : ((hints.isEmpty() && traceFile != null && !traceFile.isEmpty()) ? "gap"
+            : (hints.isEmpty() ? "batch-or-none" : "present"))
+    if ("gap".equals(mappingStatus) || "batch-or-none".equals(mappingStatus)) gapCount++
+    else mappedCount++
+    buildFeature(scenario, featureRel, mappingStatus)
+    scenarios.add(mapOf(
+            "scenarioId", scenario.getString("scenarioId"),
+            "moduleId", scenario.getString("moduleId"),
+            "boundedContext", scenario.getString("boundedContext"),
+            "capabilities", !effectiveCaps.isEmpty() ? effectiveCaps : jsonArray(scenario, "capabilities"),
+            "traceId", traceId,
+            "traceFile", traceFile,
+            "featureFile", featureRel,
+            "mappingStatus", mappingStatus,
+            "apiMappingHints", hints,
+            "goldenApiResponse", scenario.getJSONObject("goldenApiResponse"),
+            "credentials", scenario.getJSONObject("credentials")))
+    features.add(featureRel)
+}
+
+
+#子模块 5.5：处理 catalog 中的模块
+#通俗理解：把 catalog 里登记的每个模块逐个处理
+
+
+def modules = jsonArray(catalog, "modules")
+asList(modules).each { m ->
+    if (!(m instanceof JSONObject)) return
+    def moduleId = m.getString("moduleId")
+    def trace = m.getJSONObject("trace")
+    if (trace == null) return
+    def scenarioRel = trace.getString("scenario")
+    if (scenarioRel == null || scenarioRel.isEmpty()) return
+    seenScenarioRels.add(normalizeProjectRel(scenarioRel))
+    def scenario = readJson(scenarioRel)
+    def featureRel = "test/cucumber/by-module/${moduleId}/${scenario.getString("scenarioId") ?: "scenario"}.feature".toString()
+    def fallbackCaps = archCapsByModule.get(moduleId)
+    if (!(fallbackCaps instanceof java.util.List) || fallbackCaps.isEmpty()) fallbackCaps = asStringList(m.getJSONArray("capabilities"))
+    registerScenario(scenario, featureRel, trace.getString("traceId"), fallbackCaps)
+}
+
+#子模块 5.6：扫描遗漏的 scenario 文件
+
+def scenarioRootRel = catalogRel.contains("/") ? catalogRel.substring(0, catalogRel.lastIndexOf("/")) : "verification/trace-scenarios"
+def scenarioRootPath = rel(scenarioRootRel)
+if (Files.isDirectory(scenarioRootPath)) {
+    Files.walk(scenarioRootPath)
+            .filter { p -> Files.isRegularFile(p) && p.getFileName().toString().endsWith(".scenario.json") }
+            .forEach { p ->
+        def scenarioRel = base.relativize(p).toString().replace("\\", "/")
+        if (seenScenarioRels.contains(scenarioRel)) return
+        def scenario = readJson(scenarioRel)
+        def moduleId = scenario.getString("moduleId") ?: p.getParent().getFileName().toString()
+        def scenarioId = scenario.getString("scenarioId") ?: p.getFileName().toString().replace(".scenario.json", "")
+        def featureRel = "e2e".equals(moduleId)
+                ? "test/cucumber/e2e/${scenarioId}.feature".toString()
+                : "test/cucumber/by-module/${moduleId}/${scenarioId}.feature".toString()
+        def fallbackCaps = archCapsByModule.get(moduleId)
+        registerScenario(scenario, featureRel, scenario.getString("traceId") ?: scenarioId, fallbackCaps)
+        seenScenarioRels.add(scenarioRel)
+    }
+}
+
+#子模块 5.7：处理 E2E 全链路场景
+
+def e2e = catalog.getJSONObject("e2eSuite")
+if (e2e != null) {
+    def e2eScenarioRel = e2e.getString("scenario")
+    if (e2eScenarioRel) {
+        def e2eScenario = readJson(e2eScenarioRel)
+        def e2eFeatureRel = "test/cucumber/e2e/${e2eScenario.getString("scenarioId") ?: "e2e"}.feature".toString()
+        def sb = new StringBuilder()
+        sb.append("# language: en\n@e2e @trace-mock\n")
+        sb.append("Feature: End-to-end wc3270 trace suite\n")
+        sb.append("  ").append(e2eScenario.getString("description") ?: "").append("\n\n")
+        sb.append("  Background:\n")
+        sb.append("    Given the wc3270 e2e trace fixture \"").append(e2e.getString("file")).append("\"\n")
+        appendCredentialsTable(sb, e2eScenario.getJSONObject("credentials"))
+        def moduleTraces = jsonArray(e2eScenario, "moduleTraces")
+        sb.append("\n  @module-chain\n  Scenario: Module trace chain in architecture order\n")
+        asList(moduleTraces).each { mt ->
+            if (!(mt instanceof JSONObject)) return
+            def mid = mt.getString("moduleId")
+            def tf = mt.getString("traceFile")
+            if (tf) sb.append("    Given module \"").append(mid).append("\" trace \"").append(tf).append("\"\n")
+            else sb.append("    Given module \"").append(mid).append("\" has no 3270 trace\n")
+        }
+        sb.append("    Then all module scenarios in the chain should pass API equivalence\n")
+        writeText(e2eFeatureRel, sb.toString())
+        features.add(e2eFeatureRel)
+        scenarios.add(mapOf("scenarioId", e2eScenario.getString("scenarioId"), "moduleId", "e2e",
+                "featureFile", e2eFeatureRel, "mappingStatus", "suite", "moduleTraces", moduleTraces))
+    }
+}
+
+def manifestRel = "test/equivalence/cucumber-manifest-${version}.json"
+
+#子模块 5.8：生成 manifest 和报告
+
+def manifest = mapOf(
+        "schema", "cobol2java.cucumber-manifest",
+        "version", version,
+        "projectKey", projectKey,
+        "generatedBy", "agt_equivalence_validator.c2j.validate",
+        "generatedAt", Instant.now().toString(),
+        "sourceCatalog", catalogRel,
+        "failOnUnmappedTrace", failOnUnmapped,
+        "stats", mapOf("featureCount", features.size(), "scenarioCount", scenarios.size(),
+                "mappedHintCount", mappedCount, "mappingGapCount", gapCount),
+        "features", features,
+        "scenarios", scenarios)
+writeText(manifestRel, JSON.toJSONString(manifest))
+def reportRel = "test/equivalence/equivalence-report-${version}.md"
+def report = new StringBuilder()
+report.append("# ").append(projectKey).append(" Equivalence (Cucumber) ").append(version).append("\n\n")
+report.append("- featureCount: `").append(features.size()).append("`\n")
+report.append("- mappingGapCount: `").append(gapCount).append("`\n")
+report.append("- manifest: `").append(manifestRel).append("`\n\n")
+report.append("## Features\n\n")
+features.each { f -> report.append("- `").append(f).append("`\n") }
+report.append("\n## Next\n\n")
+report.append("Run `agt_test_generator.c2j.validate` to emit JUnit from `").append(manifestRel).append("`.\n")
+writeText(reportRel, report.toString())
+
+fn.put("n_equivalence_manifest_json", JSON.toJSONString(manifest))
+fn.put("n_equivalence_feature_count", features.size())
+fn.put("n_equivalence_mapping_gap_count", gapCount)
+return report.toString()
+'''
+
+#模块 6：监控结束
+
+assign('n_e2e_monitor_action', 'agentSuccess',
+       'n_e2e_monitor_message', 'equivalence-validator-complete')
+n_e2e_monitor_ok, act_func.run?expression=e2e_monitor&funcFolder=c2j.runtime

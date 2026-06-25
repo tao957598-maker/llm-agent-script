@@ -1,0 +1,23 @@
+/*
+{
+  "title":"COBOL2Java Golden Trust Assessor",
+  "description":"P0：五维自动评分 Golden 可信度。score<0.8 标记 NEEDS_REVIEW，score<0.5 标记 NEEDS_RETRANSLATION。完全确定性，打破增量死锁。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"autoPassThreshold","label":"自动通过阈值","required":false,"default":"0.8"},
+    {"name":"reviewThreshold","label":"人工审批阈值","required":false,"default":"0.5"}
+  ],
+  "version":1,
+  "resultPlan":"n_golden_trust_assessor_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_auto_pass_threshold','{{fn.optional(autoPassThreshold,"0.8")}}',
+       'n_review_threshold','{{fn.optional(reviewThreshold,"0.5")}}')
+
+n_golden_trust_assessor_report, act_func.run?expression=golden_trust_assessor_json

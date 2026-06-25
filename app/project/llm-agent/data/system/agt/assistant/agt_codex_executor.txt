@@ -1,0 +1,125 @@
+/*
+{
+  "title": "Codex Cloud Assistant",
+  "description": "发送消息到 Codex 云端，支持同步和异步执行，异步时自动轮询结果"
+  "parameter": [
+    {
+      "name": "message",
+      "label": "输入信息",
+      "required": true,
+			"type":"textarea"
+    },
+    {
+      "name": "threadId",
+      "label": "任务ID",
+      "required": false,
+			"type":"textarea"
+    },
+		{
+			"name":"wait",
+			"label":"是否同步",
+			"required":false,
+			"defaultValue":"false",
+      "type":"select"
+      "args": [
+        {
+          "label": "是",
+          "value": "true"
+        }, {
+          "label": "否",
+          "value": "false"
+        }
+      ]
+		}
+  ],
+  "resultPlan": "n_codex_final_result",
+  "uiEntrance": "chatDoc",
+  "discoverable": false,
+  "tag": "assistant",
+  "life": "100"
+}
+*/
+
+assign('n_codex_final_result', '')
+// 默认异步
+assign('n_wait',"{{fn.optional(wait, 'false')}}")
+assign('n_sync',"{{fn.bool(n_wait)}}")
+// 云端-Codex 发送指令 API入参（wait=false，立即返回 thread_id/turn_id）
+assign('send_codex_param', '{{fn.json("message, message, wait, n_sync, thread_id, thread_id")}}')
+//## 云端-Codex发送指令详情
+n_send_codex_result, act_api.doExecuteDynamic?name='send_codex_msg'&dynamicParamData="{{send_codex_param}}"
+
+//# 解析 thread_id 和 turn_id
+n_send_done, act_func?script='''
+  def resp = n_send_codex_result?.result
+  fn.put("n_thread_id", resp?.thread_id ?: "")
+  fn.put("n_turn_id", resp?.turn_id ?: "")
+  fn.put("n_is_complete", resp?.output?.is_complete)
+  fn.put("n_send_status", resp?.status ?: "")
+  fn.put("n_send_text", resp?.output?.text ?: resp?.message ?: "")
+  // 判断是否已完成（优先用 is_complete，其次用 status）
+  def isDone = (n_is_complete == true || n_is_complete == "true") || n_send_status == "completed"
+  return isDone
+'''
+
+// 如果发送时已完成，直接返回
+when("n_send_done == true", {
+  //## 云端-Codex 执行完成
+  assign('n_codex_log', '{{n_send_text}}')
+})
+
+when('fn.bool(n_sync) ', {
+   assign('n_codex_final_result', '{{n_send_codex_result}}')
+   act_flow.go?plan=exit
+})
+
+// 云端-Codex 任务执行中：轮询获取最终结果（指数退避，最多10次）
+foreach('n_poll_item', '!fn.bool(n_sync) && !fn.bool(n_poll_is_done) && n_poll_item.index <=9 ', {
+  when('!fn.hasValue(n_codex_final_result) && fn.hasValue(n_thread_id) && fn.hasValue(n_turn_id)', {
+    act_func?script='''
+      def count = n_poll_item.index
+      def waitSeconds = (3 * Math.pow(2, count)) as int
+      fn.put("n_wait_seconds", waitSeconds)
+      fn.put("n_display_count", count + 1)
+    '''
+    log("[POLL] 第 {{n_display_count}} 次，等待 {{n_wait_seconds}} 秒")
+    act_flow.wait?second={{n_wait_seconds}}
+    // 云端-Codex 获取异步任务结果入参
+    assign('get_codex_result_param', '{{fn.json("thread_id, n_thread_id, turn_id, n_turn_id")}}')
+    //## 云端-Codex 获取异步任务结果
+    n_get_codex_result, act_api.doExecuteDynamic?name="get_codex_msg"&dynamicParamData="{{get_codex_result_param}}"
+
+    // 是否完成
+    n_poll_is_done, act_func?script='''
+      def resp = n_get_codex_result
+      def isComplete = resp?.output?.is_complete == true || resp?.output?.is_complete == "true"
+      def status = resp?.status
+      def isDone = isComplete || status == "completed"
+      def text = resp?.output?.text ?: resp?.message ?: ""
+      if (isDone && text) {
+        fn.put("n_codex_log", text)
+      } else if (text) {
+        fn.put("n_intermediate", text)
+      }
+      return isDone
+    '''
+
+    when("fn.bool(n_poll_is_done)", {
+      assign('n_codex_log', '{{n_intermediate}}')
+    })
+  })
+})
+
+// 轮询超限提示
+when('!fn.bool(n_sync) && !fn.bool(n_poll_is_done) && fn.hasValue(n_thread_id)', {
+  //## 云端-Codex 执行超时
+  assign('n_codex_log', '{{n_intermediate}}\n\n[轮询超时，请人工跟进]\nthread_id: {{n_thread_id}}\nturn_id: {{n_turn_id}}')
+})
+
+on_failure({
+  //## 云端-Codex 执行失败
+  assign('n_codex_log', "codex 执行失败：{{sys_failure_task.result}}")
+})
+
+// 云端-Codex 完成
+assign('n_codex_final_result', "{{n_get_codex_result}}")

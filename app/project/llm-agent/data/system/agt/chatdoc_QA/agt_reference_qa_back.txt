@@ -1,0 +1,136 @@
+/*
+{
+	"title": "Reference Chat Agent",
+	"description": "咨询Agent语法手册，可供使用的工具",
+    "parameter": [
+        {
+        "name":"userInput",
+        "label":"客户问题",
+        "type":"textarea"
+        },
+        {
+        "name":"kbSpaceId",
+        "label":"Folder ID",
+        "type":"knowledge_fold"
+        },
+        {
+        "name":"kbSpaceFileId",
+        "label":"File",
+        "type":"knowledge_space"
+        }
+    ],
+	"tag":"chatdoc_QA",
+	"resultPlan":"n_results",
+	"displayOrder":99,
+	"version":1
+
+} */
+// 预先设置空结果
+when('fn.hasValue(kbSpaceFileId)',{
+	assign("n_answer", "[]")
+	n_kbSpaceFileId,act_func?script='''
+		def value = kbSpaceFileId
+		if (value == null || value == "undefined" || value == "null") {
+			return ''
+		}
+		return value.toString()
+	'''
+	assign('kbSpaceFileId', '{{n_kbSpaceFileId}}')
+})
+
+assign('kbSpaceFileId', '{{n_kbSpaceFileId}}')
+
+// Tool API 工具定义资料
+assign('result_datas_tool', '[]')
+assign("filterItem", ''' {
+        "filterKey":"tool_type",
+        "operator":"==",
+        "filterValue":"API",
+        "logicType":""
+    } ''')
+// n_milvus_description 拿描述
+n_milvus_description,act_kb.search?requirement='{{userInput}}'&name='llm_tool_integration'&column='content'&filterItem='{{filterItem}}'&isRerank="true"&bm25Weight="0.3"&top="10"
+// get api ids by description
+assign('n_api_ids','[]')
+n_api_ids,act_func?script='''
+    def tmp = n_milvus_description
+    return tmp.findResults { it?.relation_id?.trim() ?: null }
+'''
+
+// get api data by id
+assign('n_api_datas','[]')
+foreach('api_id', 'n_api_ids', {
+    assign('api_id_item', '{{api_id.item}}')
+    when('fn.hasValue(api_id_item)',{
+        n_api_tmp_data,act_api.doExecuteDynamic?name='get_api_tool_detail_by_id'&dynamicParamData='{"id":"{{api_id_item}}"}'
+        n_tmp_arr,act_func?script='''
+            def tmp = n_api_tmp_data
+            def keysToRemove = ["code", "traceId", "message"]
+            keysToRemove.each { key ->
+                if (tmp.containsKey(key)) {
+                    tmp.remove(key)
+                } 
+            }
+            return tmp
+        '''
+        append('n_api_datas', '{{n_tmp_arr}}')
+    })
+})
+assign('n_api_datas','{{fn.when(n_api_datas.isEmpty(),"暂无相关资料",n_api_datas)}}')
+
+// Reference 语法等资料
+assign('result_datas_reference', '[]')
+assign('params_reference','{"question":"{{userInput}}","folderIds":"{{kbSpaceId!}}","knowledgeIds":"{{kbSpaceFileId!}}"}')
+n_milvus_reference,rag_kbs.searchQuestion?paramData='{{params_reference}}'&similarity='0.01'&isRerank="true"&bm25Weight="0.3"&top="20"
+n_reference_info,rag_kbs.markReference?data='{{n_milvus_reference}}'
+assign('n_reference_info','{{fn.when(n_reference_info.isEmpty(),"暂无相关资料",n_reference_info)}}')
+   
+assign('n_project_docs', '[]')
+assign('n_project_docs','{{fn.when(n_project_docs.isEmpty(),"暂无相关资料",n_project_docs)}}')
+
+// Define a prompt template for conversation
+define('tpl_chat_response', '''
+/*{
+  "enable_thinking":"false"
+}*/
+基于以下资产回答用户问题。
+
+【重要引用规则】
+1. **工具资产**：直接引用工具名称、描述或URL即可。
+2. **项目资产**与**语法资产**：如果回答中使用了来自【项目资产】或【语法资产】的具体句子、代码片段或逻辑描述，**必须**在该句子/片段后面立即带上该资产对应的完整 `<div>` 标签（例如：`...代码片段...<div id="..." type="..." num="..."/>`）。不要将标签单独放在段落末尾，必须紧贴被引用的内容。
+
+当回答中包含代码块（Code Block）时，请严格遵守以下格式规则：
+
+1. **禁止内部插入**：严禁在代码块内部（即 ```language ... ``` 标记之间）插入任何 `<div>` 标签、工具引用标记或脚注标签。代码块必须保持纯净，仅包含可执行的代码或注释。
+2. **统一后置**：如果需要在代码块附近展示 `<div>` 标签（例如工具调用标记 `<div id="..." type="tool" .../>` 或引用说明），必须将该标签放置在**整个代码块结束标记（```）之后**。
+3. **连续代码块处理**：如果回答中包含多个连续的代码块，每个 `<div>` 标签应紧跟在其所对应的特定代码块之后，或者如果它是针对整个代码段的说明，则放在最后一个代码块之后。
+4. **代码符号全英文原则**: 代码中的所有语法符号（包括括号 `()`, `[]`, `{}`, 引号 `''`, `""`, 分号 `;`, 逗号 `,`, 冒号 `:`, 点 `.` 等）**必须使用英文半角符号**。绝对禁止在代码逻辑、函数调用、参数传递或语法结构中使用中文全角符号（如 `（）`、`“”`、`；`、`，`、`：`）。
+
+【判断意图】
+- 若问"是什么/有哪些/怎么用"等概念或用法的问题→ 知识点指导：直接回答，列举相关资产，说明关联
+- 若描述是"我要做/想实现/需要构建"等需要设计或构建Agent的问题→ 构建方案：给出Agent设计思路（工具组合、架构要点、实现步骤）
+
+【用户问题】
+{{userInput}}
+
+【工具资产】
+{{n_api_datas}}
+
+【项目资产】
+{{n_project_docs}}  
+
+【语法资产】
+{{n_reference_info}}
+''')
+
+// Main agent logic
+//# generate answer
+log(' ')
+n_chat_response, tpl_chat_response, psr_ref
+
+//$ Assign the final result
+assign('result', '{{n_chat_response}}')
+when('!fn.hasValue(result)',{
+    //$ No found
+    assign('result', 'No relevant information found.')
+})

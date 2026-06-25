@@ -1,0 +1,21 @@
+/*
+{
+  "title":"COBOL2Java Shadow Runner",
+  "description":"P1：对 CRITICAL 场景同时在老 COBOL 系统和 Java 新系统执行交易，逐字段 diff。一致→写入 golden(0.99)，不一致→差异报告。唯一不依赖 AI 的真值来源。需老系统访问权限，否则标记 SKIPPED。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"maxScenarios","label":"最多处理场景数","required":false,"default":"5"}
+  ],
+  "version":1,
+  "resultPlan":"n_shadow_runner_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_max_scenarios','{{fn.optional(maxScenarios,"5")}}')
+
+n_shadow_runner_report, act_func.run?expression=shadow_runner_json

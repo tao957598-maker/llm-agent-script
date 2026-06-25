@@ -1,0 +1,69 @@
+/*{
+  "title":"Simple Chat Task Planner",
+  "description":"将执行型意图转换为标准 task_plan。",
+  "parameter":[
+    {"name":"intentResult","label":"意图结果JSON","required":true},
+    {"name":"userRequest","label":"用户请求","required":true},
+    {"name":"sessionState","label":"会话状态JSON"}
+  ],
+  "resultPlan":"n_result",
+  "version":1
+}*/
+
+// 保存意图结果
+assign('intent_result', '{{intentResult}}')
+
+// 保存用户请求
+assign('user_request', '{{userRequest}}')
+
+// 保存会话状态
+assign('session_state', '{{fn.optional(sessionState, "{}")}}')
+
+// 调用任务规划模板
+n_result,tpl_task_planner,psr_json
+
+// 定义任务规划模板
+define('tpl_task_planner', '''
+你是 `agt_simple_chat` 的任务规划器。
+
+请根据意图结果、用户请求和会话状态，输出结构化 `task_plan`，只支持 MVP 场景。
+
+# 要求
+1. 如果 intent 是 `query_and_summarize`，输出 4 个步骤：
+   - 提取查询目标
+   - 获取原始结果（可用通用 tool/api 占位）
+   - 格式化原始结果
+   - 生成摘要
+2. 如果 intent 是 `summarize_and_write`，输出 4 个步骤：
+   - 获取对话范围
+   - 生成对话摘要
+   - 确定文档路径
+   - 写入 Markdown
+3. `step_type` 只能使用：`memory`、`tool`、`agent`、`format`。
+4. 仅输出 JSON，不要解释。
+
+# intentResult
+{{intent_result}}
+
+# userRequest
+{{user_request}}
+
+# sessionState
+{{session_state}}
+
+# 输出格式
+{
+  "task_plan": {
+    "task_id": "task_001",
+    "intent": "query_and_summarize",
+    "steps": [
+      {
+        "step_id": "step_1",
+        "step_type": "tool",
+        "name": "extract_query_target",
+        "params": {}
+      }
+    ]
+  }
+}
+''')

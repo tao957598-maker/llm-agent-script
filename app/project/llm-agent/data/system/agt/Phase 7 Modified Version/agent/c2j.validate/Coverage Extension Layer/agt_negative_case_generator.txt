@@ -1,0 +1,74 @@
+/*
+{
+  "title":"COBOL2Java Negative Case Generator",
+  "description":"P2：确定性从 COBOL 错误处理代码提取'应被拒绝的输入'，LLM 构造反例 scenario（冻结账户转账、负数金额等）。确定性部分不消耗 LLM 算力。",
+  "parameter":[
+    {"name":"projectKey","label":"项目标识","required":true},
+    {"name":"projectRoot","label":"迁移工作区根目录","required":true},
+    {"name":"irVersion","required":false,"default":"v1"},
+    {"name":"scenarioFilter","label":"仅处理指定 scenario","required":false,"default":""},
+    {"name":"maxCases","label":"最多生成反例数","required":false,"default":"5"}
+  ],
+  "version":1,
+  "resultPlan":"n_negative_case_generator_report"
+}
+*/
+
+assign('n_project_key','{{projectKey}}',
+       'n_project_root','{{projectRoot}}',
+       'n_ir_version','{{fn.optional(irVersion,"v1")}}',
+       'n_scenario_filter','{{fn.optional(scenarioFilter,"")}}',
+       'n_max_cases','{{fn.optional(maxCases,"5")}}')
+
+//# 确定性：从 COBOL 源码提取错误处理中的"拒绝条件"
+n_negative_cases_json, act_func.run?expression=negative_case_generator_json
+
+//# LLM：基于拒绝条件构造反例 scenario
+foreach('n_negative_item', 'n_negative_cases', {
+    n_negative_scenario_json, tpl_negative_case_generator, psr_json?required='schema,moduleId,scenarioId', \
+      vrf_flag?value='fn.hasValue(sys_last_result,"moduleId")'
+
+    n_negative_write_result, act_func.run?script='''
+import com.alibaba.fastjson2.JSON
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+
+def rootDir = com.llm.agent.common.constant.AppDirConsts.getRootDir()
+def projectRoot = fn.str(fn.get("n_project_root"))?.trim()
+def sc = JSON.parseObject(fn.str(fn.get("n_negative_scenario_json")))
+sc.put("scenarioSource", "NEGATIVE_INFERRED")
+def base = Path.of(rootDir, projectRoot).toAbsolutePath().normalize()
+def moduleId = sc.getString("moduleId") ?: "inferred"
+def scenarioId = sc.getString("scenarioId") ?: "negative-case"
+def outRel = "verification/trace-scenarios/by-module/${moduleId}/${scenarioId}-negative.scenario.json"
+def out = base.resolve(outRel.replace("/", java.io.File.separator))
+Files.createDirectories(out.getParent())
+Files.writeString(out, JSON.toJSONString(sc), StandardCharsets.UTF_8)
+return "wrote " + outRel
+'''
+})
+
+assign('n_negative_case_generator_report', '''# 反例生成报告
+
+反例 scenario 已生成并落盘，标记为 NEGATIVE_INFERRED。
+验证 Java 是否正确拒绝了应当拒绝的请求。
+''')
+
+define('tpl_negative_case_generator', '''
+你是反例测试生成器。根据 COBOL 错误处理代码构造"应该被拒绝的输入"。
+
+# 拒绝条件
+{{n_negative_item.item.rejectionCondition}}
+
+# 原始场景
+{{n_negative_item.item.originalScenario}}
+
+# 输出要求
+生成一个 cobol2java.wc3270-scenario JSON（仅 JSON）：
+- scenarioId 含 "negative" 后缀
+- apiMappingHints 中含构造的反例输入
+- goldenApiResponse 期望值为错误响应
+- confidence ≤ 0.7
+- scenarioSource: "NEGATIVE_INFERRED"
+''')

@@ -1,0 +1,30 @@
+/*
+{
+	"title":"Data Analyzer",
+	"parameter":[
+		{
+			"name":"data",
+			"label":"原始数据",
+			"required":true,
+			"type":"textarea"
+		},
+		{
+			"name":"request",
+			"label":"分析要求",
+			"required":false,
+			"type":"text"
+		}
+	],
+	"displayOrder":0,
+	"version":2
+}
+*/
+define('tpl_analyze', '''
+你是数据分析助手。以下是用户提供的数据，请根据要求进行分析。
+{{request}}
+数据：
+{{data}}
+''')
+n_analysis, tpl_analyze, psr_all
+//## 最终输出
+assign('final_output', '{{n_analysis}}')

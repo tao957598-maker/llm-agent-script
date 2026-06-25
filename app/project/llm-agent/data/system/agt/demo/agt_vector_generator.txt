@@ -1,0 +1,126 @@
+/*
+{
+	"title":"特征向量生成器（纯返回版，内置防零兜底）",
+	"parameter":[
+		{
+			"name":"file_path",
+			"label":"文件路径",
+			"required":true,
+			"type":"text"
+		},
+		{
+			"name":"feature_defs",
+			"label":"特征定义 JSON",
+			"required":true,
+			"type":"textarea"
+		}
+	],
+	"displayOrder":0,
+	"version":11
+}
+*/
+// 1. 读取文件内容
+n_content, act_artifact.read?filepath='{{file_path}}'
+
+// 2. 提取文件名
+assign('file_name', '{{file_path}}')
+n_basename, act_func?script='''
+    def p = file_name
+    return p.contains("/") ? p.substring(p.lastIndexOf("/") + 1) : p
+'''
+
+// 3. 将内容赋给模板变量
+assign('program_content', '{{n_content}}')
+
+// 4. 调用 LLM 生成向量
+define('tpl_gen_vector', '''
+根据下面的特征定义，从程序代码中提取对应的特征值，生成一个数值向量。
+特征定义：
+{{feature_defs}}
+
+程序代码（可能较长，请只根据前2000字符判断）：
+{{program_content}}
+
+输出格式：一个JSON数组，元素必须是数字（0或1），绝不能是字符串！只能是例如[1, 0, 1, 0]的格式
+只输出JSON数组，不要任何解释。
+''')
+n_vector_raw, tpl_gen_vector, psr_json
+
+// 5. ★ 新增：兜底检查，防止 LLM 输出全零向量
+//    如果向量全为 0，则根据代码中的静态关键字和特征定义自动生成非零向量
+n_vector, act_func?script='''
+    def rawVecStr = n_vector_raw.toString()
+    def code = program_content
+    def featDefsJson = feature_defs
+
+    // 尝试解析 LLM 输出的向量
+    def vecList = null
+    try {
+        def clean = rawVecStr.replaceAll("[\\[\\] ]", "")
+        if (!clean.isEmpty()) {
+            vecList = clean.split(",").collect { Integer.parseInt(it.trim()) }
+        }
+    } catch (e) {
+        vecList = null
+    }
+
+    // 如果向量解析失败或全为 0，则使用静态特征生成兜底向量
+    if (vecList == null || vecList.every { it == 0 }) {
+        // 解析特征定义 JSON，获取特征名称列表
+        def featDefs = null
+        try {
+            featDefs = groovy.json.JsonSlurper().parseText(featDefsJson)
+        } catch (e) {
+            featDefs = []
+        }
+        int featCount = featDefs.size()
+        if (featCount == 0) {
+            // 完全没有特征定义，返回一个基础非零值
+            return "[1]"
+        }
+
+        def newVec = new int[featCount]
+        boolean hasOne = false
+
+        for (int i = 0; i < featCount; i++) {
+            def featObj = featDefs[i]
+            def fname = featObj.name
+            // 根据特征名称进行简单关键词匹配
+            if (fname.startsWith("has_")) {
+                // 将特征名转换为搜索关键词：has_execcics_sendmap -> "SEND MAP"
+                def keyword = fname.substring(4).replace('_', ' ').toUpperCase()
+                if (code.contains(keyword)) {
+                    newVec[i] = 1
+                    hasOne = true
+                }
+            } else if (fname.startsWith("prefix_")) {
+                def expected = fname.substring(7)
+                def pidMatcher = (code =~ /PROGRAM-ID\.\s+(\w+)/)
+                if (pidMatcher.find()) {
+                    def progId = pidMatcher.group(1)
+                    if (progId.startsWith(expected)) {
+                        newVec[i] = 1
+                        hasOne = true
+                    }
+                }
+            }
+            // 对于其他无法自动判断的特征（如语义特征），保持 0
+        }
+
+        // 如果仍然全为 0（极端情况），强制将最后一个特征设为 1（通常最后一个会是 is_unknown 之类的兜底特征）
+        if (!hasOne) {
+            newVec[featCount - 1] = 1
+        }
+
+        return "[" + newVec.join(",") + "]"
+    }
+
+    // LLM 输出的向量非零，直接返回原向量字符串
+    return rawVecStr
+'''
+
+// 6. 组合文件名和向量，格式：文件名::[向量]
+assign('combined', '{{n_basename}}::{{n_vector}}')
+
+//## 最终输出
+assign('final_output', '{{combined}}')

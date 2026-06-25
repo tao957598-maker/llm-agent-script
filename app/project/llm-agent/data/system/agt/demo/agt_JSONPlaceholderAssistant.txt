@@ -1,0 +1,46 @@
+/*
+{
+	"title":"带记忆的JSONPlaceholder查询助手（主线版）",
+	"parameter":"{\"name\":\"question\",\"label\":\"你的问题\",\"type\":\"text\",\"required\":true}",
+	"displayOrder":0,
+	"version":18
+}
+*/
+// ========== 1. 提取历史记忆 ==========
+assign("history_data", '{{fn.queryMessages("history_log", 0, 10)}}')
+assign("history", '{{history_data}}')
+assign("history_for_async", '{{fn.when(fn.hasValue(history_data), history_data, "无历史对话")}}')
+
+// ========== 2. 意图解析 ==========
+define('tpl_parse_intent', '''
+你是一个意图解析器。根据【历史对话】和【用户当前问题】，输出JSON: {"resource":"posts"|"users"|"comments", "query_id":"", "request":"..."}
+【历史对话】
+{{history}}
+【用户当前问题】
+{{question}}
+''')
+n_intent_json, tpl_parse_intent, psr_json
+assign('resource', '{{n_intent_json.resource}}')
+assign('query_id', '{{n_intent_json.query_id}}')
+assign('request', '{{n_intent_json.request}}')
+
+// ========== 3. 调用 API ==========
+assign('endpoint', '{{resource}}')
+when ("query_id != ''", {
+    assign('endpoint', '{{resource}}/{{query_id}}')
+})
+n_raw_data, act_api.doExecuteDynamic?name='jsonplaceholder'&dynamicParamData='{"resource":"{{endpoint}}"}'
+
+// ========== 4. 数据分析 ==========
+define('tpl_summary', '''
+你是数据分析助手。数据：{{api_data}}。要求：{{request}}
+''')
+assign('api_data', '{{n_raw_data}}')
+n_analysis, tpl_summary, psr_all
+
+// ========== 5. 输出本次查询结果 ==========
+n_msg, act_say "{{n_analysis}}"
+
+// ========== 6. 将本次对话追加到全局记忆 ==========
+assign('this_round_log', '用户：{{question}}\n助手：{{n_analysis}}')
+act_memory.assign?var=history_log&value={{this_round_log}}&global=true
