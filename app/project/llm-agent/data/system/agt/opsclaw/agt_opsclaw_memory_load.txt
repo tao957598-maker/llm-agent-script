@@ -1,0 +1,162 @@
+/*
+{
+	"title": "OpsClaw 加载记忆",
+	"description": "OpsClaw 加载记忆 - 加载用户知识空间下的 profile.md、key-memories.md 与语义检索上下文，供 opsclaw_assistant 使用。",
+	"parameter": [
+		{
+			"name": "userInput",
+			"label": "用户输入",
+			"required": true
+		},
+		{
+            "name":"loginUserId",
+            "label":"登录用户ID"
+        },
+		{
+			"name": "opsclaw_root",
+			"label": "opsclaw 知识空间根路径"
+		}
+	],
+	"resultPlan": "n_load_memory_result",
+	"discoverable": false,
+	"tag": "opsclaw"
+}
+*/
+
+assign('n_opsclaw_context', '',
+	'n_opsclaw_profile', '',
+	'n_opsclaw_key_memories', '')
+
+when('fn.hasValue(opsclaw_root)', {
+	assign('opsclaw_question', '{{userInput}}')
+	assign('opsclaw_profile_path', '{{opsclaw_root}}/profile.md',
+		'opsclaw_key_memories_path', '{{opsclaw_root}}/key-memories.md')
+
+	// 个性/人格配置（必须项）：不存在时降级为空
+	n_opsclaw_profile, act_func.read?filename={{opsclaw_profile_path}}
+	on_failure({
+		assign('n_opsclaw_profile', '')
+	})
+
+	// 关键长期记忆：不存在时降级为空
+	n_opsclaw_key_memories, act_func.search?query='{{userInput}}'&filepath='{{opsclaw_root}}'&contextLinesAfter=10&ignoreCase=true&fuzzyMatch=true
+	on_failure({
+		assign('n_opsclaw_key_memories', '')
+	})
+
+    // 向量查询
+	// n_opsclaw_context, act_kbs.searchQuestion?paramData={{fn.json('question, opsclaw_question, folderPath, opsclaw_root')}}&similarity='0.35'
+	// 对用户输入的信息，进行元数据解析，并进行总结
+    n_message_summary_result, agt_chatdoc_message.chatdoc?userInput='{{userInput}}'&userId='{{loginUserId}}'
+    assign("filterItem", ''' {
+            "filterKey":"create_by",
+            "operator":"==",
+            "filterValue":{{loginUserId}},
+            "logicType":""
+        } ''')
+    // 通过总结，寻找消息向量数据信息，匹配出前5数据
+    n_message_data,act_kb.search?requirement='{{n_message_summary_result.content_summary}}'&name='chat_message'&column='content_summary'&top=5&filterItem='{{filterItem}}'
+    // 取0.7分及以上的向量数据信息
+    n_filter_message_data,act_func?script='''
+        def items = new ArrayList()
+        def len = n_message_data?.size() ?: 0
+        for(int i = 0; i < len;i++){
+            def data = n_message_data[i];
+            if(data.similarityScore >= 0.7){
+                items.add(data);
+            }
+        }
+        return items
+    '''
+
+    assign('n_content_ids', '')
+    // 通过id找到回答的content
+    foreach('n_loop_data', 'n_filter_message_data', {
+        assign('n_message_item', '{{n_loop_data.item}}')
+        n_assistant_data,act_kb.selectBy?sql='select * from chat_message where parent_id = ? order by id desc limit 1'&parameters='{{n_message_item.id}}'
+        n_content_ids,act_func?script='''
+                String contentIds = n_content_ids
+                if(n_assistant_data?[0]?.content != null && n_assistant_data?[0]?.content != ''){
+                    contentIds += n_assistant_data?[0]?.content + ","
+                }
+                return contentIds
+            '''
+    })
+
+    // 找到每一个对话的最终返回结果
+    n_message_final_result,act_api.doExecuteDynamic?name="get_chatbot_final_result"&dynamicParamData='{{fn.json("contentIds,n_content_ids")}}'
+    n_message_final_data,act_func?script='''
+        def messageItems = n_message_data;
+        def messageFinalResultItems = n_message_final_result?.data;
+        def finalResultItems = new ArrayList();
+        def resultItems = new ArrayList();
+        def messageItemsLen = messageItems?.size() ?: 0
+        def messageFinalResultItemsLen = messageFinalResultItems?.size() ?: 0
+        for(int i = 0; i < messageItemsLen; i++){
+            for(int j = 0; j < messageFinalResultItemsLen; j++){
+                if(messageItems[i].id == messageFinalResultItems[j].parentId){
+                    messageItems[i].put("finalResult", messageFinalResultItems[j].finalResult);
+                    finalResultItems.add(messageItems[i]);
+                    break;
+                }
+            }
+        }
+
+        def finalResultItemsLen = finalResultItems?.size() ?: 0
+        for(int i = 0; i < finalResultItemsLen; i++){
+            if(finalResultItems[i].finalResult != null && finalResultItems[i].finalResult != ""){
+                resultItems.add(finalResultItems[i]);
+            }
+        }
+        return resultItems;
+    '''
+    // 通过大模型抽取有用的私域信息
+    n_opsclaw_context,tpl_vector_search_extract
+})
+
+// 聚合为单一结果供调用方使用（opsclaw_root 为空时上面三变量仍为空）
+assign('n_load_memory_result', '{{fn.json("profile, n_opsclaw_profile, keyMemories, n_opsclaw_key_memories, context, n_opsclaw_context.final_summary_result")}}')
+
+define('tpl_vector_search_extract', '''
+    ## 任务描述
+    根据用户的当前输入问题，从提供的向量数据库中匹配最相关的历史信息。你需要分析向量匹配分数和历史内容，给出最合适的回答
+    ## 输入信息
+    1. **用户当前输入**：
+    {{userInput}}
+    2. **向量匹配结果**：
+    {{n_message_final_data}}
+
+    其中每条记录包含：
+       - `similarityScore`: 向量相似度分数（0-1之间，越接近1表示越相似）
+       - `content`: 用户历史输入的问题文本
+       - `content_summary`: 历史问题的总结摘要
+       - `finalResult`: 用户问题的最终结果
+
+    ### 第一步：评估匹配质量
+    - 检查所有匹配结果的 `similarityScore`
+    - 如果最高分数 < 0.6，表示匹配质量一般，需要谨慎参考
+    - 如果最高分数 >= 0.8，表示匹配质量优秀，可重点参考
+
+    ### 第二步：选择参考信息
+    按照以下优先级选择参考内容：
+    1. **高相关性优先**：选择 `similarityScore` 最高的记录
+    2. **时间邻近性**：如果分数相近，优先考虑更近期的记录
+    3. **信息完整性**：优先选择 `content` 和 `content_summary` 都完整的记录
+
+    ### 第三步：元数据匹配(优先级高)
+    1. ** 如果用户询问到时效性问题，需要严格匹配metadata中关于时效性属性
+    2. ** 如果用户询问到地理位置问题，需要严格匹配metadata中关于地理属性
+    3. ** 如果用户询问到其他类似1、2问题，那么也需要严格匹配metadata中相关属性
+
+    ### 第四步：提取结果
+	1. ** 从多条向量结果的content、content_summary信息总结出用户历史对话信息
+	2. ** 从多条向量结果的finalResult中配合历史操作信息，总结出用户历史对话需要的结果，简短信息
+	3. ** 返回信息如果包含步骤信息，请按顺序排列
+	4. ** 不需要显示与历史相关信息
+	5. ** 可以去掉解释信息，除非解释信息中包含权重高的业务信息
+
+	返回格式最匹配的一条数据的全部内容，如果向量数据不匹配，可以通过所有向量数据，进行总结，返回结果格式为：
+	{
+	    "final_summary_result":"总结结果"
+	}
+''')

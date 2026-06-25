@@ -1,0 +1,66 @@
+/*
+ {
+     "title": "Generate UI Page Tool",
+     "description": "Generate UI page tool, types include forms and lists",
+	 "parameter": [
+     		 {
+     			"name":"requirement",
+     			"label":"用户对话内容"
+     		 },
+             {
+                "name":"pageType",
+                "label":"页面类型：此处传100(简单页面)"
+             },
+             {
+                "name":"tag",
+                "label":"标签名称"
+             }
+     	 ]
+ }
+*/
+
+when("tag == null || tag == ''",{
+	assign("tag", "prompt")
+})
+when("description == null || description == ''",{
+	assign("description", "-")
+})
+
+// 1.生成新页面属性信息，并保存到db
+tpl_ui_generator, act_api?name=ui_dev_save&params={{sys_last_result}}
+assign('n_last_result_data', '{"result":"success","pageName":"{{tpl_ui_generator.pageName}}","msg":"Generation completed"}')
+
+assign('return', '{{n_last_result_data}}')
+
+define('tpl_ui_generator', '''
+	你是一名程序开发人员，基于用户的描述，生成表单的字段信息，其中description如果为"-"，那么也需要生成对应的描述信息
+
+	用户需求:
+    	{{requirement}}
+
+	返回定义的json信息如下，请帮我生成metaDataColumns，其他属性保持原样不做改动
+    {
+        pageName: '{{pageName}}',
+        pageCode: '{{pageCode}}',
+        pageType: '{{pageType}}',
+        systemUI: '{{systemUI}}',
+        tag:'{{tag}}',
+        description: '{{description}}',
+        metaDataColumns:[]
+    }
+
+    生成数据严格参考以下信息：
+        metaDataColumns示例如下：
+            metaDataColumns：[
+                        {"name":"contractPurpose", "label":"合同用途", "type":"textarea", "args":"", "required":1, "displayArea":1,"sort":1},
+                        {"name":"signNum", "label":"签约人数", "type":"select", "args":"1人,3人,5人", "required":1, "displayArea":1,"sort":2},
+                        {"name":"effectDate", "label":"生效日期", "type":"date", "args":"", "required":0, "displayArea":1,"sort":3},
+                        {"name":"contractNum", "label":"合同编号", "type":"text", "args":"", "required":0, "displayArea":1,"sort":4}
+                    ]
+        关于metaDataColumns的字段说明：
+            name: 字段名称
+            type: 字段标签的类型，可选的html表单标签有：text,date,select,radio,checkbox
+            args: 字段标签所需要的额外参数
+            required: 是否为必填字段
+        PS:如果type是select,radio,checkbox这三种类型，生成的args数据格式为：[{"value":"Option1","label":"Option1"}]
+''')

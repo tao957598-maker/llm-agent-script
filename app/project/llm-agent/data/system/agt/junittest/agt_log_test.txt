@@ -1,0 +1,17 @@
+/*
+{
+	"title":"打印测试",
+	"description":"打印测试",
+	"parameter":"param=参数",
+	"version":1
+}
+*/
+
+//# 打印1
+log("第一步骤")
+
+//# 打印2
+log("子agent打印参数{{param}}")
+
+//# 最后打印
+log("最后一步骤")

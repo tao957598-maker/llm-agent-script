@@ -1,0 +1,20 @@
+/*
+{
+	"title":"知识空间文件查询Agent",
+	"description":"根据文件ID查询知识空间文件内容",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"knowledge_space\"}",
+	"tag":"Knowledge Space Query",
+	"version":1
+}
+*/
+// 将逗号分隔的文件ID转换为数组
+assign("fileIds", '{{fn.split(kbSpaceFileId, ",")}}')
+
+// 构建SQL查询条件
+assign("sqlCondition", '')
+
+// 执行SQL查询
+n_queryResult, act_kb.selectBy?sql='SELECT fileName, page, COALESCE(analysis_content, content) AS content FROM kbs_doc_page_parse WHERE documentId IN ({{kbSpaceFileId}})'
+
+// 返回查询结果
+assign("result", '{{n_queryResult}}')

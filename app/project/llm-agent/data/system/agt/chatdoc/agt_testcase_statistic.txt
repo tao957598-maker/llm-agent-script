@@ -1,0 +1,77 @@
+/*
+ {
+	 "title": "TestCase Statistic",
+	 "description": "Query the percentage of testing statistics",
+	 "parameter": [
+	 	{
+	 		"name":"userInput",
+	 		"label":"用户输入"
+	 	}
+	 ],
+	 "llmType": "",
+	 "resultPlan": "n_report_data",
+	 "uiEntrance": "",
+	 "life": "100"
+ }
+*/
+
+//## 分析echats图表数据
+tpl_analysis_chat, psr_json
+
+//## 查询结果
+n_select_result, act_kb.selectBy?sql={{tpl_analysis_chat.sqlScript}}
+
+//## 生成报表
+n_report_data, act_report.echats?echartsParam={{tpl_analysis_chat}}&data={{n_select_result}}
+
+define('tpl_analysis_chat', '''
+你是数据sql脚本和echats图表的专家
+根据用户输入，请分析确定echats统计类型（可选：pie-饼图，line-折线图，bar-柱状图），使用统计SQL脚本提取到echats的需要的数据中。
+
+# 要求：
+1. 不要随意调整统计SQL除非用户显示提示；
+2. 直接以```json ```返回不用解释
+3. 字段解释：
+title: 对应的echats标题
+type: pie-饼图，line-折线图，bar-柱状图
+pieNameField: 当type=pie，name取值字段
+pieValueField: 当type=pie，value取值字段
+xCategoryField: 当type=line/bar，x轴取值字段
+yValueField: 当type=line/bar，y轴取值字段
+
+# 返回示例： 
+{
+    "title": "测试执行成功率",
+    "type": "pie",
+    "pieNameField": "status",
+    "pieValueField": "count",
+    "xCategoryField": "",
+    "yValueField": "",
+    "sqlScript": "SELECT xxx FROM xxx;"
+}
+
+# 统计SQL：
+-- 查询agent案例的执行成功率
+SELECT
+  CASE
+    WHEN status = 10 THEN CONCAT(status, '(Pending)')
+    WHEN status = 100 THEN CONCAT(status, '(Running)')
+    WHEN status >= 300 AND status <= 310 THEN 'Suspend'
+    WHEN status = 311 THEN CONCAT(status, '(Exception)')
+    WHEN status = 312 THEN CONCAT(status, '(TimeOut)')
+    WHEN status = 500 THEN CONCAT(status, '(End)')
+    WHEN status = 510 THEN CONCAT(status, '(Failed)')
+    ELSE status
+  END AS status_group,
+  COUNT(*) AS count
+FROM 
+  llm_agent_instance
+GROUP BY 
+  status_group;
+
+# 用户输入：
+{{userInput}}
+''')
+
+
+

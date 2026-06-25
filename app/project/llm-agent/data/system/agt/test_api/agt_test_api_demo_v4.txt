@@ -1,0 +1,283 @@
+/*
+{
+	"title":"API Test Script Generation",
+	"description":"API测试脚本生成",
+	"parameter":[
+		{
+			"name":"outputTable",
+			"label":"Data Storage Table",
+			"type":"input",
+			"defaultValue":"kb_api_test_data"
+		},
+		{
+			"name":"url",
+			"label":"api url",
+		},
+		{
+			"name":"api_data",
+			"label":"api data",
+			"type":"textarea"
+		},
+		{
+			"name":"version",
+			"label":"version",
+		}
+	],
+	"resultPlan":"n_python_code",
+	"life":1000,
+	"version":1
+}
+*/
+// Get KB
+assign("newTableName", "{{outputTable}}")
+
+// Get api data
+when('!fn.hasValue(api_data)', {
+	// Get api url
+	assign("n_url", "{{url}}")
+	n_api_data, act_api.doExecuteDynamic?name="get_api_data"&dynamicParamData='{{fn.json("url, n_url")}}'
+},{
+	// get api url for input
+	assign("n_api_data", "{{api_data}}")		
+})
+
+// 拆分API接口文档
+n_api_list, act_func?js='''
+(function() {
+    // 原始OpenAPI文档
+    let openApiDoc = {{n_api_data}};
+
+    // 拆分函数
+    function splitOpenApiDoc(doc) {
+        const result = [];
+        const baseInfo = {
+            openapi: doc.openapi,
+            info: doc.info,
+            components: {
+                schemas: {
+                    HTTPValidationError: doc.components.schemas.HTTPValidationError,
+                    ValidationError: doc.components.schemas.ValidationError
+                }
+            }
+        };
+
+        for (const [path, methods] of Object.entries(doc.paths)) {
+            for (const [method, operation] of Object.entries(methods)) {
+                const singleEndpoint = JSON.parse(JSON.stringify(baseInfo));
+                // 添加路径和操作
+                singleEndpoint.paths = {
+                    [path]: {
+                        [method]: operation
+                    }
+                };
+                
+                // 添加相关的schema
+                const refs = findSchemaRefs(operation);
+                for (const ref of refs) {
+                    const schemaName = ref.split('/').pop();
+                    if (doc.components.schemas[schemaName]) {
+                        singleEndpoint.components.schemas[schemaName] = doc.components.schemas[schemaName];
+                    }
+                }
+                result.push(JSON.stringify(singleEndpoint));
+            }
+        }
+        return JSON.stringify(result);
+    }
+
+    // 辅助函数：查找schema引用
+    function findSchemaRefs(obj, refs = new Set()) {
+        if (typeof obj !== 'object' || obj === null) return refs;
+        
+        for (const [key, value] of Object.entries(obj)) {
+            if (key === '$ref') {
+                refs.add(value);
+            } else if (typeof value === 'object') {
+                findSchemaRefs(value, refs);
+            }
+        }
+        return refs;
+    }
+
+    // 执行拆分
+    const splitApis = splitOpenApiDoc(openApiDoc);
+
+    // 返回拆分结果
+    return splitApis;
+})();
+'''
+
+// Get version
+assign("n_version", "{{version}}")
+
+// Generate the python code for api test
+foreach('n_api','n_api_list', {
+	// 单个api接口数据
+	assign('openapi_json', '{{n_api.item}}')
+
+	// 生成单个api功能测试数据
+	n_api_test_data, tpl_fastapi_test_data, psr_json
+
+	// 生成单个api性能测试数据
+	n_api_performance_test_data, tpl_fastapi_performance, psr_json
+
+	// 增加version
+	 n_test_data, act_func?script='''
+		def result = n_api_test_data[0]
+		result["version"] = "{{n_version}}"
+		result["performance"] = n_api_performance_test_data[0]
+		return [result]
+    '''
+
+	// 重组api测试数据
+	n_data_item, act_func?js='''
+	(function() {
+		let originalData = {{n_test_data}};
+		function transformData(originalData) {
+			return originalData.map(api => {
+				const transformedApi = {
+					name: api.name,
+					method: api.method,
+					description: api.description,
+					version: api.version,
+					performance: api.performance,
+					parameter: [],
+					verify: []
+				};
+				
+				api.testdata.forEach(testCase => {
+					// 处理parameter部分
+					transformedApi.parameter.push({
+						title: testCase.title,
+						parameter: testCase.parameter
+					});
+					
+					// 处理verify部分
+					transformedApi.verify.push({
+						title: testCase.title,
+						verify: testCase.verify
+					});
+				});
+				return transformedApi;
+			});
+		}
+		// 调用函数
+		return JSON.stringify(transformData(originalData));
+	})();
+	'''
+	// Send single api test data to kb
+	act_kb.defineAndImportData?tableName='{{newTableName}}'&data='{{n_data_item}}'
+
+})
+
+
+// 根据FastAPI接口文档生成接口测试测试数据
+// Generate interface testing data based on FastAPI interface documentation
+define('tpl_fastapi_test_data', '''
+- Role: FastAPI接口测试场景生成专家
+- Background: 根据OpenAPI 3.1.0规范文档自动生成结构化测试场景
+- Skills:OpenAPI规范解析、测试场景设计、JSON数据处理能力、JSON Schema验证、Python断言生成
+- Goals: 为所有接口生成完整测试场景，包含正常流、参数异常和业务异常
+- OutputFormat:  必须返回合法的JSON格式，其中顶级键为接口路径，值为测试场景列表:
+"```json
+[
+	{
+		"name":	"/path1",
+		"method": "HTTP方法",	// get、post、put、delete等
+		"description":"",	//API功能描述
+		"testdata":[ 
+			{
+				"title": "场景描述", // 使用英文
+				"parameter": {
+					"headers": {}, // 请求头,// 所有方法必填
+					"params": {},  // 查询参数, 仅仅get请求时才使用
+					// POST/PUT方法包含以下字段
+					"data": {},     // 表单数据
+					"json": {}		// JSON请求体
+				},
+				"verify":"def verify_response(response):\n  断言逻辑"
+			},
+			{
+				"title":"场景描述2",
+				"parameter":{
+					"headers":{},
+					"params":{},
+					"data":{},
+					"json":{}
+				},
+				"verify":""
+			}
+		]
+	},
+	{
+		"name":"/path2",
+		......
+	}		
+]	
+```"
+- 接口规范输入:
+{{openapi_json}}
+
+生成要求:
+1. 生成的数据必须是合法的JSO格式，不能含有运算符号，如“+”、“*”
+2. 必须遍历所有paths和HTTP方法(GET/POST/PUT/DELETE等)
+3. HTTP方法与参数字段严格对应：
+   - GET/DELETE：仅生成headers和params字段
+   - POST/PUT：生成headers、data和json字段（根据接口定义选择合适的请求体类型）
+4. 每个接口至少包含3类场景:
+   a. 正常请求(200/201响应)
+   b. 必填参数缺失(422响应)
+   c. 业务异常(4xx/5xx响应)
+5. parameter字段需根据接口定义自动生成:
+   - headers: 包含认证信息和Content-Type
+   - params: 查询参数(仅GET方法)
+   - data: 请求体(POST/PUT方法)
+   - json: 请求体(POST,根据需要判断是否需要)
+6. verify函数必须包含:
+   - 状态码断言
+   - 响应JSON Schema验证
+   - 业务关键字验证
+7. 测试数据需符合字段类型约束，包含合理边界值
+''')
+
+
+// Generate performance test data for interface
+define('tpl_fastapi_performance', '''
+- Role: FastAPI接口测试场景生成专家
+- Background: 根据OpenAPI 3.1.0规范文档自动生成结构化测试场景
+- Skills:OpenAPI规范解析、测试场景设计、JSON数据处理能力、JSON Schema验证
+- Goals: 为所有接口只生成正常流一个测试场景即可
+- OutputFormat:  必须返回合法的JSON格式，其中顶级键为接口路径，值为测试场景列表:
+"```json
+[
+	{
+		"name":	"/path1",
+		"protocol": "HTTP",
+		"headers": {}, // 请求头,// 所有方法必填
+		"params": {},  // 查询参数, 仅仅get请求时才使用
+		// POST/PUT方法包含以下字段
+		"data": {},     // 表单数据
+		"json": {}		// JSON请求体
+	},
+	{
+		"name":"/path2",
+		......
+	}		
+]	
+```"
+- 接口规范输入:
+{{openapi_json}}
+
+生成要求:
+1. 生成的数据必须是合法的JSO格式，不能含有运算符号，如“+”、“*”
+2. 必须遍历所有paths和HTTP方法(GET/POST/PUT/DELETE等)
+3. HTTP方法与参数字段严格对应：
+   - GET/DELETE：仅生成headers和params字段
+   - POST/PUT：生成headers、data和json字段（根据接口定义选择合适的请求体类型）
+4. 每个接口只需要正常请求1类场景即可
+5. parameter字段需根据接口定义自动生成:
+   - headers: 包含认证信息和Content-Type
+   - params: 查询参数(仅GET方法)
+   - data: 请求体(POST/PUT方法)
+   - json: 请求体(POST,根据需要判断是否需要)
+''')

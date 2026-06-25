@@ -1,0 +1,36 @@
+/*
+{
+	"title": "Answer user question by expert knowledge base",
+	"description": "expert knowledge base",
+	"parameter": [
+	{
+		"name":"userInput",
+		"label":"客户问题",
+		"type":"textarea"
+	},
+	{
+		"name":"kbData",
+		"label":"专家知识库",
+		"type":"label",
+		"defaultValue":"kb_test_query"
+	}],
+	"llmType": "",
+	"resultPlan":"finally_answer"
+} 
+*/
+
+// Search from expert knowledge base
+n_result,rag_kb.search?column='question'&name='{{kbData}}'&requirement='{{userInput}}'&bm25Weight='0.65'
+
+when('n_result?size>0',{
+	// Get the query result from the expert knowledge base
+	assign('n_answer','{{n_result}}')
+},
+{
+	// The query result from the expert knowledge base is empty
+	assign("n_answer", '[]')
+})
+
+// The finally query result from the expert knowledge base
+assign("finally_answer", '{{n_answer}}')
+ 

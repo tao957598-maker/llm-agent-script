@@ -1,0 +1,80 @@
+/*
+{
+	"title":"费用流程073022",
+	"tag":"OA",
+	"uiEntrance":"daily_fee_apply_form",
+	"displayOrder":0,
+	"version":5
+}
+*/
+// 第一个审批节点：PM审批
+approve('n_pm_approval', '''
+{
+    "assigneeConfig": {
+        "type": "ROLE",
+        "strategy": "ALL",
+        "targets": [
+            {
+                "targetType": "ROLE_NAME",
+                "value": 250724109370015740,
+                "condition": true,
+                "description": "项目经理"
+            }
+        ]
+    },
+    "formKey": "n_expense_form",
+    "dueDateUnit": "DAYS"
+}
+''')
+
+// 第二个审批节点：财务总监审批
+approve('n_financial_director_approval', '''
+{
+    "assigneeConfig": {
+        "type": "ROLE",
+        "strategy": "ALL",
+        "targets": [
+            {
+                "targetType": "ROLE_NAME",
+                "value": 250724109370015740,
+                "condition": true,
+                "description": "项目经理"
+            }
+        ]
+    },
+    "formKey": "n_expense_form",
+    "dueDateUnit": "DAYS"
+}
+
+{
+    "assigneeConfig": {
+        "type": "ROLE",
+        "strategy": "ALL",
+        "targets": [
+            {
+                "targetType": "USER_ID",
+                "value": "财务总监",
+                "condition": true
+            }
+        ]
+    },
+    "formKey": "n_expense_form",
+    "dueDateUnit": "DAYS"
+}
+
+{
+    "assigneeConfig": {
+        "type": "ROLE",
+        "strategy": "ALL",
+        "targets": [
+            {
+                "targetType": "USER_ID",
+                "value": "财务总监",
+                "condition": true
+            }
+        ]
+    },
+    "formKey": "n_expense_form",
+    "dueDateUnit": "DAYS"
+}
+''')

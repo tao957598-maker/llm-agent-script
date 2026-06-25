@@ -1,0 +1,87 @@
+/*
+{
+	"title": "COBOL代码分析转换（ZIP）",
+	"description": "用于将COBOL代码转换为模型的智能体，支持上传ZIP文件或通过URL指定文件，执行代码分析和模型转换操作",
+	"parameter": [
+		{
+			"name": "option",
+			"label": "选项",
+			"type": "text",
+			"description": "转换选项参数，用于指定转换模式或额外配置"
+		},
+		{
+			"name": "bit_task_id",
+			"label": "任务ID",
+			"type": "text",
+			"required": true,
+			"description": "业务任务唯一标识，用于追踪和关联转换任务"
+		},
+		{
+			"name": "zip_file",
+			"label": "上传文件",
+			"type": "knowledge_space",
+			"description": "COBOL源代码的ZIP压缩包文件"
+		},
+		{
+			"name": "zip_file_url",
+			"label": "文件URL",
+			"type": "text",
+			"description": "COBOL源代码ZIP包的远程下载地址"
+		},
+		{
+			"name": "name_space",
+			"label": "命名空间",
+			"type": "text",
+			"description": "目标模型的命名空间，用于组织和管理模型"
+		},
+		{
+			"name": "mode_name",
+			"label": "模型名称",
+			"type": "text",
+			"description": "模型名称"
+		},
+		{
+			"name": "language",
+			"label": "语言",
+			"type": "text",
+			"description": "语言参数，默认 Chinese, 可选 Chinese / Japanese"
+		}
+	],
+	"resultPlan":"n_cobol_result",
+	"version": 1
+}
+*/
+
+// ==============================================
+// 文件参数校验（zip_file 和 zip_file_url 必须传一个）
+// ==============================================
+
+when('{{!fn.hasValue(zip_file) && !fn.hasValue(zip_file_url)}}', {
+	log('错误：zip_file 和 zip_file_url 必须传入其中一个')
+	act_flow.fail?reason='参数错误'&message='请上传文件（zip_file）或提供文件URL（zip_file_url），两者必须传入一个'
+})
+log('task_id：{{task_id}}')
+// ==============================================
+// 文件参数处理
+// ==============================================
+
+when('{{fn.hasValue(zip_file)}}', {
+	// 从知识库查询文件信息
+	n_file_name, act_kb.selectBy?sql='select knowledge_name, store_uri from kb_spaces_folder_knowledge where id="{{zip_file}}"'
+	assign("file_name", '{{n_file_name[0].knowledge_name}}')
+	assign("file_path", '{{n_file_name[0].store_uri}}')
+	log('成功获取文件信息：{{file_name}}')
+	log('文件路径：{{file_path}}')
+	// 调用COBOL转模型API（传zip_file）
+	n_result, act_api.doExecuteDynamic?name="COBOL2Model_keyword4"&dynamicParamData='{"option":"{{option}}","bti_task_id":"{{bit_task_id}}","file":"{{file_path}}","name_space":"{{name_space}}","mode_name":"{{mode_name}}","language":"{{language}}"}'
+})
+
+
+when('{{fn.hasValue(zip_file_url)}}', {
+	// 调用COBOL转模型API（传zip_file_url）
+	log('文件URL：{{zip_file_url}}')
+	n_result, act_api.doExecuteDynamic?name="COBOL2Model_keyword4"&dynamicParamData='{"option":"{{option}}","bti_task_id":"{{bit_task_id}}","zip_file_url":"{{zip_file_url}}","name_space":"{{name_space}}","mode_name":"{{mode_name}}","language":"{{language}}"}'
+})
+
+//$ 
+assign('n_cobol_result', '{{n_result}}')

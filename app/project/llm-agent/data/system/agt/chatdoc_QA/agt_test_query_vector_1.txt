@@ -1,0 +1,383 @@
+/*
+{
+	"title": "Answer user question by vector query",
+	"description": "Answer user question",
+  "parameter": [
+    {
+      "name":"userInput",
+      "label":"客户问题",
+      "type":"textarea"
+    },
+    {
+      "name":"folderIds",
+      "label":"Folder ID",
+      "type":"knowledge_fold"
+    },
+    {
+      "name":"knowledgeIds",
+      "label":"File",
+      "type":"knowledge_space"
+    },
+    {
+      "name":"kbData",
+      "label":"知识库数据",
+      "type":"textarea"
+    }
+    ],
+  "llmType": "",
+	"resultPlan":"vector_query_answer",
+  "life": "100",
+  "uiEntrance": "chatdoc_QA"
+
+} */
+
+// 预先设置空结果
+assign("n_answer", "[]")
+n_kbSpaceFileId,act_func?script='''
+    def value = knowledgeIds
+    if (value == null || value == "undefined" || value == "null") {
+        return ''
+    }
+    value = value instanceof List ? value.join(',') : value
+    return value.toString()
+'''
+assign('knowledgeIds', '{{n_kbSpaceFileId}}')
+
+// Set parameter
+assign('params','{"question":"{{userInput}}","folderIds":"{{folderIds!}}","knowledgeIds":"{{knowledgeIds!}}"}')
+
+// initialize variables for result
+assign('result_datas', '[]')
+
+// Execute vector query
+n_results,rag_kbs.searchQuestion?paramData='{{params}}'&similarity='0.01'&isRerank="true"&bm25Weight="0.3"&top="10"
+
+// Analysis results
+when('n_results?size>0',{
+  assign('vector_list', '{{n_results}}')
+
+  // keywords to Enhance
+  n_filter_data,act_func?script='''
+    def items = []
+    def andConditions = []
+    
+    def where_sql = vector_list.findAll { it.document_id && it.page }
+    .collect { "(documentId = '${it.document_id.toString().replace("'","''")}' AND page = '${it.page.toString().replace("'","''")}')" }
+    .join(" OR ") ?: "1=0"
+    return where_sql
+  '''
+  // Enhance Info
+  n_result_data, act_kb.selectBy?sql='select documentId,page,keywords  from kb_doc_req_metadata where {{n_filter_data}} '
+  // Enhance func
+  n_temp_vector,act_func?script='''
+    def vectorList = vector_list
+    def resultData = n_result_data
+    if (!vectorList) return []
+    if (!resultData) return vectorList
+    
+    // 构建查找表
+    def lookup = [:]
+    resultData.each { item ->
+        if (item != null) {
+            def docId = item.documentId?.toString()?.trim()
+            def page = item.page?.toString()?.trim()
+            
+            if (docId && page) {
+                def key = "${docId}_${page}"
+                def keywords = item.containsKey('keywords') ? item.keywords : null
+                
+                // 如果没有keywords字段，生成默认关键词
+                if (keywords == null) {
+                    keywords = []
+                }
+                lookup[key] = keywords
+            }
+        }
+    }
+    
+    // 匹配并添加keywords
+    vectorList.each { v ->
+        if (v != null) {
+            def docId = v.document_id?.toString()?.trim()
+            def page = v.page?.toString()?.trim()
+            
+            if (docId && page) {
+                def key = "${docId}_${page}"
+                def keywords = lookup[key]
+                
+                if (keywords != null) {
+                    v.keywords = keywords
+                } else {
+                    // 未匹配时也添加默认关键词
+                    v.keywords = ["未匹配", "document_id=${docId}", "page=${page}"]
+                }
+            }
+        }
+    }
+    return vectorList
+  '''
+  // Enhance results
+  assign('vector_list', '{{n_temp_vector}}')
+  assign('n_results', '{{n_temp_vector}}')
+
+  // Get document id 
+  n_document_id,act_func?script='''return n_results[0].document_id'''
+
+  // Check the answer meets the question first
+  n_result, tpl_check_answer_new_v4,psr_json
+
+  when('n_result.isEnough==false',{
+    // isEnough is false
+    assign('needs_list', '{{n_result.needs}}')
+
+    foreach('need_info', 'needs_list',{
+      assign('need', '{{need_info.item}}')
+
+      assign('n_id', '{{need.id}}')
+      assign('n_up_num', '{{need.up}}')
+      assign('n_next_num', '{{need.next}}')
+
+      // Get the up vector content
+      when('{{n_up_num>0}}', {
+        n_up_data,act_kb.selectBy?sql='SELECT id,document_id,raw_content FROM kb_spaces_knowledge_section WHERE document_id = {{n_document_id}} AND id < {{n_id}} ORDER BY id DESC LIMIT {{n_up_num}}'
+        when('n_up_data?size>0', {
+          foreach('data', 'n_up_data',{
+            n_tmp_up_data, act_func?script='''
+              def json_data = data.item
+              json_data.finalScore  = ""
+              json_data.sourceTable  = "kb_spaces_knowledge_section"
+              return json_data
+            '''
+            act_func?script='''result_datas.addAll(n_tmp_up_data)'''
+          })
+        })
+      })
+
+      // Get the current vector content
+			n_vector, act_func?script='''
+        def id_data = n_id
+        def res = n_results.findAll { it.id.toString() == id_data }	
+        return res
+      '''
+      act_func?script='''result_datas.addAll(n_vector)'''
+
+		  // Get the next vector content
+      when('{{n_next_num>0}}', {
+        n_next_data,act_kb.selectBy?sql='SELECT id,document_id,raw_content FROM kb_spaces_knowledge_section WHERE document_id = {{n_document_id}} AND id > {{n_id}} ORDER BY id ASC LIMIT {{n_next_num}}'
+        when('n_next_data?size>0', {
+          foreach('data', 'n_next_data',{
+            n_tmp_next_data, act_func?script='''
+              def json_data = data.item
+              json_data.finalScore  = ""
+              json_data.sourceTable  = "kb_spaces_knowledge_section"
+              return json_data
+            '''
+            act_func?script='''result_datas.addAll(n_tmp_next_data)'''
+          })
+        })
+      })
+    })
+
+  },
+  {
+    // isEnough is true
+    n_vector, act_func?script='''
+      def list_data = n_results
+      def json_data = n_result
+      def chunks_used = n_result.chunks_used
+      return chunks_used.findAll { it != null && it instanceof Number && it >= 0 && it < vector_list.size() }
+                        .collect { vector_list[it] }
+    '''
+    n_temp_vector,act_func?script='''
+      def temp_data = result_datas
+      temp_data.addAll(n_vector)
+      return temp_data
+    '''
+    assign('result_datas', '{{n_temp_vector}}')
+  })
+
+  // finally result datas
+	assign("finally_result_datas", '{{result_datas}}')
+
+  // 去除重复并排序
+  n_unique_answer,act_func?script='''
+    def answers = finally_result_datas
+    def seenIds = [:]
+    def uniqueResults = []
+    
+    answers.each { item ->
+        def id = item.id
+        // 如果id不存在于seenIds中，则添加到结果列表
+        if (!seenIds.containsKey(id)) {
+            seenIds[id] = true
+            uniqueResults.add(item)
+        }
+    }
+    // 按id进行升序排列
+    def sortedResults = uniqueResults.sort { a, b ->
+        a.id <=> b.id
+    }
+    return sortedResults
+  '''
+  // non repeating result datas
+	assign("result_datas", '{{n_unique_answer}}')
+	// Check the answer meets the question second,有问题TODO
+	n_second_result, tpl_check_answer_new_v1,psr_json
+
+	when('n_second_result.chunks_used?size > 0',{
+		n_answer_data, act_func?script='''
+      def chunks_used = n_second_result.chunks_used 
+      def res_list = result_datas
+      def result = []
+      def i = 1
+      chunks_used.each { index ->
+        if (index < 0 || index >= res_list.size()) {
+          return
+        }
+        id = res_list[index].id.toString()
+        res_list[index].id = id
+        res_list[index].serialNumber = i.toString()           
+        result.add(res_list[index])
+        i = i + 1
+      }
+      return result
+    '''
+		// results of the second vector query
+		assign("n_answer", '{{n_answer_data}}')
+	})
+})
+
+
+
+// The finally result of vector query
+assign("vector_query_answer", '{{n_answer}}')
+
+
+// Check if the answer meets the question
+define('tpl_check_answer_new_v4', '''
+/*{
+  "enableThinking":"false",
+  "stream":"false"
+}*/
+# Role: 你是一位严谨的信息充分性判断专家  
+# Goal: 根据用户提出的问题，逐块评估已给定的向量块集合，判断当前已累积的向量块是否足以**完整、准确地回答问题**。
+
+## Constraints（必须严格遵守）：
+1. **向量块关键字段说明**：
+   - `id`：当前向量块唯一标识  
+   - `content`（即 `raw_content`）：包含实际文本内容，可能含操作步骤、界面描述、图注等  
+   - `keywords`：该块提取的关键词列表，用于辅助判断主题相关性  
+   - `page` / `serialNumber` / `similarityScore`：元信息，不用于逻辑判断  
+
+2. **相关性判断规则**：
+   - 若**用户问题中明确指定了操作渠道**（例如：“通过 BEA Mobile”、“在東亞手機銀行中”、“使用 BEA Online”等），则**仅接受内容中明确提及该渠道或其等效名称的向量块**。
+     - “BEA Mobile” 与 “東亞手機銀行” 视为同一渠道；
+     - “BEA Online”、“東亞網上銀行”、“網上理財” 等视为网页端，彼此等效但与手机银行不同；
+     - 若问题指定渠道为 A，而向量块描述的是渠道 B（即使功能相同），则视为**无关**，不得纳入。
+   - 若**用户问题未明确指定任何渠道**（如“怎样用奖励积分兑换礼品？”），则**所有官方渠道（包括 BEA Mobile、BEA Online 等）的相关内容均可用于回答**，只要内容本身属于东亚银行官方服务。
+
+3. **禁止行为**：
+   - 禁止一次性看完所有片段后再做整体判断；必须“增量式”判断，按顺序逐条累加评估。  
+   - 禁止推理、禁止使用外部知识、禁止解释、禁止引入片段之外的信息来“补足”答案。  
+   - 禁止出现“根据您提供的信息”“可能”“大概”等模糊表述。  
+
+4. **完整性判断规则**：
+   - 允许利用“上一块尾部 20% 重叠区”与当前块头部进行拼接；  
+   - 拼接后若句子、单词、短语均完整，不再视为“中途截断”；  
+   - 禁止借助重叠区之外的外部知识补全。
+
+## Workflow:
+0. 去除重复 `id` 的向量块（如有）。  
+1. 向量块将按顺序逐条提供，你需按顺序逐条累加评估。  
+2. 每次基于“已累积块 + 当前块头部与上一块尾部拼接”得到新的文本片段。  
+3. 在评估每个块时：
+   - 若问题**指定了渠道**，检查 `raw_content` 中的操作平台/应用名称是否与之严格一致；
+   - 若问题**未指定渠道**，只需判断内容是否属于东亚银行官方服务且与问题主题相关；
+   - 同时检查 `keywords` 是否与问题主题高度相关（如“獎分換領”“積分兌換”“禮品”等）；
+   - 仅当同时满足**主题相关**且**渠道合规**（依上述规则）时，才将该块纳入 `chunks_used`。  
+4. 评估完所有向量块后，基于全部**相关且渠道合规**的累积文本片段判断：
+   - 若能从中直接提取出**完整回答**（覆盖问题所问的核心操作流程），则 `isEnough = true`；  
+   - 否则，`isEnough = false`。
+
+## Output Format:
+- 若已足够：  
+  {
+    "isEnough": true,
+    "chunks_used": [i1, i2, ...] // 其中 i1, i2, ... 是 result_datas 列表中的下标（从 0 开始），仅包含与问题主题相关且渠道合规的块。
+  }
+
+- 若全部用完仍不足够：
+  {
+    "isEnough": false,
+    "chunks_used": [i1, i2, ...]
+  }
+  
+# 当前问题:
+{{userInput}}
+
+# 当前向量块集合:
+{{vector_list}}
+''')
+
+
+// Check if the answer meets the question
+define('tpl_check_answer_new_v1', '''
+/*{
+  "enableThinking":"false",
+  "stream":"false"
+}*/
+- Role: 你是一位严谨的信息充分性判断专家  
+- Goals：是根据用户提出的问题，逐块评估已给定的向量块集合，判断当前已累积的向量块是否足以完整、准确地回答问题 
+
+- Constrains:（必须严格遵守）： 
+ 1. 向量块集合关键字段说明
+  - id：当前向量块唯一标识  
+  - content：包含  
+    - 页码  
+    - 标题/关键句  
+    - 页面关键字（如有）  
+    - 页面描述（如有）  
+    - 上一个向量块尾部 20 % 的 token（“# Below is 20.0% of the tokens from the previous block.”）  
+    - 当前向量块真正内容（“# Now begins the content of this block.”之后）
+ 2. 禁止一次性看完所有片段后再做整体判断；必须“增量式”判断，直至识别分析完所有向量块。  
+ 3. 禁止推理、禁止外部知识、禁止解释、禁止引入片段之外的知识来“补足”答案。。
+ 4. 禁止出现“根据您提供的信息”“可能”“大概”等模糊表述。
+ 5. 完整性判断规则
+  a) 允许利用“上一块尾部 20 % 重叠区”与当前块头部进行拼接；
+  b) 拼接后若句子、单词、短语均完整，不再视为“中途截断”；
+  c) 禁止借助重叠区之外的外部知识补全。
+
+- Workflow:
+ 0. 按 Constraints-0 去除完全重复 id。
+ 1. 向量块将按顺序逐条提供，你需按顺序逐条累加评估。
+ 2. 每次基于“已累积块 + 当前块头部与上一块尾部拼接”得到新的文本片段。
+ 3. 必须评估完所有向量块后，基于全部累积文本片段回答问题。
+    3.1 从全部已评估的向量块中，提取能够直接构成完整答案的原文片段；
+    3.2 若所有向量块评估完毕后，仍无法从片段中直接提取完整答案，则判定为信息不足。
+ 4. 输出最终判断结果。
+
+# 补充信息：向量块下标**不是**向量块集合中的serialNumber，而是当前向量块集合vector_list中的下标，比如：第一个向量块的下标为0，第4个向量块的下标为3
+
+
+- OutputFormat
+ - 若已足够：  
+  {  
+    "isEnough": true,  
+    "chunks_used": [1,2,3..],  // [1,2,3..]中的1,2,3不是向量块的serialNumber，而是指result_datas集合的下标，比如：1表示result_datas集合中第2个向量，3表是result_datas集合中第4个向量
+  }  
+
+ - 若全部用完仍不足够：  
+  {  
+    "isEnough": false,  
+    "chunks_used": [原有向量块],  
+  }  
+
+
+# 当前问题:
+{{userInput}}
+
+# 向量块集合result_datas:
+{{result_datas}}
+
+''')
+

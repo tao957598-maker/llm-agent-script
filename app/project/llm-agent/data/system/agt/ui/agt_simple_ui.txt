@@ -1,0 +1,88 @@
+/*  
+{
+	"title": "生成简单的UI",
+	"parameter": "requirement=用户需求"
+} 
+*/
+
+// 检查现有页面列表能否满足需求
+rag_api?name=ui_dev_search, tpl_ui_select, vrf_tpl_check_fields
+when("tpl_ui_select.pageName=='NEW_PAGE'", {
+	// 生成新页面
+	tpl_ui_generator, act_api?name=ui_dev_save&body={{sys_last_result}}
+	// 展示生成的页面
+	act_api?name=ui_dev_show&pageName={{tpl_ui_generator.pageName}}&template={{tpl_ui_select.template}}
+}, {
+	// 展示已有的页面
+	act_api?name=ui_dev_show&pageName={{tpl_ui_select.pageName}}&template={{tpl_ui_select.template}}
+});
+
+// pageName(共享), html(act_api)
+// 返回结果
+expression(true, "act_memory.share?name=simple_ui_page_name&value={{fn.optional('tpl_ui_generator.pageName', 'tpl_ui_select.pageName')}}")
+
+
+define('tpl_ui_select', '''
+	你是一名前端程序开发人员，基于用户的描述，对比现有的页面列表，找出哪个页面能符合用户需求，返回该页面名称及页面类型（如果没有页面，则：pageName:'NEW_PAGE'）。返回结果要求用json格式
+	
+	{{sys_hint}}
+	
+	现有的页面名称列表：(注：页面列表中的pageName为页面名称)
+	{{ui_dev_search}}
+	
+	页面模板类型为template，取值为数字1-4，含义如下：
+	1： 列表界面
+	2： 录入界面
+	3： 查看界面
+	4： 报表界面
+	
+	返回结果示例：
+	{
+		pageName: 'NEW_PAGE'
+		template: '1'
+	}
+	
+	用户需求:
+	{{requirement}}
+''')
+
+define('tpl_check_fields', '''
+	请检查json数据，是否包含了pageName, template这2个字段，请按照检查结果的json格式，给出检查结果。
+	
+	json数据：
+	{{sys_last_result}}
+	
+	检查结果的json：
+	{
+		type: 'verifyResult',
+		success: false(或者true),
+		result: 必填字段xxx缺失(如果success为true，不用提供result)
+		thought: 思考过程
+	}
+''')
+
+define('tpl_ui_generator', '''
+	你是一名程序开发人员，基于用户的描述，生成界面的名称及字段描述，用json返回。
+	
+	下面是一段json参考列子：
+	{
+		pageName："合同管理",
+		description: "登记合同信息，用于合同的查看和维护",
+		metaDataColumns：[
+			{"name":"contractPurpose", "label":"合同用途", "type":"textarea", "args":"", "required":1, "searchable":0},
+			{"name":"signNum", "label":"签约人数", "type":"select", "args":"1人,3人,5人", "required":1, "searchable":0},
+			{"name":"effectDate", "label":"生效日期", "type":"date", "args":"", "required":0, "searchable":0},
+			{"name":"contractNum", "label":"合同编号", "type":"text", "args":"", "required":0, "searchable":0},
+		]
+	}
+	
+	关于metaDataColumns的字段说明：
+	name: 字段名称
+	type: 字段标签的类型，可选的有常用的html表单标签，比如：text,date,select,radio,checkbox等
+	args: 字段标签所需要的额外参数
+	required: 是否为必填字段
+	searchable: 是否为可搜索字段
+	
+	用户需求:
+	{{requirement}}
+''')

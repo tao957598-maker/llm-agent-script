@@ -1,0 +1,25 @@
+/*
+{
+	"title":"飞书助手",
+	"description":"调用飞书工具集处理用户需求",
+	"resultPlan":"n_result",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"用户需求\",\"required\":true,\"description\":\"用户输入的需求描述\"}",
+	"tag":"chatdoc",
+	"version":2
+}
+*/
+// 定义 LLM 模板：分析用户问题，选择工具并构建参数
+define('tpl_feishu', '''
+分析用户问题，从飞书工具集中选择合适的工具及参数。
+
+#用户问题:
+{{userInput}}
+
+
+#飞书工具集:
+{{fn.toolset('mcp_feishu')}}
+
+''')
+
+// 解析 LLM 输出的 JSON
+n_result, tpl_feishu, act_plan.run?_asPlanResult=true

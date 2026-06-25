@@ -1,0 +1,86 @@
+/*
+{
+	"title":"File Analysis Entrance",
+	"description":"File Analysis Entrance",
+	"parameter":[
+		{
+			"name":"analysis_agent",
+			"label":"Analysis Mode",
+			"args":[
+				{
+					"label":"File Metadata Analysis",
+					"value":"agt_req_metadata.file_parse"
+				}
+			],
+			"defaultValue":"agt_parse_main.file_parse",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"select",
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"knowledge_space"
+		}
+	],
+	"tag":"file_parse",
+	"uiEntrance":"KBSAssign",
+	"version":1
+}
+*/
+//# documentId
+assign("documentId", "{{kbSpaceFileId}}")
+
+//  Check conditions for analysis
+n_kb_data,act_kb.selectBy?sql='SELECT * FROM kbs_doc_page_parse WHERE documentId = {{documentId}}'
+
+when('!fn.hasValue(n_kb_data)', {
+	act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"Chunk Failed,Stop The Process"}'&where='{"id":{{documentId}}}'
+	//# Chunk Failed
+	act_flow.fail?result='analysis failed,unable to find doc data that can be analysis'
+})
+
+
+// Set variable
+assign("n_agent_list", "[]") 
+
+// Split and sort
+when("fn.hasValue(analysis_agent)",{
+	n_agent_list,act_func?script='''
+	 	def str = analysis_agent
+		def result = str.split(",").collect { it.trim() }
+    	return result
+  	'''
+})
+
+// execute agent
+when('n_agent_list?size>0',{
+	foreach('n_agent', 'n_agent_list',{
+		assign('agent', '{{n_agent.item}}')
+		
+		when('agent == "agt_parse_main.file_parse"',{
+			// execute agt_parse_main
+			agt_parse_main.file_parse?kbSpaceFileId={{documentId}}
+		})
+
+		when('agent == "agt_req_metadata.file_parse"',{
+			// execute agt_req_metadata
+			agt_req_metadata.file_parse?file_id={{documentId}}
+		})
+
+	})
+
+})
+
+
+// 更新状态为：分析成功
+act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"2","msg":""}'&where='{"id":{{documentId}}}'
+
+on_failure({
+	// 分析失败，修改状态为：分析失败
+	act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"{{sys_failure_task.result}}"}'&where='{"id":{{documentId}}}'
+})

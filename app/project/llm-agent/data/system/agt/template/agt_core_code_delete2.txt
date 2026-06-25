@@ -1,0 +1,33 @@
+/*
+{
+    "title": "SQL Check Agent",
+    "parameter": [
+        {
+            "name": "userInput",
+            "label": "需求",
+            "required": true
+        }
+    ],
+    "version": 1
+}
+*/
+
+// 定义变量current_uri
+assign('current_uri', '/account/deposit')
+
+// 执行SQL查询并将结果赋值给n_sql_result变量
+n_sql_result,act_kb.selectBy?sql='SELECT t.* FROM llm_agent.kb_spiderdeep_directory t WHERE system_name = \'Cloud Bank\' AND current_uri = \'{{current_uri}}\' AND guest_redirect_uri = current_uri LIMIT 1;'
+
+// 检查SQL查询结果是否有数据
+when('{{n_sql_result?size gt 0}}', {
+    // 如果有数据，执行某些操作
+    log('SQL查询结果有数据: {{n_sql_result}}')
+    assign('operation_result', '数据存在，执行相应操作')
+}, {
+    // 如果没有数据，执行其它操作
+    log('SQL查询结果为空')
+    assign('operation_result', '数据不存在，执行备选操作')
+})
+
+// 输出最终结果
+log('操作结果: {{operation_result}}')

@@ -1,0 +1,48 @@
+/*
+{
+	"title":"Image to UI",
+	"description":"Image to UI",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"Knowledge Space File",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"kbSpaceFile",
+			"label":"Upload File",
+			"type":"file"
+		}
+	],
+	"tag":"FormCreate",
+	"resultPlan":"image_path,n_result_data",
+	"life":1000,
+	"version":1
+}
+*/
+// kb_spaces_folder_knowledge取数据
+n_kb_data,act_kb.selectBy?sql='SELECT * FROM kb_spaces_folder_knowledge WHERE id = {{kbSpaceFileId}} LIMIT 1'
+
+when('!fn.hasValue(n_kb_data)', {
+  //# Chunk Failed
+  act_flow.fail?result='Chunk Failed,Stop The Process'
+})
+
+// 图片URL
+assign('image_path', '{{n_kb_data[0].store_uri}}')
+
+// 获取提示词
+n_prompt,agt_fc_prompt
+
+// 大模型
+n_result_data,tpl_llm_form
+
+// 定义输出模板
+define('tpl_llm_form', '''
+  /*{
+   "llmType":"alias.vision"
+  }*/
+	# 注意 
+	一句话简短输出解释`$required` 的值根据表单字段`title`怎么判定,然后再直接输出符合规范的JSON格式数组,不包含任何解释。
+  {{fn.chatImageFlag('%{n_prompt}%', '', '', 'image_path', 1)}}
+''')

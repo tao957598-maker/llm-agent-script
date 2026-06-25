@@ -1,0 +1,70 @@
+/*
+{
+	"title":"Quality Analysis and Scoring Agent - Each",
+	"description":"Locate raw data based on the user's question, compare with processed data, conduct strict multi-dimensional scoring, and save structured results",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"textarea"
+		}
+	],
+	"life":100,
+	"version":1
+}
+*/
+/
+
+// 第一步：读取原始数据
+n_origin_data, act_kbs.readSectionFile?folderName='Agent_code'&knowledgeName='data'&isSource=true
+
+// 第二步：读取已处理数据
+n_kb_data, act_kb.selectBy?sql='select * from kb_test_data_draft'
+assign("table_list", '{{n_kb_data}}')
+
+// 定义评分结果数组
+assign("scored_results_list", "[]")
+
+// 第三步遍历得到新数组
+foreach('table_item', 'table_list', {
+  assign('item', '{{table_item.item}}')
+
+  define('tpl_score_prompt', '''
+</no_think>你是一位数据质量分析师，请根据以下【原始数据】与【处理后数据】，对后者进行整体质量评分（1-10 分，越高代表质量越好），仅返回一个整数分值，不要解释。
+数据返回格式:
+{"data":数据1的分数}
+
+  【原始数据】
+  {{n_origin_data}}
+
+  【处理后数据】
+  {{item}}
+  ''')
+  n_quality_score, tpl_score_prompt
+
+   // 合并评分字段
+  act_func?script="item.put('quality_score', '''{{n_quality_score.data}}''')"
+  // 合并后插入数组
+  act_func?script="scored_results_list.add(item)"
+})
+
+// 处理
+n_result_data,act_func?script='''
+  for (item in scored_results_list) {
+    if (item.containsKey("id")) {
+      item["item_id"] = item.remove("id")
+    }
+  }
+  return scored_results_list
+'''
+
+// 第四步 保存到数据库
+act_kb.defineAndImportData?tableName='kb_test_data_scenarios7'&data='{{n_result_data}}'
+
+// 第五步：输出结果
+assign('generated_data', '{{n_result_data}}')

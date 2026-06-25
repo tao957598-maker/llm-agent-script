@@ -1,0 +1,397 @@
+/*
+{
+	"title": "Loop Generate Step Test",
+	"description": "生成测试步骤",
+	"parameter": [
+	 	{
+	 		"name":"system_name",
+	 		"label":"系统"
+	 	},
+	 	{
+	 		"name":"url",
+	 		"label":"指定URL"
+	 	},
+		{
+			"name":"current_uri",
+			"label":"当前路由"
+		},
+		{
+			"name":"cookie",
+			"label":"cookie"
+		},
+		{
+			"name":"version",
+			"label":"版本"
+		},
+		{
+			"name":"time",
+			"label":"时间"
+		},
+		{
+			"name":"custom_param",
+			"label":"自定义参数"
+		}
+  ],
+  "life":1000,
+	"version": "1"
+}
+*/
+
+// is first time?
+when('time == "first"', {
+	n_parameters,act_func?script='''
+		def params = [:]
+		params.system_name = system_name
+		params.biz_id = ''
+		params.base_url = url
+		params.current_uri = current_uri
+		params.run_steps = '[{"type":"open_url", "value": "{{current_uri}}", "msg": "打开{{current_uri}}"}]'
+		params.action_type = 'open_url'
+		params.run_success = '2'
+		params.target_uri = current_uri
+		params.cookie = cookie
+		params.version = version
+	
+		return params
+	'''
+},{
+	// query all data
+  n_kb_all_data,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" AND run_success = 2'
+	// check n_parameters
+  when('{{(n_kb_all_data![])?size > 0}}', {
+    n_parameters,act_func?script=''' n_kb_all_data[0] '''
+  },{
+		// return
+		assign('return', 'false')
+		act_flow.go?plan=end
+	})
+})
+
+// has n_parameters?
+when('!fn.hasValue(n_parameters)', {
+	// return
+	assign('return', 'false')
+	act_flow.go?plan=end
+},{
+	// send
+	n_spider_deep_result, act_rpa.send?command=SpiderDeep&parameters='{{n_parameters}}'
+	// send_all_data
+	n_data,act_func?script=''' n_spider_deep_result[0] '''
+
+	// check send backdata
+	when('!fn.hasValue(n_data.old_data)', {
+		// return
+		assign('return', 'false')
+		act_flow.go?plan=end
+	})
+
+	// is_return_able
+	when('n_data.old_data.is_return_able == "0"', {
+		// is_return_able == 0
+		n_return_able_data,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" AND run_success = 1 AND target_uri = "{{n_data.old_data.current_uri}}" AND version = {{version}}'
+		n_gen_data,tpl_generate_return_able_data,psr_json_python
+		n_check_return_able,act_rpa.send?command=SpiderDeep&parameters='{{n_gen_data}}'
+		// check returnable data
+		when('!fn.hasValue(n_check_return_able[0].old_data)', {
+			// return
+			assign('return', 'false')
+			act_flow.go?plan=end
+		})
+	})
+
+	// back content
+	assign('n_content', '{{n_data.spider_deep_content}}')
+	// search old_content
+	n_old_content,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_content WHERE directory_id = "{{n_data.spider_deep_content.directory_id}}"'
+	// compare content
+	when('{{(n_old_content![])?size > 0}}', {
+		// llm compare
+		n_content_data,tpl_compare_and_generate,psr_json_python
+	},{
+		// save content
+		act_kb.defineAndImportData?tableName=kb_spiderdeep_content&data='{{n_content}}'
+		// llm directory
+		n_content_data,tpl_extract_jump_steps,psr_json_python
+	})
+
+	// old_directory_data
+	when('time == "first"', {
+		// first time, save directory
+		act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{n_data.old_data}}'
+	}, {
+		// not first time, update
+		act_kb.update?name='kb_spiderdeep_directory'&columnValues='{{n_data.old_data}}'&where='{"id":"{{n_parameters.id}}"}'
+	})
+
+	// all directory
+	n_all_directory,act_func?script='''
+		def arr1 = n_data.spider_deep_directory
+		def arr2 = n_content_data
+		def merged = arr1 + arr2
+		return merged
+	'''
+
+	// directory_data
+	foreach('n_d_data', 'n_all_directory', {
+		// d_item
+		assign('d_item', '{{n_d_data.item}}')
+		// has same biz_id?
+		when('fn.hasValue(d_item.biz_id)', {
+			// query same biz
+			n_same_biz,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE biz_id = "{{d_item.biz_id}}"'
+			// check not save
+			when('{{(n_same_biz![])?size > 0}}', {
+				// same directory
+				assign('same_biz_id', '{{n_same_biz}}')
+				// update run_success = 1
+				act_kb.selectBy?sql='UPDATE kb_spiderdeep_directory SET run_success = 1 WHERE biz_id = "{{d_item.biz_id}}"'
+			},{
+				// save directory
+				act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{d_item}}'
+			})
+		},{
+			// save directory
+			act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{d_item}}'
+		})
+	})
+})
+
+assign('return', 'true')
+
+// compare and generate
+define('tpl_compare_and_generate', '''
+	你是一位专业的数组比对与操作序列生成专家。  
+
+	### 输入数据   
+	1. arrayA: {{n_data.spider_deep_content.collect_data}} 
+	2. arrayB: {{n_old_content[0].collect_data}}  
+	3. target_list: {{n_parameters.run_steps}}
+	4. 其他参数 {{n_parameters}}
+		
+	### 处理步骤（必须按顺序执行）：
+	1. 解析数据：将arrayA和arrayB从JSON字符串转换为数组对象
+	2. 过滤元素：移除所有不包含"id"字段的对象
+	3. 提取ID列表：从两个数组中分别提取所有元素的id值,对比id长度,长度不一致时必须要输出差异数据
+	4. 查找公共元素：将target_list从JSON字符串转换为对象，然后第一个 target 字段id的元素（这是必须存在的公共元素）
+	5. 找出差异：比较两个数组，找出在arrayA中存在但arrayB中不存在的元素id
+	6. 生成序列：为每个差异元素创建一个操作序列，即
+		6.1 将公共元素与每一个多余数据组合成一个 run_steps 序列，格式：  
+		[
+			{"type":"click", "target":"公共元素的id", "msg": "点击[xxx]"},
+			{"type":"click", "target":"多余元素的id", "msg": "点击[xxx]"}
+		]  
+		⚠️ 注意：这里 target 必须使用元素的 **id**，不要使用 name。  
+		6.2  将每个 run_steps 序列包装成一个对象，结构如下：  
+			{
+				"system_name": 输入参数中的 system_name，取不到则填 "",
+				"base_url": 输入参数中的 base_url，取不到则填 "",
+				"current_uri": 输入参数中的 current_uri，取不到则填 "",
+				"action_type": "execute",
+				"run_steps": [...],   # 插入生成的步骤序列
+				"target_uri": "",
+				"run_success": "2",
+				"cookie": 输入参数中的 cookie，取不到则填 "",
+				"version": 输入参数中的 version，取不到则填 ""
+			}
+	### 特别注意：
+	- arrayA比arrayB多了一个元素：比如id_1412572934 (Schedule an Appointment)
+	- 必须输出这个差异，即使只有一个差异元素
+	- 不要因为数据看似相似就忽略实际存在的差异
+
+	### 输出要求：
+	严格按照指定的JSON格式输出，不要包含任何解释性文字; 如果无差异：[]
+
+	### 示例：  
+		输入参数：  
+		- target_id = "id_171810177" (Transfer)  
+		- arrayA 比 arrayB 多 3 个元素（Between Accounts, To Someone Else, Add/Edit Recipient）  
+
+		输出结果：  
+		[
+			{
+				"system_name": "CloudBank",
+				"base_url": "http://189.1.224.215:8888",
+				"current_uri": "",
+				"action_type": "execute",
+				"run_steps": [
+					{"type": "click", "target": "id_171810177", "msg": "点击[Transfer]"},
+					{"type": "click", "target": "id_203409476", "msg": "点击[Between Accounts]"}
+				],
+				"target_uri": "",
+				"run_success": "2",
+				"cookie": "",
+				"version": "v1.0"
+			},
+			{
+				"system_name": "CloudBank",
+				"base_url": "http://189.1.224.215:8888",
+				"current_uri": "",
+				"action_type": "execute",
+				"run_steps": [
+					{"type": "click", "target": "id_171810177", "msg": "点击[Transfer]"},
+					{"type": "click", "target": "id_203498849", "msg": "点击[To Someone Else]"}
+				],
+				"target_uri": "",
+				"run_success": "2",
+				"cookie": "",
+				"version": "v1.0"
+			},
+			{
+				"system_name": "CloudBank",
+				"base_url": "http://189.1.224.215:8888",
+				"current_uri": "",
+				"action_type": "execute",
+				"run_steps": [
+					{"type": "click", "target": "id_171810177", "msg": "点击[Transfer]"},
+					{"type": "click", "target": "id_203439267", "msg": "点击[Add/Edit Recipient]"}
+				],
+				"target_uri": "",
+				"run_success": "2",
+				"cookie": "",
+				"version": "v1.0"
+			}
+		]
+''')
+
+// prompt
+define('tpl_extract_jump_steps', '''
+	你是一位专业的页面操作流程抽取与步骤映射专家。  
+	我会提供一个页面解析的 JSON 数据（包含 system_name、base_url、current_uri、cookie、version、collect_data 等字段）。  
+
+	任务目标：  
+	根据 collect_data 中的元素信息，提取所有 **可能导致页面跳转的操作**，并转化为标准执行步骤 JSON list。  
+	覆盖范围：登录页、注册页、首页导航、下拉菜单、按钮、超链接、表单提交、仪表盘操作等常用网页场景。  
+
+	原则：
+		- 宁愿多提取，也不能遗漏任何可能跳转的元素。  
+		- 不生成登出类操作（登出按钮、退出按钮、注销按钮等）。  
+		- 禁止点击可能涉及到删除、修改数据、修改状态的任何按钮
+
+	生成规则：  
+	1. 根节点字段（固定）：  
+	{
+		"system_name": 输入参数中的 system_name，提取不到则为空字符串，不需要自动生成,
+		"base_url": 输入参数中的 base_url，提取不到则为空字符串，不需要自动生成,
+		"current_uri": 取单独定义的参数 current_uri，提取不到则为空字符串，不需要自动生成,
+		"action_type": "execute",     固定值
+		"run_steps": [...],           # 由 collect_data 生成
+		"target_uri": "",             固定为空字符串
+		"run_success": "2",           固定值
+		"cookie": 输入参数中的 cookie，提取不到则为空字符串，不需要自动生成,
+		"version": 输入参数中的 version，提取不到则为空字符串，不需要自动生成
+	}
+	2. 跳转操作提取逻辑（按 tag 分类）：  
+		a. **直接跳转类元素**（单独生成 click 步骤）  
+			- tag = "a"  
+			- tag = "link"  
+			- tag = "image-button"  
+			- → run_steps: { "type": "click", "target": 元素id, "msg": "点击【元素名称或类型】" }  
+
+		b. **按钮类元素**（需考虑组合逻辑）  
+			- tag = "button"  
+				- 如果按钮关联了用户名输入框 + 密码输入框，则作为 **登录操作**：  
+					1) 用户名输入 → { "type": "input", "target": 用户名id, "value": ..., "msg": "账号输入" }  
+					2) 密码输入 → { "type": "input", "target": 密码id, "value": ..., "msg": "密码输入" }  
+					3) 点击登录按钮 → { "type": "click", "target": 登录按钮id, "msg": "登录操作" }  
+				- 如果按钮关联了其他输入类元素，则和相关输入一起生成组合操作。  
+				- 独立按钮（提交、确认、下一步等） → { "type": "click", "target": 按钮id, "msg": "点击按钮【元素名称或类型】" }  
+
+		c. **输入类元素**（仅在与按钮组合时生效）  
+			- tag = "input" / "textarea" / "tableInput" / "switch" / "select"  
+			- 有值时 → { "type": "input", "target": 元素id, "value": 值, "msg": "输入/选择【元素名称或类型】" }  
+			- value值可以在自定义参数中(特别要注意区分参数需要添加的字段和页面)提取相关联的值，也可以直接在元素中提取，若无提取值时 → 不生成 value 字段，仅保留 msg 提示  
+
+		d. **可能触发跳转的容器类元素**  
+			- tag = "div" / "span"  
+			- 有 onclick / router-link / role=button 时 → { "type": "click", "target": 元素id, "msg": "点击【元素名称或类型】" }  
+
+	3. run_steps 示例：  
+		- 输入框 → { "type": "input", "target": "id_xxx", "value": "提取元素中的值或对应页面的自定义参数，无则不显示", "msg": "账号输入" }  
+		- 密码框 → { "type": "input", "target": "id_xxx", "value": "提取元素中的值或对应页面的自定义参数，无则不显示", "msg": "密码输入" }  
+		- 点击按钮 → { "type": "click", "target": "id_xxx", "msg": "登录操作" }  
+		- 点击链接 → { "type": "click", "target": "id_xxx", "msg": "点击【Home】" }  
+
+	4. 输出要求：  
+		- run_steps 必须带有 msg 字段，用于简要描述操作目的。  
+		- run_steps 不生成登出类操作（登出按钮、退出按钮、注销按钮等）。  
+		- 输出 JSON list，每个对象对应一组跳转操作  
+		- 每组操作都包含完整根节点字段  
+		- 不要额外解释或说明  
+
+	5. 简单完整示例：  
+
+	输入 collect_data：
+	[
+		{"id": "id_2581586144", "tag": "input", "type": "text", "placeholder": "Username"},
+		{"id": "id_1526379877", "tag": "input", "type": "password", "placeholder": "Password"},
+		{"id": "id_1580495499", "tag": "button", "type": "submit", "name": "Sign in"},
+		{"id": "id_1094787217", "tag": "link", "name": "Sign up!"},
+		{"id": "id_1423062691", "tag": "a", "name": "Home"},
+		{"id": "id_171780386", "tag": "image-button", "name": "Accounts"},
+		{"id": "id_171810177", "tag": "div", "name": "Transfer", "onclick": "goTransfer()"}
+	]
+
+	输出 JSON list：
+	[
+		{
+			"system_name": "CloudBank",
+			"base_url": "http://189.1.224.215:8888",
+			"current_uri": "",
+			"action_type": "execute",
+			"run_steps": [
+				{"type": "input", "target": "id_2581586144", "value": "admin", "msg": "账号输入"},
+				{"type": "input", "target": "id_1526379877", "value": "xJbNmQnqk4wq0Fc", "msg": "密码输入"},
+				{"type": "click", "target": "id_1580495499", "msg": "登录操作"}
+			],
+			"target_uri": "",
+			"run_success": "2",
+			"cookie": "",
+			"version": "v1.0"
+		},
+		{
+			"system_name": "CloudBank",
+			"base_url": "http://189.1.224.215:8888",
+			"current_uri": "",
+			"action_type": "execute",
+			"run_steps": [{"type": "click", "target": "id_1094787217", "msg": "点击【Sign up!】"}],
+			"target_uri": "",
+			"run_success": "2",
+			"cookie": "",
+			"version": "v1.0"
+		}
+	]
+	
+	# 输入参数：
+	{{n_parameters}}
+
+	# current_uri：
+	{{n_data.spider_deep_content.current_uri}}
+
+	# collect_data：
+	{{n_content.collect_data}}
+
+	#自定义参数：
+	{{custom_param}}
+''')
+// n_return_able_data
+define('tpl_generate_return_able_data', '''
+	现在处于 {{n_data.old_data.target_uri}}, 希望能够回到 {{n_data.old_data.current_uri}} 页面
+	
+	请从这个数据中选择最合适的一条数据：
+	{{n_return_able_data}}
+	
+	不需要解释直接返回json，例：
+	{
+		action_type: "open_url",
+		run_steps:'[{"type":"open_url","value":"/account/savingsAccount"}]',
+		system_name: "CloudBank",
+		base_url: "http://189.1.224.215:8888",
+		version: "",
+		target_uri: "/account/savingsAccount",
+		directory_id: "bb6f9fc61e78939a554bbed0498b2d37",
+		run_success: "2",
+		biz_id: "cf05a72401740df0ed202b43648d60a1",
+		current_uri: "/account/primaryAccount",
+		try_return: "0" // 其他参数从筛选出的那条数据中获取，新增try_return，固定值为"0"
+	}
+''')

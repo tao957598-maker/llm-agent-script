@@ -1,0 +1,448 @@
+/*
+{
+	"title":"CodexCLI (project)",
+	"description":"",
+	"parameter":[
+    {
+      "name":"userInput",
+      "label":"用户问题",
+      "type":"textarea"
+    },
+    {
+      "name":"kbSpaceFileId",
+      "label":"File",
+      "type":"knowledge_space"
+    }
+  ],
+	"tag":"chatdoc_QA",
+	"resultPlan":"n_final_answer",
+	"life":100,
+	"displayOrder":1,
+	"version":1
+}
+*/
+//# 文件ids转数组
+n_tmp_ids,act_func?script='''
+    def input = kbSpaceFileId
+    if (input instanceof List) {
+        return input 
+    } else if (input instanceof String) {
+        if (input.contains(',')) {
+            return input.split(',').collect { it.trim() }.findAll { it }
+        } else {
+            return input.trim() ? [input.trim()] : []
+        }
+    } else {
+        return []
+    }
+'''
+assign('kb_urls', '[]')
+//# 获得所有文件路径数组 方法
+foreach('tmp_id', 'n_tmp_ids', {
+    assign('kbSpaceFileId', '{{tmp_id.item}}')
+    //# 获得文件信息
+    n_data,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,kb_spaces_folder_id,extension,store_uri,knowledge_name'&maxSize=1&where='{"id":{{kbSpaceFileId}}}'
+    n_first_data,act_func?script='''
+        def n_data_tmp = n_data
+        return n_data_tmp[0]
+    '''
+
+    assign('kb_url',"{{n_first_data.store_uri}}")
+    append('kb_urls', '{{kb_url}}')
+})
+//# 获得所有文件路径数组
+log('{{kb_urls}}')
+
+// 将所有文件都上传到 编辑器 指定存储目录中
+foreach('kb_url_item', 'kb_urls', {
+    assign('kb_url', '{{kb_url_item.item}}')
+    //# 供给codex：下载到本地 的文件的信息
+    assign('params_tmp', '{"localPath":"D:/userFiles","kbPath":"{{kb_url}}"}')
+    act_rpa.send?command=DownloadFromKB&parameters={{params_tmp}}
+})
+
+n_kb_url_names_tmp,act_func?script='''
+def paths = kb_urls
+def fileNames = paths.findAll { it }.collect { path ->
+    path.replace('\\', '/').split('/').last()
+}
+return fileNames
+'''
+assign('kb_url_names', '{{n_kb_url_names_tmp}}')
+//# kb_url_names 获得codex阅读的文件名数组
+log('{{kb_url_names}}')
+
+assign('OS_type', 'CMD')
+
+assign('n_collect_data',"None")
+assign('n_command',"None")
+//# 调用大模型生成 codex 命令
+n_command,tpl_gen_command,psr_json
+
+//# Plan 计划执行命令行
+assign('stepsArray', "{{n_command.steps}}")
+assign('n_codex_result_origin', '{}')
+
+foreach('step', 'stepsArray', {
+    //# Run command
+    log('{{step.item.command}}')
+    when('fn.hasValue(step.item.command)', {
+        // RunShell   RunTerminalCommand
+        n_collect_data, act_rpa.send?command=RunTerminalCommand&parameters='{"command":"{{step.item.command}}","timeout":600}'
+        // n_collect_data, act_rpa.send?command=TerminalView
+        // n_collect_data, act_rpa.send?command=RunShell&parameters='{"shell_input":"{{step.item.command}}","shell":False}'
+    })
+})
+//# Executed Codex Answer
+assign('n_codex_result_origin', '{{n_collect_data}}')
+
+//# Format Codex Answer -> JSON
+n_codex_result,tpl_format_json,psr_json
+
+n_cleaned_tmp,act_func?script='''
+def rawString = n_codex_result
+if (rawString == null) return null
+if (!(rawString instanceof String)) {
+    return rawString
+}
+def cleaned = rawString.trim()
+if (cleaned.startsWith("```json") && cleaned.endsWith("```")) {
+    cleaned = cleaned.substring(7, cleaned.length() - 3).trim()
+} else if (cleaned.startsWith("```") && cleaned.endsWith("```")) {
+    cleaned = cleaned.substring(3, cleaned.length() - 3).trim()
+}
+return cleaned
+'''
+//# 去除格式
+assign('n_codex_result', '{{n_cleaned_tmp}}')
+
+assign('codex_files', '[]')
+when('fn.hasValue(n_codex_result.file_gened_paths)',{
+    //# 获取文件信息
+  assign('codex_files', '{{n_codex_result.file_gened_paths}}')
+})
+
+
+foreach('local_url_item', 'codex_files', {
+    assign('local_url', '{{local_url_item.item}}')
+    //# codex使用的文件：需要上传到知识空间 的文件的信息
+    assign('params_tmp', '{{fn.json("localPath, local_url, kbPath, /test_req_poc/")}}')
+    act_rpa.send?command=UploadToKB&parameters={{params_tmp}}
+})
+
+assign('result', '{{n_codex_result.text_answer}}')
+when('fn.hasValue(codex_files)', {  
+    assign('result', '{{n_codex_result.text_answer}}\n\n相关文件在test_req_poc知识空间下。')  
+})  
+
+
+//$ 最终运行结果
+assign('n_final_answer', '{{result}}')
+
+
+
+define('tpl_format_json', '''
+/*{
+  "enable_thinking":"false",
+  "temperature": 0
+}*/
+帮我把【运行信息】中的格式化json数据提取出来，并返回，不要添加任何解释或额外文本，不要携带```json```。
+# 输出格式示例
+{
+  "text_answer": "回答内容",
+  "file_gened_paths": [使用到的文件的绝对路径]
+}
+
+# 运行信息
+{{n_codex_result_origin}}
+''')
+
+// Agent代码模板
+define('tpl_gen_command', '''
+/*{
+  "enable_thinking":"false",
+  "temperature": 0
+}*/
+根据codex命令行工具资料，生成对应的 Codex 或 {{OS_type}}命令行。仅返回标准 JSON 格式，包含执行顺序、命令行类型（如：codex、{{OS_type}}）和具体命令，严禁包含任何解释或额外文本。
+# Codex 命令行工具
+
+Codex CLI 是官方命令行工具，用 Rust 编写，轻量高效，适合终端爱好者。
+
+## 安装 CLI
+
+Codex CLI 支持 macOS、Linux 和 Windows（实验性）。
+
+npm 安装
+
+npm 全局安装
+
+# 使用 npm 安装
+npm install -g @openai/codex
+
+# 验证安装
+codex --version
+
+## Homebrew 安装
+
+Homebrew 安装
+
+# macOS 使用 Homebrew
+
+brew install codex
+
+## 更新 CLI
+
+更新版本
+
+# npm 更新
+npm install -g @openai/codex@latest
+# Homebrew 更新
+brew upgrade codex
+
+## 首次使用
+
+⾸次运⾏Codex会引导你完成认证：
+
+启动 Codex
+# 启动交互式界面
+codex
+# 或指定初始任务
+codex "解释这个项目结构"
+
+Codex 会打开浏览器进行认证：
+
+1. 使用 ChatGPT 账号登录
+
+2. 或使用 OpenAI API Key
+
+3. 授权后返回终端继续
+
+## 交互式 TUI
+
+CLI 默认进入终端用户界面（TUI）模式，提供沉浸式体验。
+
+TUI 界面区域
+| 区域|功能|
+|:----|:----|
+| 消息区|显示对话历史、工具调用、执行结果|
+| 输入区|底部输入框，发送 Prompt|
+| 状态栏|显示模型、上下文使用、线程信息|
+
+TUI 模式设置
+
+TUI 配置
+# ~/.codex/config.toml
+
+[tui]
+# 替代屏幕模式
+alternate_screen = "auto"  # auto | always | never
+# 禁用替代屏幕时保留滚动历史
+# alternate_screen = "never"
+
+替代屏幕模式让 Codex 使用独立屏幕，退出时恢复原终端状态。
+
+## Approval 模式
+
+Approval 模式控制 Codex 执行操作前的确认行为。
+
+四种模式
+|    模式|说明|行为|
+|:----|:----|:----|
+|  suggest|建议模式|Codex 提供建议但不执行|
+| auto-edit|自动编辑|自动执行文件编辑，命令需确认|
+| full-auto|全自动|自动执行所有操作（谨慎使用）|
+|interactive|交互模式|敏感操作前询问（默认）|
+
+
+
+## 设置 Approval 模式
+
+# 命令行指定模式
+
+codex --approval-mode full-auto
+
+#或在会话中切换
+
+/approval full-auto
+
+full-auto 模式下 Codex 会自动执行所有操作，包括删除文件，请谨慎使用。
+
+## Sandbox 模式
+
+Sandbox 模式限制 Codex 的文件和命令访问范围。
+
+
+|模式|文件修改|命令执行|网络访问|
+|:----|:----|:----|:----|
+|read-only|禁止|禁止|禁止|
+| workspace-write|仅工作区|允许|禁止|
+|danger-full-access|允许|允许|允许|
+
+## 设置 Sandbox 模式
+
+# 只读模式
+
+codex --sandbox read-only
+
+# 工作区写入模式（推荐）
+
+codex --sandbox workspace-write
+
+# 完全访问模式（危险）
+
+codex --sandbox danger-full-access
+
+## 斜杠命令
+
+CLI 提供丰富的斜杠命令：
+|   命令|功能|
+|:----|:----|
+| /model|切换模型（如 /model gpt-5.4-mini）|
+| /fast|切换 Fast 模式|
+| /plan|进入计划模式|
+|/review|审查代码变更|
+|  /new|开始新会话|
+|/resume|恢复历史会话|
+| /fork|克隆当前会话到新线程|
+|/compact|压缩上下文历史|
+|/status|显示会话状态|
+| /clear|清除屏幕|
+| /quit|退出 Codex|
+
+## 命令使用示例
+
+斜杠命令
+
+# 切换模型
+
+/model gpt-5.4-mini
+
+# 计划模式
+
+/plan 实现用户认证系统
+
+# 查看状态
+
+/status
+
+## Shell 命令执行
+
+在 CLI 中直接执⾏ Shell 命令：
+
+执行命令
+
+# 以！开头执行命令
+
+! ls -la
+
+# 执行 git 命令
+
+! git status
+
+# 查看进程
+
+! ps aux
+
+## 命令确认
+
+危险命令需要确认：
+
+删除文件（rm）
+
+终止进程 (kill)
+
+修改系统配置
+
+## 图片输入
+
+CLI 支持附加图片作为上下文：
+
+附加图片
+
+# 附加截图
+
+codex -i screenshot.png
+
+# 附加设计稿
+
+codex --image design.png "根据这个设计实现页面"
+
+# 多张图片
+
+## 图片用途
+
+- 截图分析错误信息
+
+UI 设计稿转换为代码
+
+图表数据解读
+
+## 非交互模式 (exec)
+
+使用 exec 命令运行单次任务，适合脚本和 CI/CD:
+
+exec 命令
+
+# 执行单次任务
+
+codex exec "审查代码并输出报告"
+
+# 输出到文件
+
+codex exec "生成 README" -o README.md
+
+# 使用特定模型
+
+codex exec -m gpt-5.4-mini "分析项目结构"
+
+# 全自动模式
+
+codex exec --full-auto "运行测试并修复失败"
+
+## exec 常用参数
+
+
+|参数|说明|
+|:----|:----|
+|-m|指定模型|
+|-o|输出到文件|
+|--full-auto|全自动执行|
+|--ephemeral|不保存会话文件|
+|  --json|JSON 输出格式|
+
+## 快捷键
+|    快捷键|功能|
+|:----|:----|
+|   Enter|发送消息|
+|Shift+Enter|换行|
+|  Ctrl+C|中断操作|
+|Ctrl+C（两次）|退出 Codex|
+|  Ctrl+D|退出（输入空时）|
+|  Ctrl+R|搜索历史|
+|  Up/Down|浏览历史|
+|    Tab|自动补全|
+|  Esc Esc|编辑上一条消息|
+|  Ctrl+O|复制最后回复|
+
+# 示例格式
+{
+  "steps": [
+    {
+      "order": 从1开始,
+      "type": "codex 或 powershell，能借助codex，优先使用codex解决。如果是codex命令，总是默认同意，不要手动交互。如果是codex命令，那么总是在命令的末尾要求：并按照这个Json格式输出：{'text_answer': '回答内容','file_gened_paths': [所有相关的结果文件的绝对路径]}",
+      "command": "codex或powershell中执行的完整命令"
+    }
+  ]
+}
+
+# 用户需求：
+{{userInput}}
+
+# 用户提供的文件存储在这个目录下
+D:/userFiles
+
+# 用户提供的文件
+{{kb_url_names}}
+''')
+
+

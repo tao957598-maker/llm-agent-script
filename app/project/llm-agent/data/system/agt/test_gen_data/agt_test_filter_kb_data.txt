@@ -1,0 +1,33 @@
+/*
+{
+	"title":"Test Data Filter Generation",
+	"description":"Filter data from the database based on the customer question and save the results to the draft repository",
+	"parameter":"{\"name\":\"tableName\",\"label\":\"表名\"}",
+	"life":100,
+	"version":1
+}
+*/
+/
+
+// 第一步 是否存在该表
+assign("sql_check_exist", "SHOW TABLES LIKE '{{tableName}}'")
+n_exist_result, act_kb.selectBy?sql='{{sql_check_exist}}'
+
+// 第二步 判断表是否存在并处理
+when('!fn.hasValue(n_exist_result)', {
+  // 不存在 查元数据
+  assign("userInput", "在kb_test_data_market表中查询table_name为{{tableName}}的数据")
+  
+  // 取kb_test_data_market元数据
+  agt_auto_sql1.knowledge?userInput='{{userInput}}'
+  n_kb_data, act_kb.selectBy?sql='{{sys_last_result}}'
+  assign("n_result_data", "{{n_kb_data}}")
+
+  // 建表
+  
+
+  assign("n_msg", "表 {{tableName}} 不存在，已自动创建。")
+},{
+  // 表已存在
+  assign("n_msg", "表 {{tableName}} 已存在，无需创建。")
+})

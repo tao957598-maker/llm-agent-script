@@ -1,0 +1,99 @@
+/*  
+{
+	"title": "保存Excel到知识库",
+	"parameter": "tablename=知识库名称&excelFilename=要保存的Excel文件名&columns=从excel中挑选出来的要保存的字段&vector=用于向量化查询的字段",
+	"description": "columns和vector、scalar选填",
+	"category": "知识库"
+} 
+*/
+
+act_kb.hasKB?name={{tablename}}
+when('!sys_last_result', {
+	// 获取Excel标题及一行样列数据
+	agt_python?requirement='''
+		读取Excel前2行，读取指定列的数据：columns(表头名称)。读取包含表头在内的前2行内容。
+		将读取的内容转换为JSONL格式的字符串（含表头），打印转换后的JSONL字符串。
+		注：excel的文件来自参数：excelFilename，列数据来自参数：columns，如果columns为ALL或者None，表示读取所有'
+	'''&excelFilename={{excelFilename}}&columns={{fn.optional(columns,'ALL')}}
+	
+	// 定义知识库结构
+	tpl_define_excel_kb, vrf_tpl_excel_title, act_kb.defineKB?tableInfo={{sys_last_result}}
+})
+
+agent('', {
+	// 读取完整Excel数据
+	n_excel_data, agt_python?requirement='''
+		读取Excel文件，读取指定列的数据：columns(表头名称)。读取包含头在内的内容。
+		将读取的内容（含表头）转换为JSONL格式的字符串（ensure_ascii=False），打印转换后的JSONL字符串。
+		 注：excel的文件来自参数：excelFilename，列数据来自参数：columns，如果columns为ALL或者None，表示读取所有
+	'''&excelFilename={{excelFilename}}&columns={{fn.optional(columns,'ALL')}}
+	
+	// 导入数据到知识库
+	tpl_excel_column_mapping, act_kb.importData?name={{tablename}}&data={{n_excel_data}}&alias={{tpl_excel_column_mapping}}
+}, true, 3)
+
+define('tpl_define_excel_kb', '''
+	你是一名高级的Java开发工程师，请基于vector字段、excel数据，以及可参考的知识库，构建tableName为{{tablename}}的milvus知识库，请返回定义知识库的JSON格式(id字段为null)，请默认使用excel列名作为comment字段，请不要增加vector字段。
+    # schema和tableName及所有字段定义规则：
+      schema、tableName、name三个属性的值采用全小写英文的下划线命名法（比如AbcDef -> abc_def、abcDef -> abc_def、abc-def -> abc_def、ABC_DEF -> abc_def）
+
+	# 向量库vector字段要求：
+	1. vector向量的维度为384
+	2. vector字段命名格式为dense_xxx
+	3. name采用全小写英文的下划线命名法（比如AbcDef -> abc_def、abcDef -> abc_def、abc-def -> abc_def、ABC_DEF -> abc_def）
+	4. comment字段采用对应的excel的表头的值，方便后续的识别程序进行匹配检索
+
+	# vector字段(为空表示不用向量字段)：
+	  {{vector!}}
+	# scalar字段(为空表示不用标量字段)：
+      {{scalar!}}
+    # 特别要求：
+        - **如果 {{vector!}} 和 {{scalar!}} 两者都为空或不存在时：**
+            → 所有字段的 vectorType 必须为 null，dimension 必须为 null（表示纯非向量库字段）。
+
+        - 当字段属于 vector 字段时：
+            → vectorType = "Vector"
+            → dimension = 384
+            → nullable = false
+
+        - 当字段属于 scalar 字段时：
+            → vectorType = "Scalar"
+            → dimension = null
+
+	# excel数据：
+	{{sys_last_result}}
+
+	# 可参考的知识库：
+	{{fn.query('MetaTableInfo', 'tableName=kb_question_answer')}}
+
+	# 定义知识库的JSON格式参考：
+	{{fn.example('TableInfo')}}
+''')
+
+define('tpl_excel_column_mapping', '''
+	你是一名高级开发工程师，请检查数据库的表字段的定义，已经待导入的参考数据(JSON格式)，给出两者的字段映射关系，以JSON格式返回：{'DB COLUMN NAME1': '数据属性A', 'DB COLUMN NAME2': '数据属性B'...}
+	
+	# 数据库的表字段定义：
+	{{fn.query('MetaTableInfo', 'tableName=' + tablename)}}
+	
+	# 待导入的参考数据
+	{{fn.dataRange(n_excel_data, 0, 2)}}
+''')
+
+define('tpl_excel_title', '''
+	请检查json数据中的comment字段，和excel数据中的表头进行逐个比较，是否能找到一个一模一样的值，并按照检查结果的json格式，给出检查结果。
+	
+	# json数据：
+	{{tpl_define_excel_kb}}
+
+	# excel数据：
+	{{agt_python}}
+	
+	# 检查结果的json：
+	{
+		type: 'verifyResult',
+		success: false(或者true),
+		result: xxx不在excel的表头中(如果success为true，不用提供result)
+		thought: 思考的过程
+	}
+''')

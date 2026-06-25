@@ -1,0 +1,61 @@
+/*
+{
+	"title":"API Test Data Execute Plan",
+	"description":"API Test Data Execute Plan",
+	"parameter":[
+		{
+			"name":"application",
+			"label":"系统名称",
+			"required":true
+		},
+		{
+			"name":"task_name",
+			"label":"任务名称",
+			"required":true
+		},
+		{
+			"name":"kb_data",
+			"label":"kb_data",
+			"required":true
+		},
+		{
+			"name":"base_url",
+			"label":"Base URL",
+			"required":true
+		}
+	],
+	"tag":"Automated Testing",
+	"resultPlan":"result",
+	"life":1000,
+	"displayOrder":75
+}
+*/
+
+// 获取application
+assign('n_application', '{{application}}')
+// 获取任务名称
+assign('n_task_name', '{{task_name}}')
+// 获取BaseUrl
+assign('n_base_url', '{{base_url}}')
+// 获取kb_data
+assign('n_kb_data', '{{kb_data}}')
+
+n_data_item, act_func?js='''
+(function(){
+let kb_data = JSON.stringify({{n_kb_data}});
+let baseUrl = '{{n_base_url}}';
+let application = '{{n_application}}';
+let taskName = '{{n_task_name}}';
+const transformedApi = {
+	system: application,
+	task_name: taskName,
+	base_url: baseUrl,
+	data: kb_data
+};
+return JSON.stringify(transformedApi);
+})();
+'''
+
+// Send test data to kb plan
+act_kb.defineAndImportData?tableName='kb_api_test_plan'&data='{{n_data_item}}'
+

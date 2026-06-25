@@ -1,0 +1,118 @@
+/*
+{
+	"title":"Intelligent Data-Driven Testing",
+	"description":"AI-powered Test Data Generation Platform - An intelligent data-driven testing solution that utilizes advanced parameterized testing framework and AI algorithms to achieve fully automated test execution. Supports multi-scenario data modeling, dynamic data injection, intelligent business rule-based data construction, and automated result validation, significantly improving test coverage and efficiency.",
+	"parameter":[
+		{
+			"name":"testNo",
+			"label":"Test No",
+			"required":true
+		},
+		{
+			"name":"test_step",
+			"label":"Test step",
+			"type":"textarea"
+		},
+		{
+			"name":"test_data",
+			"label":"Test data",
+			"type":"textarea"
+		},
+		{
+			"name":"dependent_test_no",
+			"label":"Dependent Test No"
+		},
+		{
+			"name":"system_name",
+			"label":"System name"
+		}
+	],
+	"dependency":"ac",
+	"tag":"Automated Testing",
+	"displayOrder":62,
+	"resultPlan":"n_test_result",
+	"version":2
+}
+*/
+
+// Get Test No
+assign('test_no', '{{testNo}}')
+
+// Check if dependent_test_no is None
+when('fn.hasValue(dependent_test_no)', {
+	// dependent_test_no is not None
+	assign('n_dependOn', '{{dependent_test_no}}')
+},
+{
+	// dependent_test_no is None
+	assign('n_dependOn', 'None')
+})
+
+// Get script path of test no  
+n_result_data,act_kb.selectBy?sql="SELECT * FROM kb_testcase_step WHERE test_no = '{{test_no}}' and application = '{{system_name}}' LIMIT 100"
+
+// Check if system_name is None
+when('fn.hasValue(system_name)', {
+	// system_name is not None
+	assign('n_system', '{{system_name}}')
+},
+{
+	// system_name is None
+	n_system,act_func?script='''
+		def data_item = n_result_data[0]
+		def result = data_item.application
+		return result
+	'''
+})
+
+n_result,act_func?script='''
+	def data_item = n_result_data[0]
+	def result = data_item.result
+	return result
+'''
+
+n_script_apth, act_func?script='''
+	def paths = n_result
+	def parentPath = new File(paths[0]).parent
+	return parentPath
+'''
+
+// Check if test_data is None
+when('!fn.hasValue(test_data)', {
+  // if test_data is None ,read mysql，testNo -> kb_test_data_scenario
+  n_envinfo, act_kb.select?name='kb_test_data_scenario'&column='data,test_step,title,expected_result,test_method'&where='{"test_no":"{{test_no}}"}'  
+  
+  // get test data from kb
+  n_test_data, act_func?script='''return n_envinfo[0]'''
+
+  // get test step  
+  n_test_step, act_func?script='''n_test_data.test_step'''
+
+  // test_step 
+  assign('test_step', '{{n_test_step}}')
+
+ // test_data 
+  n_data, act_func?script='''return n_test_data["data"]'''
+
+  // test_title
+  n_title, act_func?script='''return n_test_data["title"]'''
+
+  // test_expected_result
+  n_eResult, act_func?script='''return n_test_data["expected_result"]'''
+  // get test data from kb
+  n_test_method, act_func?script='''return n_test_data["test_method"]'''
+
+  // send data from kb
+  n_test_result, act_rpa.send?command=dataDriven&parameters='{{fn.json("data,n_data,testNo,testNo,testStep,n_test_step,title,n_title,expected_result,n_eResult,systemName,n_system,dependOn,n_dependOn,filePath,n_script_apth,test_method,n_test_method")}}'
+
+},
+{
+  // test_data test_data
+  assign('n_test_data', '{{test_data}}')
+  // test_step test_step
+  assign('n_test_step', '{{test_step}}')
+
+  // send data from instance
+  n_test_result, act_rpa.send?command=dataDriven&parameters='{{fn.json("data,n_test_data,testNo,testNo,testStep,n_test_step,systemName,n_system,dependOn,n_dependOn,filePath,n_script_apth")}}'
+})
+

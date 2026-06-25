@@ -1,0 +1,143 @@
+/*
+{
+	"title":"Model Creation",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"fileName",
+			"label":"文件名称"
+		},
+		{
+			"name":"currentUrl",
+			"label":"当前URL路径"
+		}
+	],
+	"version":1
+}
+*/
+assign("file_element", "NaN")
+when('fn.hasValue(kbSpaceFileId)', {
+	n_queryResult,agt_kb_space_query.tool_ecosystem?kbSpaceFileId={{kbSpaceFileId}}
+	assign("file_element", "{{n_queryResult}}")
+})
+assign("file_name", "NaN")
+when('fn.hasValue(fileName)', {
+	assign("file_name", "{{fileName}}")
+})
+assign("current_url", "NaN")
+when('fn.hasValue(currentUrl)', {
+	assign("current_url", "{{currentUrl}}")
+})
+
+assign('system_message', """
+- Role: AI模型配置生成专家
+- Background: 用户需要创建AI模型配置，用于定义和管理各种大语言模型的参数和特性。模型配置包括模型名称、类型、参数设置、能力描述等关键信息。
+- Profile: 你是一位精通AI模型架构和配置管理的专家，对大语言模型的工作原理、参数调优和部署管理有着深入的理解。你能够根据用户需求生成符合规范的模型配置。
+- Skills: 你具备强大的需求分析能力、模型设计能力和配置文件生成能力。你能够理解各种模型配置选项，包括模型类型选择、参数配置、能力定义、版本管理等。
+- Goals: 根据用户提供的需求和文件内容，生成符合模型配置规范的代码。
+- Constrains: 生成的配置代码必须严格遵循模型配置的规范格式，确保配置的完整性和准确性。代码中需要包含必要的注释说明。
+- OutputFormat: 模型配置代码格式
+- Workflow:
+  1. 仔细分析用户需求，识别模型的核心功能和应用场景
+  2. 确定模型需要的参数配置，包括模型类型、参数设置等
+  3. 定义模型的能力描述和适用场景
+  4. 生成符合规范的模型配置代码
+  5. 确保代码包含必要的注释和说明
+
+模型配置代码模板参考:
+```
+/*
+{
+  "title": "定义模型名称",
+  "description": "介绍该模型作用",
+  "parameter": 定义模型运行传入的参数,例如:[
+    {
+      "name":"prompt",
+      "label":"提示词文本"
+    },
+    {
+      "name":"temperature",
+      "label":"温度参数",
+      "type":"number"
+    },
+    {
+      "name":"maxTokens",
+      "label":"最大token数",
+      "type":"number"
+    },
+    {
+      "name":"context",
+      "label":"上下文文档",
+      "type":"file"
+    }
+   ],
+  "llm_type": 定义llm模型类型,例如:"gpt-4",
+  "llm_provider": 定义模型提供商,例如:"openai",
+  "model_version": 定义模型版本,例如:"1.0.0",
+  "modified_by": 定义作者,例如"lht",
+  "modified_time": 定义创建时间,例如"2024-11-28",
+  "version": 定义配置版本,例如"1.0.1"
+}
+*/
+
+// 参数赋值示例
+assign("prompt", "请分析以下文本",
+       "temperature", "0.7",
+       "maxTokens", "2048")
+
+// 条件判断
+when('temperature>0.8',{
+	assign("creativity_mode", "high")
+})
+
+// 调用大模型
+define('tpl_model_response', '''
+根据以下提示词生成响应:
+{{prompt}}
+
+参数设置:
+- 温度: {{temperature}}
+- 最大token: {{maxTokens}}
+''')
+
+// 循环处理多个请求
+foreach('n_data', 'request_list', {
+	assign('request_index', '{{n_data.index}}')
+	assign('request_item', '{{n_data.item}}')
+})
+
+// 定义模型运行结果
+assign("result", "succeed")
+
+// 捕捉失败定义运行失败
+on_failure({
+	assign("result", "fail")
+	act_flow.go?plan=end
+})
+```
+''')
+
+assign("file_element", "NaN")
+
+tpl_gen_model_code,psr_json
+
+define('tpl_gen_model_code', '''
+  # 用户需求
+  {{userInput}}
+  ## 用户上传的文件内容
+  {{file_element}}
+  ## 文件名称
+  {{file_name}}
+  ## 当前URL路径
+  {{current_url}}
+
+  {{fn.chatFlag('system_message', 'userInput', '', '', 20)}}
+""")

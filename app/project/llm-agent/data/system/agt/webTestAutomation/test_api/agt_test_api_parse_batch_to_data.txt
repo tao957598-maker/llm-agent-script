@@ -1,0 +1,30 @@
+/*
+{
+	"title":"Batch API file parse",
+	"description":"Batch API file parse",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"API File",
+			"type":"knowledge_space"
+		},
+        {
+            "name":"application",
+			"label":"System"
+        }
+	],
+	"tag":"Automated Testing",
+	"resultPlan":"status,n_api_content,n_data",
+	"displayOrder":70,
+	"life":1000
+}
+*/
+//# application
+assign("application", '{{application}}')
+// 获取文件Id集合
+n_list_id,act_func.run?script="return kbSpaceFileId.split(',')"
+// 循环处理，异步
+foreach('n_loop_id', 'n_list_id', {
+    assign('fileId', '{{n_loop_id.item}}')
+    agt_test_api_parse_to_data?kbSpaceFileId={{fileId}}&application={{application}}&async=true
+})

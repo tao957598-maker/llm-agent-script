@@ -1,0 +1,44 @@
+/*
+{
+	"title":"agt_okp_str_master_and_inv_case_agent",
+	"parameter":[
+		{
+			"name":"customerId",
+			"label":"customerId",
+			"required":true,
+			"maxLength":500,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"source",
+			"label":"source",
+			"required":false,
+			"maxLength":50000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"type",
+			"label":"type",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		}
+	],
+	"tag":"all",
+	"displayOrder":0,
+	"version":1
+}
+*/
+
+assign('n_customer_id','{{customerId}}')
+assign('n_source','{{source}}')
+assign('n_type','{{type}}')
+
+
+

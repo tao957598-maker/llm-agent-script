@@ -1,0 +1,49 @@
+/*
+{
+	"title":"单元测试：流程测试",
+	"parameter":"requirement=用户需求",
+	"llmType":"",
+	"resultPlan":"n_ttt",
+	"version":1
+}
+*/
+//^ 这是一个欢迎语
+assign("welcome", "Hello world!!!")
+
+//## 添加睡眠用于测试
+act_flow.wait?second=1
+
+// 测试mem assign
+act_memory.assign?var=tmp_data&value='cccccc'&type=md
+
+// 掉起其他agt测试
+agt_junittest_grammer?requirement='xxx'
+
+// 数学运算
+n_ttt, tpl_do_the_math, psr_json
+
+//$ 这是最后结果
+assign("aaa", "result: End!!!")
+
+define('tpl_do_the_math', '''
+	请帮我计算值：8*12，以json ```json ```格式返回
+
+''')
+
+define('tpl_ask_pai', '''
+	请返回圆周率的值
+
+''')
+
+agent('add_partition', {
+	tpl_set_partition: '''
+		作为大数据Hive开发工程师，请检查和修正HiveSQL，使之符合规则：
+		
+		1. 要求所有分区表都有分区过滤，但是分区过滤不能太大
+		2. 确保每个from的表都有别名，并且字段名称前加表别名
+		3. 请用三个反引号```sql <code>``` 来清晰分隔代码块，以便于阅读和理解
+		
+		Hive SQL：
+		{{sys_last_result}}
+	''', psr_sql
+})

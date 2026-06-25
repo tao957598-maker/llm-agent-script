@@ -1,0 +1,305 @@
+/*
+{
+    "title":"Python to Ruby Conversion",
+    "description": "Translate Python code into Ruby",
+	"parameter": [
+        {
+        "name":"kbSpaceId",
+        "label":"目录ID（支持多个）",
+        "type":"knowledge_space"
+        },
+        {
+            "name":"userInput",
+            "label":"用户输入",
+            "type":"textarea"
+        }
+    ],
+	"resultPlan":"ruby_content",
+	"life":100
+}
+*/
+
+// 预先设置空结果
+assign('system', 'BEA')
+assign('test_no', 'BEA_20260121_part4_1414')
+assign('inputs', "{{userInput}}")
+
+// step_file_SCRIPTS_DIR
+assign('ruby_path', 'xxxxxx')
+assign('step_file_module_list', '')
+assign('step_file_given_list', '')
+assign('feature_file', '''
+Feature: {{system}}
+  Scenario: {{test_no}}
+''')
+
+assign('step_file_01', "SCRIPTS_DIR = File.expand_path('../../../scripts/{{system}}/{{test_no}}', __FILE__)")
+
+
+assign('test_no_path', 'appdata/ac_script/BEA/Ruby/{{test_no}}')
+
+foreach('n_input', 'inputs',{
+    assign('input', '{{n_input.item}}')
+
+    n_file_name,act_func?script="""
+        def data = input
+        def filePath = data['file_path']
+        def fileNameWithExt = filePath.substring(filePath.lastIndexOf('/') + 1)
+        def fileName = fileNameWithExt.substring(0, fileNameWithExt.lastIndexOf('.'))
+        def numberPrefix = ''
+        for (int i = 0; i < fileName.length(); i++) {
+            def c = fileName.charAt(i)
+            if (c.isDigit()) {
+                numberPrefix += c
+            } else {
+                break
+            }
+        }
+        return [fileName: fileName, numberPrefix: numberPrefix]
+    
+    """
+
+    assign('file_num', '{{n_file_name.numberPrefix}}')
+    assign('file_name', '{{n_file_name.fileName}}')
+
+    
+    // 生成单个rb文件导入
+    assign('step_file_module', '''
+module Script{{file_num}}
+    load File.expand_path(File.join(SCRIPTS_DIR, '{{file_name}}.rb'))
+    module_function :run
+end
+    ''')
+
+    // 导包
+    assign('step_file_module_list', '{{step_file_module_list}}\n\n{{step_file_module}}')
+
+    // 添加判断脚本参数是否需要数据驱动
+    n_is_data_driver,act_func?script="""
+        def data = input
+        def fileContent = data['file_content']
+        def lines = fileContent.split('\\n')
+        def runLine = lines.find { line -> line.trim().startsWith('def run') }
+        if (!runLine) {
+            return [:]
+        }
+
+        // 提取括号内的参数部分
+        def startIndex = runLine.indexOf('(')
+        def endIndex = runLine.indexOf(')')
+        
+        if (startIndex == -1 || endIndex == -1) {
+            return [:]
+        }
+        
+        // 提取参数列表
+        def paramsStr = runLine.substring(startIndex + 1, endIndex).trim()
+        
+        // 如果参数为空，直接返回false
+        if (paramsStr.isEmpty()) {
+            return [:]
+        }
+            
+        // 按逗号分割参数
+        def params = paramsStr.split(',').collect { it.trim() }
+
+        // 判断参数个数是否为4（包含**kwargs）
+        if (params.size() != 4) {
+            return [:]
+        }
+    
+        // 提取第三个参数（索引为2）
+        def thirdParam = params[2]
+    
+        // 判断第三个参数是否包含默认值
+        if (thirdParam.contains('=')) {
+            def parts = thirdParam.split('=').collect { it.trim() }
+            def paramName = parts[0]
+            def paramValue = parts[1]
+            
+            // 返回参数名和值
+            return [
+                paramName : paramName,
+                paramValue: paramValue
+            ]
+        } else {
+            // 如果没有默认值，只返回参数名
+            return [:]
+        }
+    """
+
+    
+    n_flag, act_func?script='''
+        def data = n_is_data_driver
+        return data ? "1" : "0"
+    '''
+
+    when('n_flag == "1"',{
+        // 支持数据驱动     
+        n_para_name,act_func?script='''return n_is_data_driver.paramName'''
+        assign('para_name', '{{n_para_name}}')
+        n_para_value,act_func?script='''return n_is_data_driver.paramValue'''
+        assign('para_value', '{{n_para_value}}')
+
+        // 数据驱动 - step文件中的Given代码
+        assign('step_file_given', """
+Given('{{file_name}}} {string}') do |data_driver|
+  browser = page.driver.browser
+  Script{{file_num}}.run(browser, {{para_name}}: data_driver)
+end
+        """)
+
+        // 数据驱动 - feature文件中的Given代码
+        assign('feature_file','{{feature_file}}\n      Given {{file_name}} {{para_value}}')
+
+
+    },{
+        // 无数据驱动 - step文件中的Given代码
+        assign("step_file_given",'''
+Given("{{file_name}}") do
+  browser = page.driver.browser
+  Script{{file_num}}.run(browser)
+end
+        ''')
+            
+        //  无数据驱动 -feature文件中的Given代码
+        assign('feature_file', '{{feature_file}}\n      Given {{file_name}}')
+    })
+
+    // 执行代码拼接
+    assign('step_file_given_list', '{{step_file_given_list}}\n\n{{step_file_given}}')
+
+    // 赋值python code
+    n_python_code,act_func?script='''return input.file_content'''
+    assign('python_code', '{{n_python_code}}')
+    // 大模型生成ruby代码
+    n_ruby_code,tpl_python_to_ruby,psr_all
+
+    // 按照python代码的路径存储ruby代码
+    assign('ruby_file_name', '{{ruby_path}}/file_name.rb')
+
+})
+
+// 最终的step文件
+assign('finally_step_file', '{{step_file_module_list}}\n\n{{step_file_given_list}}')
+
+// step文件路径
+assign('step_file_name', '{{test_no_path}}/{{test_no}}.rb')
+
+// 写入step文件
+act_func.write?filename='{{step_file_name}}'&data='{{finally_step_file}}'
+
+// 最终的feature文件
+assign('finally_feature_file', '{{feature_file}}')
+
+
+
+
+
+define('tpl_python_to_ruby','''
+# 角色设定
+你是精通Python与Ruby的自动化测试框架代码转换专家，专门负责将Python自动化测试脚本转换为功能完全一致的Ruby代码。
+
+# 核心任务
+将输入的Python自动化测试脚本准确转换为Ruby代码，确保：
+1. 功能逻辑完全一致
+2. 严格遵守转换规则
+3. 输出的Ruby代码语法正确且格式规范
+
+# 转换规则（必须严格执行）
+
+## 一、编码与注释规则
+1. **文件头编码声明转换**
+   - Python: `# -*- coding: utf-8 -*-`
+   - Ruby: `# encoding: UTF-8`
+
+2. **三引号注释处理**
+   - Python中的 `""" xxxxx """` 必须原样输出，不允许任何修改或删除
+
+## 二、import/require转换规则（按模块名严格区分）
+
+3. **autotest_triple模块**
+   - 当Python import语句中包含 `autotest_triple` 时（如 `from autotest_trible import *` 或 `from autotest_triple import 方法名`）
+   - 必须统一转换为：
+     ```ruby
+     script_dir = File.dirname(__FILE__)
+     autotest_triple = File.join(script_dir, "..", "..", "..", "selenium_source", "autotest_triple.rb")
+     require File.expand_path(autotest_triple)
+     ```
+
+4. **autotest模块**
+   - 当Python import语句中包含 `autotest` 时（如 `from autotest import *` 或 `from autotest import 方法名`）
+   - 必须统一转换为：
+     ```ruby
+     script_dir = File.dirname(__FILE__)
+     autotest_path = File.join(script_dir, "..", "..", "..", "selenium_source", "autotest.rb")
+     require File.expand_path(autotest_path)
+     ```
+
+5. **多模块处理**
+   - 如果Python文件中同时出现autotest_triple和autotest的import
+   - 必须分别生成对应的Ruby require代码
+   - 不允许合并、省略或覆盖
+   - 保持与Python import出现顺序一致
+
+## 三、run方法与参数规则（强制）
+
+6. **run方法转换**
+   - Python: `def run(browser, target="xxx", **kwargs):`
+   - Ruby: `def run(browser, target："xxx", **kwargs)`
+   - **关键要求**：参数默认值中的等号 `=` 必须转换为中文冒号 `：`
+   - 参数顺序和方法名不允许改变
+
+## 四、命名一致性规则（禁止改名）
+
+7. **命名严格保持**
+   - 所有方法名、变量名、参数名一律不允许修改
+   - 包括：方法名、变量名、参数名等所有标识符
+   - 禁止任何形式的重命名、简写、优化或重构
+
+## 五、logging转换规则
+
+8. **logging统一替换**
+   - `logging.info` → `LOGGER.info`
+   - `logging.error` → `LOGGER.error`
+   - `logging.warn` → `LOGGER.warn`（如存在）
+
+## 六、语法结构转换规则
+
+9. **异常处理转换**
+   - Python: `try/except`
+   - Ruby: `begin/rescue/end`
+   - 异常变量保持一致，控制流程与return逻辑必须完全一致
+
+10. **字符串插值转换**
+    - Python f-string: `f"xxx {var}"`
+    - Ruby字符串插值: `"xxx #{var}"`
+
+## 七、输出要求
+
+11. **输出限制**
+    - 只输出转换后的Ruby代码
+    - 不输出解释说明、转换步骤或其他任何内容
+    - 不补充Python原代码中不存在的逻辑
+    - 不进行代码风格优化或重构
+    - 输出的Ruby代码必须：
+      - 语法正确，可直接执行
+      - 格式规范（正确缩进、换行、块结构完整）
+
+# 工作流程
+1. 接收输入的Python代码
+2. 按照上述规则逐条严格转换
+3. 只输出最终的Ruby代码
+4. 确保输出代码完全符合所有规则要求
+
+# 注意事项
+- 所有规则必须严格执行，不允许任何例外
+- 转换必须保持功能逻辑的完全一致
+- 输出的Ruby代码必须是完整、可执行的
+- 遇到任何特殊情况，均按上述规则处理
+
+
+# python代码：
+{{python_code}}
+
+''')

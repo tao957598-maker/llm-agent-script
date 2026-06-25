@@ -1,0 +1,252 @@
+/*
+{
+	"title":"Public Opinion Analysis Agent",
+	"parameter":[
+		{
+			"name":"analysisType",
+			"label":"Analysis Type",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"select"
+		},
+		{
+			"name":"topicKeywords",
+			"label":"Topic/Keywords",
+			"required":false,
+			"maxLength":1000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"timePeriod",
+			"label":"Time Period",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"select"
+		},
+		{
+			"name":"customStartDate",
+			"label":"Custom Start Date",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"date"
+		},
+		{
+			"name":"customEndDate",
+			"label":"Custom End Date",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"date"
+		},
+		{
+			"name":"dataSources",
+			"label":"Data Sources",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"multiselect"
+		}
+	],
+	"displayOrder":0,
+	"version":1
+}
+*/
+// Main execution logic based on analysis type
+when('{{analysisType == "Topic Report"}}', {
+    // Generate topic report
+    assign('report_title', 'Public Opinion Analysis Report: {{topicKeywords}}')
+    
+    // Define data collection parameters
+    assign('collection_params', '{"keywords":"{{topicKeywords}}","period":"{{timePeriod}}","sources":{{fn.json(dataSources)}}}')
+    
+    // Collect data from multiple sources
+    n_collected_data, act_kb.search?requirement='{{topicKeywords}}'&name='public_opinion_data'&maxSize=50
+    
+    when('{{fn.hasValue(n_collected_data)}}', {
+        // Generate analysis report using LLM
+        tpl_topic_analysis, psr_json
+        
+        // Format and present the report
+        assign('formatted_report', '{{tpl_topic_analysis}}')
+        act_memory.assign?var=analysis_result&value={{formatted_report}}&type=md
+    }, {
+        // No data found, trigger data collection
+        assign('error_msg', 'No existing data found. Starting data collection...')
+        log('{{error_msg}}')
+        
+        // Call data collection agent
+        agt_data_collection?keywords={{topicKeywords}}&period={{timePeriod}}&async=true
+        assign('collection_result', '{{agt_data_collection.value}}')
+        
+        // Retry analysis with collected data
+        tpl_topic_analysis, psr_json
+        assign('formatted_report', '{{tpl_topic_analysis}}')
+        act_memory.assign?var=analysis_result&value={{formatted_report}}&type=md
+    })
+})
+
+when('{{analysisType == "Configure Collection"}}', {
+    // Configure data collection task
+    assign('task_config', '''{
+        "taskName": "Collection_{{fn.timestamp()}}",
+        "keywords": "{{topicKeywords}}",
+        "frequency": "daily",
+        "sources": {{fn.json(dataSources)}},
+        "startDate": "{{customStartDate}}",
+        "endDate": "{{customEndDate}}"
+    }''')
+    
+    // Create collection configuration
+    n_task_config, act_kb.importData?name='collection_tasks'&data='[{{task_config}}]'
+    
+    // Schedule the task
+    assign('job_data', '{"agentName":"agt_data_collection","jobDesc":"Public Opinion Collection","parameters":{{task_config}},"schedule":"0 0 * * *"}')
+    n_job_created, act_job.createAndTrigger?data={{job_data}}&isOneOffTask=false
+    
+    assign('result_msg', 'Collection task configured successfully. Task ID: {{n_job_created.jobId}}')
+    act_memory.assign?var=configuration_result&value={{result_msg}}
+})
+
+when('{{analysisType == "Monitor Task"}}', {
+    // Monitor and manage existing collection tasks
+    n_existing_tasks, act_kb.select?name='collection_tasks'&column='*'
+    
+    when('{{fn.hasValue(n_existing_tasks)}}', {
+        // Display existing tasks
+        tpl_task_monitor, psr_json
+        
+        assign('monitoring_result', '{{tpl_task_monitor}}')
+        act_memory.assign?var=task_list&value={{monitoring_result}}&type=md
+    }, {
+        assign('no_tasks_msg', 'No active collection tasks found.')
+        act_memory.assign?var=task_list&value={{no_tasks_msg}}
+    })
+})
+
+// Define sub-agent for data collection
+agent('agt_data_collection', {
+    assign('collection_keywords', '{{keywords}}')
+    assign('collection_period', '{{period}}')
+    assign('collection_sources', '{{sources}}')
+    
+    // Simulate data collection from different sources
+    assign('collected_items', '[]')
+    
+    foreach('n_source', 'collection_sources', {
+        when('{{n_source.item == "News Websites"}}', {
+            // Collect from news APIs
+            n_news_data, act_api?name="news_collector"&params='{"keywords":"{{collection_keywords}}","period":"{{collection_period}}"}'
+            append('collected_items', '{{n_news_data}}')
+        })
+        
+        when('{{n_source.item == "Social Media"}}', {
+            // Collect from social media APIs
+            n_social_data, act_api?name="social_media_collector"&params='{"keywords":"{{collection_keywords}}","period":"{{collection_period}}"}'
+            append('collected_items', '{{n_social_data}}')
+        })
+        
+        when('{{n_source.item == "Forums"}}', {
+            // Collect from forums
+            n_forum_data, act_api?name="forum_collector"&params='{"keywords":"{{collection_keywords}}","period":"{{collection_period}}"}'
+            append('collected_items', '{{n_forum_data}}')
+        })
+    })
+    
+    // Store collected data
+    when('{{fn.hasValue(collected_items)}}', {
+        n_stored_data, act_kb.importData?name='public_opinion_data'&data='{{collected_items}}'
+        assign('collection_result', 'Successfully collected {{fn.size(collected_items)}} items')
+    }, {
+        assign('collection_result', 'No data collected')
+    })
+})
+
+// Define prompt templates
+define('tpl_topic_analysis', '''
+# Public Opinion Analysis Report
+
+## Topic: {{topicKeywords}}
+## Time Period: {{timePeriod}}
+## Data Sources: {{dataSources}}
+
+## Collected Data Summary:
+{{n_collected_data}}
+
+## Analysis Instructions:
+1. Identify key themes and sentiment trends
+2. Analyze source distribution and credibility
+3. Highlight significant events or spikes
+4. Provide recommendations for action
+
+## Analysis Results:
+Please analyze the collected data and provide:
+1. **Key Themes**: List 3-5 main discussion topics
+2. **Sentiment Analysis**: Overall positive/negative/neutral distribution
+3. **Source Analysis**: Which sources contributed most
+4. **Trend Analysis**: How discussion evolved over time
+5. **Recommendations**: Suggested actions based on findings
+
+Return the analysis in JSON format with the structure:
+```json
+{
+  "reportTitle": "Analysis Report Title",
+  "executiveSummary": "Brief summary",
+  "keyThemes": ["theme1", "theme2"],
+  "sentiment": {"positive": 40, "negative": 30, "neutral": 30},
+  "sourceAnalysis": {"source1": 25, "source2": 35},
+  "trends": ["trend1", "trend2"],
+  "recommendations": ["rec1", "rec2"],
+  "rawDataCount": 50
+}
+```
+''')
+
+define('tpl_task_monitor', '''
+# Collection Task Monitoring
+
+## Existing Collection Tasks:
+{{n_existing_tasks}}
+
+## Task Management Instructions:
+Analyze the current collection tasks and provide:
+1. Task status overview
+2. Collection performance metrics
+3. Issues or warnings
+4. Recommendations for optimization
+
+Return the monitoring report in JSON format:
+```json
+{
+  "totalTasks": 5,
+  "activeTasks": 3,
+  "inactiveTasks": 2,
+  "tasks": [
+    {
+      "taskId": "task1",
+      "status": "active",
+      "lastRun": "2024-01-15",
+      "collectedItems": 150,
+      "issues": "none"
+    }
+  ],
+  "recommendations": ["rec1", "rec2"]
+}
+```
+''')
+
+// Error handling
+on_failure({
+    assign('error_result', 'Analysis failed: {{sys_last_error}}')
+    act_memory.assign?var=error_output&value={{error_result}}
+    act_flow.go?plan=end
+})

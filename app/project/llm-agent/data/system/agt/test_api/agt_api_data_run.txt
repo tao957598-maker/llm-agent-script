@@ -1,0 +1,82 @@
+/*
+{
+	"title":"API Test Data Run",
+	"description":"API Test Data Run",
+	"resultPlan":"status,n_kb_list,result,n_test_title,report",
+	"parameter":"{\"name\":\"kbList\",\"label\":\"数据参数\",\"required\":false,\"maxLength\":50,\"hidden\":false,\"readOnly\":false}",
+	"tag":"API Data run",
+	"displayOrder":72,
+	"version":3
+}
+*/
+assign("argMapping", '{{argMapping}}')
+
+assign("kbList", '{{kbList}}')
+
+n_kb_list, act_func.run?script='''
+	def raw = fn.list(kbList)
+	def normalized = []
+	if (raw == null) {
+		return normalized
+	}
+	def flattenInto
+	flattenInto = { value ->
+		if (value == null) {
+			return
+		}
+		if (value instanceof Collection) {
+			value.each { item ->
+				flattenInto(item)
+			}
+		} else {
+			normalized.add(value)
+		}
+	}
+	flattenInto(raw)
+	return normalized
+'''
+
+assign('n_system_name', '{{n_kb_list[0]["application"]}}')
+
+assign('n_task_name', '{{n_kb_list[0]["test_no"]}}')
+
+
+// 获取系统表kb_testcase_biz的base_url
+n_envinfo,act_kb.select?name=kb_testcase_biz&where='{"name":"api_base_url"}'
+
+n_base_url, act_func.run?script='''
+	def result = n_envinfo[0].envinfo
+	return result
+'''
+
+assign("base_url", 'base_url')
+
+// api_data组装成单条任务
+n_api_plan_data, agt_test_api_data_to_plan_single_task?argMapping={{argMapping}}&kbList={{n_kb_list}}&task_name={{n_task_name}}&base_url={{n_base_url}}
+
+
+// 数据格式转换
+n_api_plan_data_list, act_func?script='''
+def raw = fn.list(n_api_plan_data.data)
+def normalized = []
+if (raw == null) {
+	return normalized
+}
+def flattenInto
+flattenInto = { value ->
+	if (value == null) {
+		return
+	}
+	if (value instanceof Collection) {
+		value.each { item ->
+			flattenInto(item)
+		}
+	} else {
+		normalized.add(value)
+	}
+}
+flattenInto(raw)
+return normalized
+'''
+
+agt_test_api_plan?system={{n_system_name}}&task_name={{n_task_name}}&base_url={{n_base_url}}&data={{n_api_plan_data_list}}

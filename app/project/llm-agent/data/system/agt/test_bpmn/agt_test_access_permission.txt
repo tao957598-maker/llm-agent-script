@@ -1,0 +1,119 @@
+/*
+ {
+	 "title": "自动化测试-访问控制分析（基于角色识别与功能权限分析）",
+	 "description": "访问控制分析,解析需求文档",
+	 "parameter": [
+	 	{
+        	 		"name":"requirement",
+        	 		"label":"需求文档",
+        	 		"type":"file"
+        	 	}
+	 ],
+	 "llmType": "",
+	 "life": "100"
+ }
+*/
+assign("requirement", "{{requirement}}")
+n_requirement,act_func.read?filename='{{requirement}}'
+// 输出完整的访问权限分析文档(txt)
+n_xml_detailInfo, tpl_role_analysis
+
+//写python代码
+act_python.writeTmp?requirement='角色识别和功能权限分析文件'&pythonType='pythoncode'&pythonCode='{{n_xml_detailInfo}}'
+
+//生成xml文件
+n_xml_code, tpl_generate_drawio
+
+// 保存为xml文件,默认tmp文件夹
+act_python.writeTmp?requirement='xml_test文件'&pythonType='json'&pythonCode='{{n_xml_code}}'
+
+
+// **++++++++++====== 分析功能需求文档输出角色权限详细解析 ======++++++++++**
+define('tpl_role_analysis', '''
+# 需求文档的内容
+	<requirement>
+	{{n_requirement}}
+	</requirement>
+- Role: 高级需求分析专家
+- Background: 识别并提取系统中的角色（如 Admin、Manager、User）。
+              确定每个角色的访问控制需求及其具体职责。
+              产出支持文档（txt），清晰描述角色权限，确保可读性。
+
+
+
+- Profile: 你是一名对互联网产品业务需求相关非常熟悉的高级分析人员，拥有丰富的互联网产品开发业务经验和敏锐的业务洞察力。
+- Skills: 你具备深入分析业务需求的能力，能够准确分析业务需求的详细内容，并格式化规范化地识别并提取系统中的角色。确定每个角色的访问控制需求及其具体职责。产出支持文档（txt），清晰描述角色权限，确保可读性。。
+- Goals:  输出完整的访问权限分析文档(txt)，可供后续开发和测试使用，清晰描述角色权限，确保可读性。
+- Constrains: 产出支持文档（txt），清晰描述角色权限，确保可读性。注意：角色权限相关需要生成权限映射表。
+- OutputFormat:markdow JSON格式。
+- Workflow:
+  1. 识别并提取系统中的角色（如 Admin、Manager、User）
+  2. 确定每个角色的访问控制需求及其具体职责。
+  3.  输出完整的包含描述性语言的访问权限分析文档(txt)，可供后续开发和测试使用，清晰描述角色权限，确保可读性。
+- Examples:
+	{
+		data: "输出内容"
+	}
+''')
+
+
+// **++++++++++====== xml文件输出 ======++++++++++**
+define('tpl_generate_drawio', '''
+# 需求文档的内容
+	<n_xml_detailInfo>
+	{{n_xml_detailInfo}}
+	</n_xml_detailInfo>
+# drawio模板
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/26.0.4 Chrome/128.0.6613.186 Electron/32.2.5 Safari/537.36" version="26.0.4">
+  <diagram name="第 1 页" id="lw8dIzRXETJYTjuvGXGT">
+    <mxGraphModel dx="1687" dy="984" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="4681" pageHeight="3300" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="yJYIBjCMx1z9KmkcvuN8-4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="yJYIBjCMx1z9KmkcvuN8-1" target="yJYIBjCMx1z9KmkcvuN8-3" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="yJYIBjCMx1z9KmkcvuN8-1" value="读取表元数据信息" style="whiteSpace=wrap;html=1;aspect=fixed;" parent="1" vertex="1">
+          <mxGeometry x="80" y="180" width="80" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="yJYIBjCMx1z9KmkcvuN8-3" value="调用大模型&lt;div&gt;返回{&quot;data&quot;:[ {&quot;table1&quot;:table1的元数据信息} ]}&lt;/div&gt;" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="210" y="190" width="120" height="60" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
+
+# 要求根据drawio模板,按照{{n_xml_detailInfo}}内容生成xml代码,从左到右排列，节点选择不同的颜色 并使用连接线连接, 直接返回,不必解释
+
+- Role: 高级xml流程图生成专家
+- Background: 用户需要对流程图xml文档进行分析。
+- Profile: 你是一名对工作流流程图非常熟悉的高级分析人员，拥有丰富的工作流流程图经验和敏锐的业务洞察力。
+- Skills: 你具备深入分析工作流流程图的能力，能够准确分析流程图的详细内容，并格式化规范化地按照input内容生成 xml代码。
+- Goals: 要求根据drawio模板,按照input内容生成 xml代码
+
+左到右排列，节点选择不同的颜色 并使用连接线连接, 直接返回,不必解释
+- Constrains: 要求根据drawio模板,按照input内容生成 xml代码,从左到右排列，节点选择不同的颜色 并使用连接线连接, 直接返回,不必解释
+- OutputFormat: xml格式，。
+- Workflow:
+  1. 阅读并理解{{n_xml_detailInfo}}内容。
+  2. 根据{{n_xml_detailInfo}}内容具体内容给出xml代码。
+  3. 返回下面Examples例子格式的结果。
+
+- Examples:
+例子1：
+```python
+返回的xml内容填在这里
+```
+''')
+
+
+// 定义提示词，调用大模型
+define('tpl_delete_code', '''
+# 需求文档的内容
+	<n_xml_code>
+	{{n_xml_code}}
+	</n_xml_code>
+去除{{n_xml_code}}里面的转义字符。
+''')
+

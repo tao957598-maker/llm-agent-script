@@ -1,0 +1,44 @@
+/*{
+  "title": "检查Git Bash",
+  "description": "检查 Windows 系统上的 Git Bash 是否安装（Git for Windows 自带）",
+  "parameter": [
+    {
+      "name": "os",
+      "label": "操作系统",
+      "required": true
+    },
+    {
+      "name": "server_id",
+      "label": "服务器ID"
+    }
+  ],
+  "resultPlan": "n_git_bash_plan_result",
+  "discoverable": false,
+  "life": "100"
+}*/
+
+assign('n_log', '')
+
+when('n_os == "windows"', {
+  // 正在检查 Git Bash
+  assign('n_bash_find_cmd', 'for %d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @if exist %d: @for /f "delims=" %i in (\'dir /b /s /ad "%d:\\Git" 2^>nul\') do @if exist "%i\\/bin\\/bash.exe" echo %i\\/bin\\/bash.exe')
+  n_bash_check, agt_cmd_executor.assistant?cmd={{n_bash_find_cmd}}&cmd_executor_name="查找Git Bash"&server_id={{server_id}}
+  n_bash_path, act_func?script='''
+    def out = n_bash_check ?: ""
+    out = out.trim()
+    return out.isEmpty() ? "" : out.replace('\\\\', '/')
+  '''
+  when('fn.hasValue(n_bash_path)', {
+    assign('n_log', '{{n_log}}\n✓ Git Bash: {{bash_path}}')
+    // 返回成功
+    assign("n_git_bash_plan_result", '{"n_log":"{{n_log}}","n_data":"{{bash_path}}","is_plan_break":"false"}')
+  }, {
+    assign('n_log', '❌ 未找到 Git Bash，请先安装 Git for Windows')
+    // 返回失败
+    assign("n_git_bash_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"true"}')
+  })
+}, {
+  // 非 Windows 系统不需要检查 Git Bash，直接返回成功
+  assign('n_log', '{{n_log}}\n✓ 非 Windows 系统，跳过 Git Bash 检查')
+  assign("n_git_bash_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"false"}')
+})

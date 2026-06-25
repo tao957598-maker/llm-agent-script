@@ -1,0 +1,48 @@
+/*
+{
+	"title":"API parameter complexity evaluator",
+	"description":"Estimate API complexity by parameter count only",
+	"parameter":"{\"name\":\"input_data\",\"label\":\"submodule json\"}",
+	"llmType":"alias.highquality",
+	"resultPlan":"result",
+	"life":10000,
+	"version":1
+}
+*/
+when('!fn.hasValue(input_data)', {
+  assign("result", '{"param_count":0,"tier":"simple","max_keep":2}')
+}, {
+  n_eval, tpl_eval_param_complexity, psr_json
+  act_func?script='''
+    def x = n_eval
+    if (x == null || !(x instanceof Map)) x = [:]
+    def pc = 0
+    try { pc = Integer.parseInt((x.get("param_count") ?: "0").toString()) } catch (Throwable ignorePc) { pc = 0 }
+    if (pc < 0) pc = 0
+    def tier = "simple"
+    def mk = 2
+    if (pc > 10) { tier = "complex"; mk = 4 }
+    else if (pc >= 3) { tier = "medium"; mk = 3 }
+    result = [param_count: pc, tier: tier, max_keep: mk]
+  '''
+})
+
+define('tpl_eval_param_complexity', '''
+你是 API 参数复杂度评估器。
+
+只依据“请求参数数量”判断复杂度，不要使用请求头/请求体关键词、状态码、认证类型等规则。
+
+输入（单个接口子模块）：
+{{input_data}}
+
+请执行：
+1) 识别该接口的“请求参数”数量（优先看 required/必填参数；若未明确 required，则统计可识别到的请求参数总数）。
+2) 仅返回 JSON：
+{
+  "param_count": <整数>
+}
+
+注意：
+- 只返回 JSON，不要解释。
+- param_count 必须是非负整数。
+''')

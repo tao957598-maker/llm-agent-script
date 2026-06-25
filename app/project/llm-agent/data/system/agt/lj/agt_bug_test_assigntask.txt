@@ -1,0 +1,21 @@
+/*
+{
+	"title":"agt_bug_test_assigntask",
+	"description":"测试act_plan.runPlan?executor调用 assign参数赋值问题-lj",
+	"parameter":"test_no=测试编号&current_step=当前验证步骤&steps=完整验证步骤&system=系统名称&envinfo=environment information&taskType=任务类型",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_result_data",
+	"version":1
+}
+*/
+assign('kbSpaceFileId','1') 
+assign('n_result_data','{{kbSpaceFileId}}')
+
+log('-----------envinfoenvinfo:{{envinfoenvinfo}}')
+log('-----------envinfo:{{envinfo}}')
+ 
+
+ 
+// 元数据agent-> 插入元数据表
+agt_math_test_sub1?sourceData="{{testData}}"&parameter="{{parameter}}"

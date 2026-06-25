@@ -1,0 +1,40 @@
+/*
+{
+	"title":"Knowledge Space File Search",
+	"description":"Search file contents in knowledge base using keywords",
+	"parameter":[
+		{
+			"name":"Agent_code",
+			"label":"knowledge Space"
+		},
+		{
+			"name":"agt_core_code",
+			"label":"File Name"
+		}
+	],
+	"tag":"knowledge",
+	"uiEntrance":"knowledge",
+	"life":50,
+	"version":1
+}
+*/
+// 1. API
+assign('parameters', '["{{Agent_code}}","{{agt_core_code}}"]')
+n_run_sql_res,act_kb.selectBy?sql='select ksfk.transformed_file from kb_spaces_folder ksf inner join kb_spaces_folder_knowledge ksfk on ksf.id = ksfk.kb_spaces_folder_id where ksf.folder_name = ?1 and ksfk.knowledge_name = ?2'&parameters='{{parameters}}'
+
+// 2. 处理API响应
+when('fn.hasValue(n_run_sql_res)', {
+  // 2.1 读取URL
+  n_file_content, act_func.read?filename='{{n_run_sql_res[0].transformed_file}}'
+  // n_file_content, act_func.read?filename='/kbs_parse/agt_core_code_20250422180715.html'
+
+  assign("final_result", "{{n_file_content}}")
+},{
+  // API调用失败处理
+  assign("final_result", "false")
+})
+
+// 3. 最终输出
+assign("final_result", "{'1234':{{final_result}}}")
+
+// 20250429 isSource bool 类型 最新语法n_result_data,act_kbs.readSectionFile?folderName='{{folderName}}'&knowledgeName='{{knowledgeName}}'&isSource={{isSource}}

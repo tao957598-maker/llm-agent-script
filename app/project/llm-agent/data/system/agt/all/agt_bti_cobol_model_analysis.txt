@@ -1,0 +1,339 @@
+/*
+{
+	"title":"agt_bti_cobol_model_analysis",
+	"parameter":[
+		{
+			"name":"tasks",
+			"label":"task json",
+			"required":true,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"entities",
+			"label":"Entity json",
+			"required":true,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		}
+	],
+	"tag":"All",
+	"displayOrder":0,
+	"version":72
+}
+*/
+// 初始化参数
+assign("n_tasks",'{{tasks}}')
+assign("n_entities",'{{entities}}')
+// 返回参数定义
+assign("n_task_op",'[]')
+assign("n_entities_op",'[]')
+
+log('----n_tasks={{n_tasks}}')
+log('----n_entities={{n_entities}}')
+
+// 1. tasks 信息补全
+
+foreach('n_task_detail', 'n_tasks', {
+    
+  	assign("n_task","{{n_task_detail.item}}")
+  	
+    // step 1.1: 大模型根据task生成问题
+    define('tpl_agt_task_detail','''
+### Role
+You are an expert in generating high-quality knowledge retrieval queries from structured system task data.
+### Task
+Based on the provided parsed task information, generate **ONE single, most relevant question** that can be used to retrieve related content from a requirements document.
+
+### Objective
+- Maximize the chance of retrieving the most relevant requirement description (Top-1 hit)
+- Capture the **core business logic** of the function
+
+### Requirements
+1. The question must be in **Chinese**
+2. Focus on **business perspective**, not technical implementation
+3. Avoid technical terms such as "SQL", "sequence", etc.
+4. The question should be **specific and meaningful**, not vague
+5. Include key business concepts when possible, such as:
+   - customer
+   - certificate / ID
+   - validation
+   - duplication check
+   - customer creation
+6. Prefer to cover:
+   - business purpose
+   - validation rules
+   - duplicate handling
+   - key data processing logic
+### Input
+  {{n_task}}
+### Output
+- Output **only ONE question**
+- Do NOT include any explanation
+### Output Format
+```json
+{"question":"xxx"}
+```
+''')
+	
+	// step 1.2: 生成Task问题
+	tpl_agt_task_detail,tpl_agt_task_detail.psr_all
+ 	log("tpl_agt_task_detail=={{tpl_agt_task_detail.question}}")
+	
+	// step1.3: 查询知识库 获取需求文档相关的内容
+    assign('userInput',"{{tpl_agt_task_detail.question}}")
+	n_task_kn, act_kbs.searchQuestion?paramData={{fn.json('question,userInput, folderPath, "BTI/HSBC"')}}&similarity='0.5'
+	log("n_task_kn== {{n_task_kn}}")
+	log("n_task={{n_task}}")
+	
+	// step 1.4： 大模型 内容优化 task
+	 	define('tpl_agt_enrichment_task','''
+### Role
+You are an expert in aligning system implementation details with business requirement documents.
+
+### Task
+Your job is to **enhance and correct the descriptive fields** in the given task/step JSON structure by referencing requirement-style knowledge.
+
+### Objective
+- Improve accuracy and completeness of descriptions
+- Fill in missing or vague information
+
+---
+
+### ABSOLUTE CONSTRAINTS (MUST FOLLOW)
+
+1. **STRUCTURE PRESERVATION**: Output JSON must have the **exact same structure** as the input JSON. Same fields, same nesting, same array structure.
+2. **NO STRUCTURAL CHANGES**: DO NOT add new fields, DO NOT remove any fields, DO NOT rename any fields.
+3. **NO NEW TASKS OR STEPS**: DO NOT add new tasks or steps. DO NOT add new elements to the `step` array.
+4. **NO REMOVED STEPS**: DO NOT remove any steps from the `step` array. The `step` array in the output must contain **exactly the same number of steps** as the input, in the **same order**.
+5. **ELEMENT_NAME UNCHANGED**: All `element_name` fields (at both task level and step level) must be output **exactly as provided in the input**, character for character, without any modification.
+6. **ELEMENT_NAME_CN AND ELEMENT_NAME_EN UNCHANGED**: The `element_name_cn` and `element_name_en` fields at both task and step levels must be output **exactly as in the input**, unchanged.
+7. **UNOPTIMIZED DATA PRESERVATION**: Any field not listed in the "Fields to Optimize" section below must be output **exactly as it appeared in the input**, unchanged.
+
+---
+
+### Fields to Optimize (ONLY these may be modified)
+
+#### Task Level
+- `description`
+- `description_cn`
+- `task_logic`
+- `data_operation_desc`
+
+#### Step Level (for each step in the `step` array)
+- `description`
+- `description_cn`
+- `task_logic`
+
+#### Fields that MUST NOT be modified
+- `element_name` (task level and step level) — output exactly as input
+- `element_name_cn` (task level and step level) — output exactly as input
+- `element_name_en` (task level and step level) — output exactly as input
+
+---
+
+### Enhancement Guidelines
+
+- Convert technical descriptions into **clear business-level explanations**
+- Add missing intent, constraints, and expected outcomes
+- Make implicit logic explicit (e.g., validation purpose, duplication rules)
+- Keep terminology consistent (e.g., customer, certificate, validation)
+- Ensure Chinese and English descriptions are aligned in meaning
+- If information is already accurate, keep it unchanged
+- If information is vague or incomplete, enrich it using business-oriented language
+- Do NOT invent unrealistic logic — only make reasonable enhancements based on context
+
+---
+
+### Input
+{{n_task}}
+
+### Reference Requirement Document
+{{n_task_kn}}
+
+---
+
+### Output Requirement
+- Return **ONLY** the fully updated JSON
+- **NO explanations, NO comments, NO extra text** before or after the JSON
+- The output JSON structure must be **identical** to the input JSON structure
+- All `element_name`, `element_name_cn`, `element_name_en` fields must be **exactly the same** as in the input
+- All steps in the `step` array must be preserved **in full and in original order**
+- All fields not listed for optimization must retain their **original input values unchanged**
+- **DO NOT provide an output template or example** — use the input JSON structure directly
+```
+  ''')
+  
+	// step 1.5: 生成优化后结果数据
+	tpl_agt_enrichment_task,tpl_agt_enrichment_task.psr_all
+	log("tpl_agt_enrichment_task=={{tpl_agt_enrichment_task}}")
+
+    n_data,act_func?script=''' 
+        def v = n_task_op+tpl_agt_enrichment_task
+        return v
+    '''
+    assign("n_task_op","{{n_data}}")
+})
+
+
+
+// 2. Entity-atrributes 信息补全
+foreach('n_entity_detail', 'n_entities', {
+    
+  	assign("n_entity","{{n_entity_detail.item}}")
+  	
+    // step 2.1: 大模型根据entity生成问题
+    define('tpl_agt_entity_detail','''### Role
+You are an expert in generating knowledge retrieval questions from data model (entity & attribute) definitions.
+
+### Task
+Based on the provided entity and attribute information, generate **ONE single, high-quality question** that can be used to retrieve relevant content from a requirements document.
+
+### Objective
+- Maximize the likelihood of retrieving the most relevant requirement description (Top-1 hit)
+- Reflect the **business meaning and usage** of the entity and its attributes
+
+### Requirements
+1. The question must be in **English**
+2. Focus on **business semantics**, not technical implementation
+3. Avoid low-level technical wording (e.g., data types, SQL syntax)
+4. The question should be **specific and meaningful**, not generic
+5. Incorporate key concepts when possible:
+   - entity purpose (what it is used for)
+   - attribute meaning (e.g., status code, error code)
+   - usage context (e.g., database operation handling, error tracking)
+6. Prefer to cover:
+   - business role of the entity
+   - meaning of key attributes
+   - how the data is used in the system
+
+### Input
+{{n_entity}}
+
+### Output
+- Output **ONLY ONE question**
+- Do NOT include explanation or extra text
+### Output Format
+```json
+{"question":"xxx"}
+```
+''')
+	
+	// step 2.2: 生成Entity问题
+	tpl_agt_entity_detail,tpl_agt_entity_detail.psr_all
+ 	log("tpl_agt_entity_detail=={{tpl_agt_entity_detail.question}}")
+	
+	// step 2.3: 查询知识库 获取需求文档相关的内容
+    assign('userInput',"{{tpl_agt_entity_detail.question}}")
+	n_entity_kn, act_kbs.searchQuestion?paramData={{fn.json('question,userInput, folderPath, "BTI/HSBC"')}}&similarity='0.5'
+	log("n_entity=={{n_entity}}")
+	log("n_entity_kn={{n_entity_kn}}")
+	
+	// step 2.4： 大模型 内容优化 entity
+	 	define('tpl_agt_enrichment_entity','''
+### Role
+You are an expert in aligning data model definitions (entities and attributes) with business requirement documents.
+
+### Task
+You will optimize the given entity JSON by using the provided **requirement documents as the ground truth reference**.
+Your goal is to make the entity and attribute descriptions **consistent with business requirements**, not just linguistically improved.
+
+### Objective
+- Align entity definitions with requirement document semantics
+- Improve clarity, correctness, and business understanding
+- Ensure attributes accurately reflect real business usage
+- Resolve ambiguity using requirement context when available
+
+### Inputs
+#### 1. Entity JSON (to be optimized)
+{{n_entity}}
+
+#### 2. Requirement Documents (knowledge base context)
+{{n_entity_kn}}
+
+---
+
+### ABSOLUTE CONSTRAINTS (MUST FOLLOW)
+
+1. **STRUCTURE PRESERVATION**: Output JSON must have the **exact same structure** as the input JSON. Same fields, same nesting, same array structure.
+2. **NO STRUCTURAL CHANGES**: DO NOT add new fields, DO NOT remove any fields, DO NOT rename any fields.
+3. **NO NEW ATTRIBUTES**: DO NOT add new attributes to the attributes array.
+4. **NO REMOVED ATTRIBUTES**: DO NOT remove any attributes from the attributes array. The attributes array in the output must contain **exactly the same number of attributes** as the input, in the **same order**.
+5. **TABLE_NAME UNCHANGED**: The `table_name` field must be output **exactly as provided in the input**, character for character, without any modification.
+6. **UNOPTIMIZED DATA PRESERVATION**: Any field or attribute not listed in the "Fields to Optimize" section below must be output **exactly as it appeared in the input**, unchanged.
+
+---
+
+### Fields to Optimize (ONLY these may be modified)
+
+#### Entity Level
+- `entity_summary_cn`
+- `entity_summary_en`
+- `name_cn`
+- `name_en`
+
+#### Attribute Level (for each attribute in the attributes array)
+- `field_name`
+- `field_name_cn`
+- `field_name_en`
+- `field_rules` (enrich using requirement document if available)
+- `foreign_key_ref` (clarify only if supported by requirements)
+
+#### Fields that MUST NOT be modified
+- `table_name` — output exactly as input
+- `field_length` — output exactly as input
+- `field_type` — output exactly as input
+
+---
+
+### Optimization Rules
+
+1. **Requirement-driven optimization**
+   - Always prioritize information from REQUIREMENT_DOCUMENTS
+   - If conflicts exist, follow requirement documents
+
+2. **Business semantic alignment**
+   - Convert technical descriptions into business-level meaning
+   - Ensure descriptions reflect actual system behavior
+
+3. **Consistency**
+   - Keep Chinese and English meanings aligned
+   - Ensure entity and attribute naming reflects same concept
+
+4. **No hallucination**
+   - Do NOT invent business logic not supported by requirements
+   - If information is missing, keep original value unchanged
+
+5. **Clarity improvement**
+   - Expand vague descriptions using requirement context
+   - Make implicit business rules explicit only when supported
+
+---
+
+### Output Requirement
+- Return **ONLY** the fully updated JSON
+- **NO explanations, NO comments, NO extra text** before or after the JSON
+- The output JSON structure must be **identical** to the input JSON structure
+- The `table_name` field value must be **exactly the same** as in the input
+- All attributes in the `attributes` array must be preserved **in full and in original order**
+- All fields not listed for optimization must retain their **original input values unchanged**
+
+```
+  ''')
+	// step 2.5: 生成优化后结果数据
+	tpl_agt_enrichment_entity,tpl_agt_enrichment_entity.psr_all
+	log("tpl_agt_enrichment_entity=={{tpl_agt_enrichment_entity}}")
+
+    n_data,act_func?script=''' 
+        def v = n_entities_op + tpl_agt_enrichment_entity
+        return v
+    '''
+    assign("n_entity_op","{{n_data}}")
+})
+
+//$ final answer
+assign("result","{{fn.json('n_entity_op,n_entity_op, n_task_op,n_task_op')}}")

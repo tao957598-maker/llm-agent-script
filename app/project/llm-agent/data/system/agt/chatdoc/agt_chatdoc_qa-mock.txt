@@ -1,0 +1,64 @@
+/*
+{
+	"title":"ChatDoc问答-MOCK",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceId",
+			"label":"目录ID",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"textarea"
+		},
+		{
+			"name":"kbData",
+			"label":"知识库数据",
+			"type":"textarea"
+		}
+	],
+	"tag":"chat",
+	"uiEntrance":"qa",
+	"life":100,
+	"version":1
+}
+*/
+// 定义变量
+assign('params','{"question":"{{userInput}}","folderIds":"{{kbSpaceId}}","knowledgeIds":"{{kbSpaceFileId}}"}')
+
+// 定义提示词
+assign('system_prompt','''
+    回答的内容请使用知识库的文字语言输出，无需翻译。
+    你是熟悉金融行业的智能助手，请结合可行度最高的内部资料（为<ref id="n" knowledgeId="m"/>包裹的介绍），回答用户问题。
+    如果回答的内容来自内部资料时，请及时的在该内容的边上用<ref id="n" knowledgeId="m"/>标记,其n是id的值,m是knowledgeId的值。
+    如果知识库的内容不存在，则不需要加上<ref id="n" knowledgeId="m"/>标记
+''')
+
+
+when('kbData', {
+    //## 正在浏览...
+    rag_memory.retrieve?var=kbData, tpl_qa_chatdoc,psr_ref
+}, {    
+    //# 正在搜索知识库...
+    // n_ink_result,rag_kbs.searchQuestion?paramData='{{params}}'&similarity='0.7'&combine=true
+    assign('n_ink_result','[{\"similarity\":\"0.9\",\"document_id\":\"239227157544845312\",\"content\":\"非洲卢旺达\",\"order_by_num\":"10",\"type\":\"text\"},{\"similarity\":\"0.8\",\"document_id\":\"239227157544845312\",\"content\":\"非洲卢旺达\",\"order_by_num\":"1",\"type\":\"text\"},{\"similarity\":\"0.92\",\"document_id\":\"239227157631877120\",\"content\":\"美洲阿根廷\",\"order_by_num\":"3",\"type\":\"text\"},{\"similarity\":\"1.0\",\"document_id\":\"239227157631877120\",\"content\":\"美洲美国\",\"order_by_num\":"4",\"type\":\"text\"},{\"similarity\":\"0.94\",\"document_id\":\"239227158168748032\",\"content\":\"亚洲新加坡\",\"order_by_num\":"3",\"type\":\"text\"},{\"similarity\":\"0.99\",\"document_id\":\"239227158168748032\",\"content\":\"亚洲中国\",\"order_by_num\":"5",\"type\":\"text\"}]')
+
+    //## 正在浏览...
+    rag_kbs.searchReference?data='{{n_ink_result}}',tpl_qa_chatdoc,psr_ref
+})
+
+define('tpl_qa_chatdoc', '''
+	知识库的内容：
+	{{(sys_last_result!''?trim?has_content)?then(sys_last_result, '知识库暂无结果')}}
+
+	客户的问题：
+	{{userInput}}
+
+    {{fn.chatFlag('%{system_prompt}%', '', '', '', 10)}}
+''')

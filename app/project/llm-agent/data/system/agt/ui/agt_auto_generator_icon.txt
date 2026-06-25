@@ -1,0 +1,234 @@
+/*
+{
+	"title":"Auto Generator Agent Icon (Matplotlib)",
+	"description":"Automatically generate a high-quality 120x120 icon image based on the agent name and description using Matplotlib.",
+	"parameter":[
+		{
+			"name":"agentName",
+			"label":"Agent Name",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"agentTitle",
+			"label":"Agent Title",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"agentDesc",
+			"label":"Agent Description",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"agentId",
+			"label":"Agent Id",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		}
+	],
+	"tag":"ui",
+	"version":1
+}
+*/
+//generate a romand icon name
+n_random_filename, act_func?script='''
+    import java.util.UUID
+    def uniqueName = UUID.randomUUID().toString().replace("-", "")
+    def filename = "icon_" + uniqueName + ".png"
+    return filename
+'''
+// Step 1: Define concept generation template (returns JSON)
+define('tpl_icon_concept', '''
+	You are an experienced icon designer.
+
+	Your task is to design a concept for an icon based on the following input:
+
+	Agent Name: {{agentName}}
+	Agent Title: {{agentTitle}}
+	Agent Description: {{agentDesc}}
+
+	You must output a JSON object describing the icon concept, wrapped in a ```json code block.
+
+	The JSON must include:
+	{
+	"theme": "brief summary of the icon theme",
+	"colors": ["main colors, e.g. blue, white, orange"],
+	"elements": ["main shapes or symbols to draw"],
+	"style": "style description, e.g. flat, minimal, gradient"
+	}
+
+	Output format (strictly):
+	```json
+	{
+	"theme": "...",
+	"colors": ["..."],
+	"elements": ["..."],
+	"style": "..."
+	}
+	Do not include any other text or explanations.
+''')
+
+// Step 2: Generate icon concept (structured)
+n_icon_concept, tpl_icon_concept, psr_json
+log('🎨 Icon design concept generated: {{n_icon_concept}}')
+
+// Step 3: Define Python code generator template (Matplotlib version)
+define('tpl_icon_python_code', '''
+You are a senior Python graphic designer and visualization engineer.
+Your task is to generate pure, directly executable Python code (no markdown, no explanations)
+that draws a 120x120 icon using Matplotlib based on the provided concept.
+
+The generated code MUST strictly follow the real, existing API of Matplotlib.
+Do NOT invent, hallucinate, or assume any classes, functions, or color names.
+
+Input Context:
+- Agent Name: {{agentName}}
+- Agent Title: {{agentTitle}}
+- Agent Description: {{agentDesc}}
+- Design Concept: {{n_icon_concept}}
+
+Strict Requirements:
+
+1. Allowed Libraries
+   You MUST import all of the following (and only these):
+       import numpy as np
+       import matplotlib.pyplot as plt
+       import matplotlib.patches as patches
+
+   Do NOT import or use os, sys, pathlib, or any file system operations.
+   Do NOT use patches.Line2D or plt.Line2D.
+   For lines, use ax.plot() instead.
+
+2. Figure Setup (MANDATORY)
+       fig, ax = plt.subplots(figsize=(1.2, 1.2), dpi=100)
+       ax.set_xlim(0, 1)
+       ax.set_ylim(0, 1)
+       ax.set_aspect('equal')
+       ax.axis('off')
+
+   Coordinates must be between 0.0 and 1.0.
+   All drawing must occur strictly inside this range.
+
+3. Drawing Rules
+
+   3.1 Allowed Patch Classes (STRICT WHITE-LIST)
+   You are ONLY allowed to use the following classes from matplotlib.patches:
+
+       - Circle
+       - Rectangle
+       - Ellipse
+       - Polygon
+       - FancyBboxPatch
+
+   Any other patch class name is FORBIDDEN.
+   There is NO such class as:
+       FancyBubble
+       SpeechBubble
+       ChatBubble
+       BubblePatch
+       or any similar name.
+
+   If a speech bubble or chat bubble is needed:
+       - Use FancyBboxPatch for the main body
+       - Use Polygon for the tail
+       - Do NOT invent new patch classes
+
+   3.2 Patch Usage Rules
+   - Use patches for geometric shapes only.
+   - Always call ax.add_patch() after creating a patch object.
+   - Use ax.plot() for lines, ticks, or check marks.
+   - Do NOT draw outside the [0, 1] coordinate range.
+   - Prefer simple, clean shapes suitable for an icon.
+
+   3.3 Color Rules (STRICT)
+   Colors MUST be specified using ONLY one of the following formats:
+
+       1) Standard Matplotlib color names
+          Examples: 'white', 'black', 'gray', 'gold', 'orange', 'red', 'blue'
+
+       2) Hex color strings
+          Example: '#FFD966'
+
+       3) RGB or RGBA tuples with float values between 0.0 and 1.0
+          Example: (1.0, 0.9, 0.3) or (1.0, 0.9, 0.3, 0.8)
+
+   Do NOT invent descriptive or natural-language color names.
+   The following are INVALID and MUST NOT be used:
+       'sunshineyellow', 'skyblueish', 'deepPurpleGlow', etc.
+
+   3.4 Text Rules
+   Include short text (agent initials or a short keyword) near the center.
+   Example:
+
+       ax.text(
+           0.5, 0.5, "AI",
+           color='white',
+           ha='center',
+           va='center',
+           fontsize=14,
+           weight='bold',
+           family='sans-serif'
+       )
+
+   Text must stay inside the icon bounds.
+
+   3.5 Background
+   Transparent background is allowed and recommended if appropriate.
+
+4. File Saving (MANDATORY)
+   Save the icon image directly in the current working directory.
+
+       plt.savefig(
+           '{{n_random_filename}}',
+           dpi=300,
+           bbox_inches='tight',
+           pad_inches=0,
+           transparent=True
+       )
+
+   After saving, you MUST close the figure:
+
+       plt.close()
+
+5. Output Rules (VERY IMPORTANT)
+   - Output ONLY valid, executable Python code
+   - Do NOT use markdown, backticks, JSON, or explanations
+   - Do NOT include comments outside of Python syntax
+   - The output must be a complete Python program
+   - The code must run without modification or manual fixes
+
+Final Reminder:
+Your response must strictly comply with the real Matplotlib API.
+If an API, class, function, or color format is not explicitly allowed above,
+you MUST NOT use it.
+''')
+
+
+
+
+// Step 4: Generate Python code (free-form text)
+n_python_code, tpl_icon_python_code, psr_all
+log('Python code generated successfully:\n{{n_python_code}}')
+
+// Step 5: Write the code to a temporary .py file
+n_file_info, act_python.writeTmp?sourceCode='{{n_python_code}}'&path='tmp/agent_icon'&requirement="agent_icon"
+log('Python file written-32: {{n_file_info}}')
+
+// assign('n_generate_icon_bash',"python /app/project/llm-agent/data/ac_script/python/{{n_file_info.filename}}")
+// # windows环境 没有python3 只能使用python;Linux 环境需要使用python3，需要根据环境手动修改这个python执行命令
+//assign('n_generate_icon_bash',"python {{n_file_info.kbspath}}")
+
+// Step 6: Execute the Python file
+n_execution_result, act_python.run?filepath={{n_file_info.kbspath}}&&wordDir=""
+log('Execution result: {{n_execution_result}}')
+assign('return','''{"iconName":"{{n_random_filename}}","result":"{{n_execution_result.result}}"}''')

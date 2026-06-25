@@ -1,0 +1,72 @@
+/*
+ {
+	 "title": "Verify input",
+	 "description": "Verify input",
+	 "parameter": "test_no=Test Case No&current_step=当前验证步骤&steps=完整验证步骤&envinfo=environment information&StepTestInfo=StepTestInfo&new_collect_page=new_collect_page",
+	 "resultPlan": "n_python_file"
+ }
+*/
+
+
+
+// Collect page status for input
+// n_page_status, act_rpa.send?command=CheckPageStatus&parameters='{"type": ["text", "title", "inputTage"]}'
+
+// '{"text":true, "title": true, "inputTage": true}'
+//# Analysis result
+n_action_result, tpl_check_page_status
+assign('action_result','{{n_action_result}}')
+
+
+define('tpl_check_page_status',""""
+    /*{
+		 "llmType":"alias.highquality"
+	 }*/
+	你是Web测试专家，根据收到的界面情况n_page_status，请分析进行了局部测试前后的页面元素的数据及结构，（json格式：[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, value: 表单元素的值, children:[子元素信息]}...]），请分析前后变化情况，判断局部测试步骤是否执行成功，用JSON给出结果。
+	{
+		"thought": {
+			"change": "前后页面元素的变化情况总结",
+			"reasoning":["结合局部测试步骤在主流程中的位置,结合下一步验证的界面需要,判断是否执行成功.进行3步以上的推理"],
+			"criticism":"推理结果是否符合change的总结",
+			"re_reasoning":"true/false"		// true表示: 推理过程有错误，需要重新推理.  false表示：无需重新推理
+		},
+		"change_element": {"name":xxx, "id":xxx}, // 如果有chang发生, 给出一个变化的元素用于识别标记。否则为{}。
+		"change_behavior": "add/remove/update/other",		// 如果有chang发生, 该变化的元素是发生了什么类型的变化. add表示新出现，remove表示消失，update表示属性或状态有变化，other表示其他类型的变化
+		"run_success":"true/false", 	// 根据推理的结果，判断局部测试步骤是否执行成功.
+										// 如果页面出现新弹窗，可由下一步继续处理. 可认为当前步骤执行成功
+										// 初始数据已经满足局部测试步骤的目标状态，无需change，可认为当前步骤执行成功
+		"vote": "1或者2",					// run_success为true时为1, run_success为false时为2
+		"hasDialog": "true/false",		// 是否存在弹窗
+		"elements"：'[{"name":xxx, "id":xxx}...]		// hasDialog为true时，需要给出弹窗按钮信息。否则为[]
+	}
+
+	
+	# 局部测试步骤为：
+	{{current_step}}
+	
+
+	# 分析的界面信息为:
+	{{new_collect_page}}
+
+
+	# 执行前的页面元素信息：
+	{{StepTestInfo.simplepageinfo}}
+
+	# 补充解释：
+	n_page_status为返回的网页信息JSON格式如下:
+ 	{
+        "url": "当前网页的url",
+        "status": "当前网页的加载状态：connecting / loading / interactive / complete",
+        "title": "当前网页的title",
+        "text": "当前网页存在的text",
+        "inputTage": "当前网页的input控件信息"
+	}
+
+
+""")
+
+
+
+
+
+

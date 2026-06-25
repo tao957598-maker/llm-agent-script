@@ -1,0 +1,369 @@
+/*
+{
+	"title":"agt_okp_company_search",
+	"description":"取得已預載入 OKP 的 Company Search 快照資料(公司註冊資料、股權結構、UBO、董事、股東)。備註:本 PoC 接口返回快照資料,非即時從 CDI / HKCR 查詢;資料新鮮度取決於預載入流程。輸出:Cached Company Search JSON。",
+	"parameter":[
+		{
+			"name":"caseId",
+			"label":"caseId",
+			"required":true,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		}
+	],
+	"tag":"all",
+	"displayOrder":0,
+	"version":15
+}
+*/
+//# Step 1: Update status
+assign("customerParams", '{"caseId": "{{caseId}}"}')
+n_status_result,act_api.doExecute?name="okp_update_case_status"&params='{"caseId":"{{caseId}}","status":"Company Search started"}'
+//# Step 2: Get company data
+n_companyData, act_api.doExecuteDynamic?name='okp_agent_tool_company_search'&dynamicParamData='{{customerParams}}'
+//# Step 3: Update status
+n_status_result,act_api.doExecute?name="okp_update_case_status"&params='{"caseId":"{{caseId}}","status":"Company Search completed"}'
+
+
+define('tpl_agt_company_search','''
+你是一名资深的KYC公司数据分析专家，熟悉企业尽职调查（CDD）、UBO识别及股权结构分析。请基于提供的公司数据（n_companyData），进行结构化解析与标准化映射，并填充至指定JSON结构中。
+
+📥 输入数据
+公司数据: {{n_companyData}}
+⚙️ 分析逻辑与处理要求
+1. 字段映射原则
+严格基于公司注册信息、公司查册（Company Search）、股权结构（Ownership）、董事/高管（Key Personnel）等模块进行语义匹配。
+字段名称可能不一致，需按业务语义映射，例如：
+“Company Name (English)” → companyNameEng.value
+“Place of Incorporation” → placeOfIncorporation.value
+“Shareholding %” → shareholdingPct.value
+若同一字段在多个来源出现，优先使用最新时间或最权威来源数据。
+2. 数据标准化规则
+日期保持原始格式（不强制转换）。
+百分比字段（如 shareholding）：
+保持字符串格式（如 "35%"）
+去除无效值（如 -、N/A、空格）→ ""
+布尔字段：
+Yes → true
+No → false
+3. Company Info 处理
+所有字段填充 .value
+threeOrMoreIntermediateLayers.value：
+若股权结构中存在 ≥3层嵌套 → true
+否则 → false
+threeOrMorePlaces.value：
+若涉及 ≥3个注册地（不同国家/地区）→ true
+否则 → false
+4. Ownership Nodes（股权结构树）
+每个节点代表一个股东/实体
+字段说明：
+nodeType.value：只能是这三个 UBO,INTERMEDIATE,TARGET
+entityType.value：NATURAL_PERSON, CORPORATE
+childrenIndex：
+表示层级关系（保持输入数据中的结构顺序）
+sortOrder.value：
+从 1 开始递增（按展示顺序）
+若无数据 → 返回空数组 []
+5. UBO（最终受益人）
+提取最终持股或实际控制人（通常 ≥25%）
+shareholdingEffective.value：
+填写最终有效持股比例（穿透计算后的比例）
+sortOrder.value：
+从 1 开始递增
+6. Shareholders（股东）
+所有直接股东（不一定是UBO）
+shareholderType.value：
+来源于UBO,INTERMEDIATE,TARGET
+shareholdingEffective.value：
+填写持股比例
+sortOrder.value：
+从 1 开始递增
+7. Key Personnel（关键人员）
+包括董事、CEO、授权签字人等
+身份信息：
+HKID → hkIdNo.value
+护照 → passportNo.value
+passportIssuingCountry.value：
+提取签发国家
+sortOrder.value：
+从 1 开始递增
+8. 缺失值处理
+字符串字段 → ""
+布尔字段 → false
+数值字段 → 0
+数组无数据 → []
+❗关键约束（必须遵守）
+只允许填充所有字段的 value
+以下字段必须保持空字符串：
+aiRationale
+knowledgeBaseUsed
+dataSource
+严禁生成解释、推理或额外字段
+📤 输出规范
+仅输出 JSON（不得包含任何解释）
+必须严格遵守JSON结构
+不得新增、删除或修改字段
+caseId 必须为：{{caseId}}
+所有字段必须完整输出
+
+目标json:
+{
+  "data": {
+    "caseId": "",
+    "companyInfo": {
+      "companyNameEng": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+      },
+      "companyNameChi": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+      },
+      "companyNo": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+      },
+      "placeOfIncorporation": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+      },
+      "lastRefreshTime": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+      },
+      "lastOkpUpdateDate": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+      },
+      "reportGenerationDate": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+      },
+      "threeOrMoreIntermediateLayers": {
+        "value": true,
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+      },
+      "threeOrMorePlaces": {
+        "value": true,
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+      }
+    },
+    "ownershipNodes": [
+      {
+        "childrenIndex": 0,
+        "nodeType": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "entityType": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "nameInEng": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "nameInChi": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "companyNo": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "placeOfIncorporation": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "shareholdingPct": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "sortOrder": {
+          "value": 0,
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        }
+      }
+    ],
+    "ubos": [
+      {
+        "nameInEng": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "nameInChi": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "shareholdingEffective": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "sortOrder": {
+          "value": 0,
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        }
+      }
+    ],
+    "shareholders": [
+      {
+        "shareholderType": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "nameInEng": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "nameInChi": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "shareholdingEffective": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "sortOrder": {
+          "value": 0,
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        }
+      }
+    ],
+    "keyPersonnel": [
+      {
+        "position": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "nameInEng": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "nameInChi": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "hkIdNo": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "passportNo": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "passportIssuingCountry": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "sortOrder": {
+          "value": 0,
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        }
+      }
+    ],
+    "companySearchReportUrl": "",
+    "companySearchReportWithRationaleUrl": ""
+  }
+}
+
+'''
+)
+
+
+n_companyAgData,tpl_agt_company_search,psr_json
+log('n_companyAgData=={{n_companyAgData}}')
+
+
+//Step 11: Call report pdf generator agent
+n_pdf_url,agt_report_pdf_generator_okp?reportName='NSR1{{n_random_3}}'&reportJsonData='{{n_companyAgData.data}}'&caseId='{{caseId}}'&userInput='样式设计要求简约清晰、视觉美观，优先使用表格呈现结构化信息'
+log('******n_pdf_url=={{n_pdf_url}}')
+n_update_url_json,act_func?script='''
+    def reportJson = n_companyAgData
+    // 1. 确保 reportJson 存在
+    if(reportJson == null){
+        return [:]
+    }
+    // 2. 确保 data 存在
+    if(reportJson.data == null){
+        reportJson.data = [:]
+    }
+    // 3. 只在有 URL 时才更新
+    if(n_pdf_url != null && n_pdf_url.toString().trim() != ""){
+        reportJson.data.put("companySearchReportWithRationaleUrl", n_pdf_url)
+        reportJson.data.put("companySearchReportUrl", n_pdf_url)
+    }
+    // 4. 返回最终结果
+    return reportJson
+'''
+log('-------n_update_url_json===={{n_update_url_json}}')
+
+// save company search data
+n_report_callback, act_api.doExecute?name='okp_agent_tool_save_company_search'&params='{{n_update_url_json}}'

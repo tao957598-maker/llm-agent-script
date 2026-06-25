@@ -1,0 +1,1 @@
+import{o as c,a as s,b as e}from"./index-DHIO0Zt0.js";const l={__name:"CustomIcon",props:{color:{type:String,default:""},size:{type:String,default:"30"},iconClass:{type:String,default:"Warning"}},setup(o){return(t,a)=>{const n=e;return c(),s(n,{"icon-class":o.iconClass,size:o.size,color:o.color},null,8,["icon-class","size","color"])}}};export{l as _};

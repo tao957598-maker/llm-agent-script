@@ -1,0 +1,67 @@
+/*
+ {
+  "title": "Neo4j Graph Query Agent",
+  "description": "Query and analyze data in Neo4j graph database, and return the result in JSON format",
+  "parameter": [
+    {
+      "name":"question",
+      "label":"用户输入问题"
+    }
+  ],
+  "resultPlan":"question,n_result_data,n_last_result_data",
+	"life":1000,
+	"version":1,
+  "uiEntrance": "graph",
+  "tag": "graph"
+ }
+*/
+
+assign('n_relationship_cypher', 'MATCH ()-[r]->() RETURN DISTINCT type(r) as relationship_type')
+// 1.查询出当前图谱库中所有的关系类型
+n_level_relationship,act_kb.searchGraph?cypher='{{n_relationship_cypher}}'
+
+// 2.查询出标签下节点的参数信息
+assign('n_label_node_field_cypher', 'MATCH (n:kb_test_req_metadata_graph_content) RETURN properties(n) AS nodeProperties limit 1')
+n_label_node_field,act_kb.searchGraph?cypher='{{n_label_node_field_cypher}}'
+
+// 3.通过gpt生成cypher查询语句
+n_result_data,tpl_graph_neo4j_cypher
+
+// 查询
+n_last_result_data,act_kb.searchGraph?cypher='{{n_result_data.cypher}}'
+
+assign('return', '{{n_last_result_data}}')
+
+define('tpl_graph_neo4j_cypher', '''
+    你是一个neo4j图谱使用专家，请根据用户输入的信息，生成对应的cypher命令
+
+    图谱前置信息如下：
+    label是：kb_test_req_metadata_graph_content
+    现在有图谱关系：{{n_level_relationship}}
+    允许跳节点次数为：3
+
+    用户输入信息：
+    {{question}}
+
+    生成查询命令，可参考如下cypher：
+    MATCH path = (start:kb_cy_test_114_graph_content)-[rels:level_relationship|level_relationship_01*1..3]->(end:kb_cy_test_114_graph_content)
+    	WHERE (start.name = 'zhangsan' AND end.name = 'zhaoliu' ) or (start.name = 'zhaoliu' AND end.name = 'zhangsan')
+    	RETURN
+          [node IN nodes(path) | { mainLabel: labels(node)[0],properties: properties(node)}] AS nodeProperties,
+          [rel IN relationships(path) | {type: type(rel),properties: properties(rel)}] AS relProperties,
+          length(path) AS hopCount
+
+
+    返回结果如下：
+    {
+        "success":true,
+        "cypher":"xxxx"
+    }
+
+    PS：考虑到用户输入的信息可能不准确或有缺失，那么在匹配参数的时候，字符串格式请使用:CONTAINS
+    PS：考虑到用户输入的start或end位置不准确，那么匹配参数的时候，需要同步支持start/end的交换匹配，如：
+    (start.name CONTAINS 'zhangsan' AND end.name CONTAINS 'zhaoliu') or (start.name CONTAINS 'zhaoliu' AND end.name CONTAINS 'zhangsan')
+    PS：考虑到提取用户输入的参数信息过多，建议使用以下属性:
+    {{n_label_node_field.nodeProperties}}
+    PS：考虑到无法提取出用户输入的信息，那么success为false，并且不用生成cypher命令
+''')

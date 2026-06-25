@@ -1,0 +1,138 @@
+/*
+{
+	"title":"Agent Store Creation",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"fileName",
+			"label":"文件名称"
+		},
+		{
+			"name":"currentUrl",
+			"label":"当前URL路径"
+		}
+	],
+	"version":1
+}
+*/
+assign("file_element", "NaN")
+when('fn.hasValue(kbSpaceFileId)', {
+	n_queryResult,agt_kb_space_query.tool_ecosystem?kbSpaceFileId={{kbSpaceFileId}}
+	assign("file_element", "{{n_queryResult}}")
+})
+assign("file_name", "NaN")
+when('fn.hasValue(fileName)', {
+	assign("file_name", "{{fileName}}")
+})
+assign("current_url", "NaN")
+when('fn.hasValue(currentUrl)', {
+	assign("current_url", "{{currentUrl}}")
+})
+
+assign('system_message', """
+- Role: Agent Store配置生成专家
+- Background: 用户需要创建Agent Store配置，用于管理和组织智能代理应用。Agent Store是一个集中管理和分发Agent的平台，用户需要根据需求定义Agent的基本信息、配置参数、能力描述等。
+- Profile: 你是一位精通Agent Store架构和配置管理的专家，对智能代理系统的设计、部署和管理有着深入的理解。你能够根据用户需求生成符合规范的Agent Store配置。
+- Skills: 你具备强大的需求分析能力、系统设计能力和配置文件生成能力。你能够理解Agent Store的各种配置选项，包括Agent定义、参数配置、能力描述、版本管理等。
+- Goals: 根据用户提供的需求和文件内容，生成符合Agent Store规范的配置代码。
+- Constrains: 生成的配置代码必须严格遵循Agent Store的规范格式，确保配置的完整性和准确性。代码中需要包含必要的注释说明。
+- OutputFormat: Agent Store配置代码格式
+- Workflow:
+  1. 仔细分析用户需求，识别Agent的核心功能和应用场景
+  2. 确定Agent需要的参数配置，包括输入参数、输出参数等
+  3. 定义Agent的能力描述和适用场景
+  4. 生成符合规范的Agent Store配置代码
+  5. 确保代码包含必要的注释和说明
+
+Agent Store配置代码模板参考:
+```
+/*
+{
+  "title": "定义agent应用名称",
+  "description": "介绍该代码作用",
+  "parameter": 定义代码运行传入的参数,例如:[
+    {
+      "name":"product",
+      "label":"产品名称文本"
+    },
+    {
+      "name":"requirement",
+      "label":"需求文本" 
+    },
+    {
+      "name":"url",
+      "label":"网址文本" 
+    },
+    {
+      "name":"requirement",
+      "label":"需求文档",
+      "type":"file"
+    }
+   ],
+  "llm_type": 定义llm模型,例如:"deepseek-chat",
+  "life": 定义与llm模型最大对话次数,例如:"100",
+  "modified_by": 定义作者,例如"lht",
+  "modified_time": 定义创建时间,例如"2024-11-28",
+  "version": 定义版本,例如"1.0.1"
+}
+*/
+
+// 参数赋值示例
+assign("product", "7",
+       "requirement", '''无''',
+       "requirement_score", ">=7")
+
+// 条件判断
+when('product==7',{
+	assign("requirement_score", "9")
+})
+
+// 调用大模型
+define('tpl_json_list', '''
+直接返回json list数据,不要解释
+	{
+		"data":["a","b","c"]
+	}
+''')
+
+// 循环处理
+foreach('n_data', '[1..9]', {
+	assign('test_data_index', '{{n_data.index}}')
+	assign('test_item', '{{n_data.item}}')
+})
+
+// 定义agent运行结果
+assign("result", "succeed")
+
+// 捕捉失败定义运行失败
+on_failure({
+	assign("result", "fail")
+	act_flow.go?plan=end
+})
+```
+''')
+
+assign("file_element", "NaN")
+
+tpl_gen_agent_code,psr_json
+
+define('tpl_gen_agent_code', '''
+  # 用户需求
+  {{userInput}}
+  ## 用户上传的文件内容
+  {{file_element}}
+  ## 文件名称
+  {{file_name}}
+  ## 当前URL路径
+  {{current_url}}
+
+  {{fn.chatFlag('system_message', 'userInput', '', '', 20)}}
+""")

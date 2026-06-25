@@ -1,0 +1,376 @@
+/*
+{
+	"title":"Web 自动化测试(验证阶段)",
+	"description":"",
+	"parameter":[
+		{
+			"name":"system",
+			"label":"系统名称",
+			"required":true
+		},
+		{
+			"name":"test_no",
+			"label":"测试编号",
+			"required":true
+		},
+		{
+			"name":"steps",
+			"label":"测试步骤",
+			"type":"array"
+		},
+		{
+			"name":"step_index",
+			"label":"当前步骤序号"
+		},
+		{
+			"name":"current_step",
+			"label":"当前测试步骤",
+			"type":"textarea"
+		},
+        {
+			"name":"envinfo",
+			"label":"系统环境信息",
+			"required":true
+		},
+		{
+			"name":"version",
+			"label":"版本号",
+			"required":true
+		}
+	],
+	"version":1
+}
+*/
+// 从当前current_step中获得 验证类型
+assign('step_type', '由调用处给定')
+when('VerifyExist',{
+	//# 从数据库查询用于验证的数据
+	n_verify_data, act_kb.selectBy?sql='select * from kb_test_case_instance_intermediates where test_step_id="{{step_id}}" '
+
+    // 需要从原来执行那里给参数过来，领导说的是存储到数据库，再查出来
+	assign('sys_last_result', '{{n_verify_data.python_code_used}}')
+    //# Check and compare the execution result
+    n_cmp1, tpl_cmp_pageresult_Exist, vrf_flag?value='fn.str(sys_last_result.thought.re_reasoning)=="false" || sys_last_result.hasDialog',\
+    agt_save_explorer?columns='page_change,tpl_cmp_pageresult.thought.change,reasoning,tpl_cmp_pageresult.thought.reasoning'
+})
+
+when('step_type=="Verify"', {
+    // 需要从原来执行那里给参数过来，领导说的是存储到数据库，再查出来
+    // Try to run existed code
+    agt_test_run_exist_code?test_no={{test_no}}&current_step={{current_step}}&steps={{steps}}&system={{system}}&envinfo={{envinfo}}
+
+    // Run code successfully, go to end
+    act_flow.go?plan=end
+
+    // Handle the error
+    on_failure({
+        // Force to success status
+        act_flow.success
+    })
+
+    // Find and check target element
+    agt_test_findelement?test_no={{test_no}}&current_step={{current_step}}&steps={{steps}}&envinfo={{envinfo}}
+    // Run Find and check target element successfully, go to end
+    act_flow.go?plan=end
+})
+
+when('step_type=="VerifyTriple"', {
+	//# 从数据库查询用于验证的数据
+	n_verify_data, act_kb.selectBy?sql='select * from kb_test_case_instance_intermediates where test_step_id="{{step_id}}" '
+
+    // 需要从原来执行那里给参数过来，领导说的是存储到数据库，再查出来
+	assign('sys_last_result', '{{n_verify_data.python_code_used}}')
+    //# Check and compare the execution result
+    n_cmp1, tpl_cmp_pageresult_Triple, vrf_flag?value='fn.str(sys_last_result.thought.re_reasoning)=="false" || sys_last_result.hasDialog',\
+    agt_save_explorer?columns='page_change,tpl_cmp_pageresult.thought.change,reasoning,tpl_cmp_pageresult.thought.reasoning'
+    assign('python_code', '{{fn.readFile(n_similar_file.filename)}}')
+    // Check if page doesnot change
+    when('fn.not(n_cmp1.run_success)', {
+        // 基于现有代码生成失败，直接返回，让后续步骤生成新代码
+        // Anounce no valid code
+        act_flow.fail?result='No valid code'&message=true
+    }, {
+        // When the page changes and no dialog appears
+        when('fn.hasValue(n_cmp1.change_element) && n_cmp1.change_behavior=="add" && !fn.bool(n_cmp1.hasDialog)', {
+            // save tmp
+            n_python_file_2, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{python_code}}&parameters={{n_similar_file.parameter}}
+            assign('python_file', '{{n_python_file_2.kbspath}}')
+            assign('python_code', '{{n_python_file_2.sourceCode}}')
+            // Add page verify element
+            n_python_code,tpl_self_add_wait, psr_python, act_memory.assign?var=python_code
+            // return code
+            assign('python_code', '{{n_python_code}}')
+        })
+    })
+})
+
+when('step_type=="VerifyExecute"', {
+	//# 从数据库查询用于验证的数据
+	n_verify_data, act_kb.selectBy?sql='select * from kb_test_case_instance_intermediates where test_step_id="{{step_id}}" '
+
+    // 需要从原来执行那里给参数过来，领导说的是存储到数据库，再查出来
+	assign('sys_last_result', '{{n_verify_data.python_code_used}}')
+    when('n_result.action_type=="3"', {
+        //# Check and compare the execution result
+        n_cmp1, tpl_cmp_pageresult_Execute, vrf_flag?value='fn.str(sys_last_result.thought.re_reasoning)=="false" || sys_last_result.hasDialog',\
+                agt_save_explorer?columns='page_change,tpl_cmp_pageresult.thought.change,reasoning,tpl_cmp_pageresult.thought.reasoning'
+    },
+    {   
+        assign('action_result', '{{n_result.action_result}}')
+        
+        vrf_flag?value='fn.str(action_result.thought.re_reasoning)=="false" || action_result.hasDialog',\
+            agt_save_explorer?columns='page_change,action_result.thought.change,reasoning,action_result.thought.reasoning'
+        assign('n_cmp1', '{{n_result.action_result}}')
+    })
+
+	// Check if page doesnot change
+	when('fn.not(n_cmp1.run_success)', {
+		// Show warning information
+		// log('Failed to verify page result', true)
+		
+		// Proceed to error handling process
+		act_flow.go?plan=n_fail_rpa_coll
+	}, {
+		// n_cmp1n_cmp1n_cmp1
+		assign('n_cmp1n_cmp1', '{{n_cmp1}}')
+		// tpl_task_element_infotpl_task_element_info
+		assign('tpl_task_element_infotpl_task_element_info', '{{tpl_task_element_info}}')
+		// 无论n_cmp1的新界面还是tpl_task_element_info的原有界面都没有对话框时 <== 对话框的开关，通常不会有基础元素的变化
+		// When the page changes and no dialog appears
+		when('fn.hasValue(n_cmp1.change_element) && n_cmp1.change_behavior=="add" && !fn.bool(n_cmp1.hasDialog) && !fn.bool(tpl_task_element_info.hasDialog)', {
+			// Add page verify element
+			tpl_self_add_wait, psr_python, act_memory.assign?var=python_code
+			assign('python_code', "{{sys_last_result}}")
+			n_python_file_3, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{sys_last_result}}
+			assign('python_code', '{{n_python_file_3.sourceCode}}')
+			assign('python_file', '{{n_python_file_3.kbspath}}')
+		})
+		when('fn.hasValue(n_cmp1.change_element) && n_cmp1.change_behavior=="remove" && !fn.bool(n_cmp1.hasDialog) && !fn.bool(tpl_task_element_info.hasDialog)', {
+			// Remove page verify element
+			tpl_self_remove_wait, psr_python, act_memory.assign?var=python_code
+			assign('python_code', "{{sys_last_result}}")
+			n_python_file_4, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{sys_last_result}}
+			assign('python_code', '{{n_python_file_4.sourceCode}}')
+			assign('python_file', '{{n_python_file_4.kbspath}}')
+		})
+	})
+
+})
+
+when('step_type=="VerifyPamp"', {
+	//# 从数据库查询用于验证的数据
+	n_verify_data, act_kb.selectBy?sql='select * from kb_test_case_instance_intermediates where test_step_id="{{step_id}}" '
+
+    // 需要从原来执行那里给参数过来，领导说的是存储到数据库，再查出来
+	assign('sys_last_result', '{{n_verify_data.python_code_used}}')
+    n_cmp1,tpl_cmp_pageresult_Pamp, vrf_flag?value='fn.str(sys_last_result.thought.re_reasoning)=="false" || sys_last_result.hasDialog',\
+    agt_save_explorer?columns='page_change,tpl_cmp_pageresult.thought.change,reasoning,tpl_cmp_pageresult.thought.reasoning'
+	// Check if page doesnot change
+	when('fn.not(n_cmp1.run_success)', {
+		// Show warning information
+		// log('Failed to verify page result', true)
+		
+		// Proceed to error handling process
+		act_flow.go?plan=n_fail_rpa_coll
+	}, {
+		// change_element
+		assign('change_element', '{{n_cmp1.change_element}}')
+		// change_behavior
+		assign('change_behavior', '{{n_cmp1.change_behavior}}')
+
+		// tpl_task_element_infotpl_task_element_info
+		assign('n_tpl_task_element_info', '{{tpl_task_element_info}}')
+		// 无论n_cmp1的新界面还是tpl_task_element_info的原有界面都没有对话框时 <== 对话框的开关，通常不会有基础元素的变化
+		// When the page changes and no dialog appears
+		when('fn.hasValue(n_cmp1.change_element) && n_cmp1.change_behavior=="add" && !fn.bool(n_cmp1.hasDialog) && !fn.bool(tpl_task_element_info.hasDialog)', {
+			// Add page verify element
+			tpl_self_add_wait, psr_python, act_memory.assign?var=python_code
+			assign('python_code', "{{sys_last_result}}")
+			n_python_file_3, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{sys_last_result}}
+			assign('python_code', '{{n_python_file_3.sourceCode}}')
+			assign('python_file', '{{n_python_file_3.kbspath}}')
+		})
+		when('fn.hasValue(n_cmp1.change_element) && n_cmp1.change_behavior=="remove" && !fn.bool(n_cmp1.hasDialog) && !fn.bool(tpl_task_element_info.hasDialog)', {
+			// Remove page verify element
+			tpl_self_remove_wait, psr_python, act_memory.assign?var=python_code
+			assign('python_code', "{{sys_last_result}}")
+			n_python_file_4, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{sys_last_result}}
+			assign('python_code', '{{n_python_file_4.sourceCode}}')
+			assign('python_file', '{{n_python_file_4.kbspath}}')
+		})
+	})
+})
+
+// 不属于可支持的类型
+log('不支持该种类型的验证')
+
+
+// Exist 结果比较
+define('tpl_cmp_pageresult_Exist','''
+	/*{
+		 "llmType":"alias.speed"
+	 }*/
+	你是Web测试专家，请分析进行了局部测试前后的页面元素的数据及结构，（json格式：[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, value: 表单元素的值, children:[子元素信息]}...]），请分析前后变化情况，判断局部测试步骤是否执行成功，用JSON给出结果。
+	{
+		"thought": {
+			"change": "前后页面元素的变化情况总结",
+			"reasoning":["结合局部测试步骤在主流程中的位置,结合下一步验证的界面需要,判断是否执行成功.进行3步以上的推理"],
+			"criticism":"推理结果是否符合change的总结",
+			"re_reasoning":"true/false"		// true表示: 推理过程有错误，需要重新推理.  false表示：无需重新推理
+		},
+		"change_element": {"name":xxx, "id":xxx}, // 如果有chang发生, 给出一个变化的元素用于识别标记。否则为{}。
+		"change_behavior": "add/remove/update/other",		// 如果有chang发生, 该变化的元素是发生了什么类型的变化. add表示新出现，remove表示消失，update表示属性或状态有变化，other表示其他类型的变化
+		"run_success":"true/false", 	// 根据推理的结果，判断局部测试步骤是否执行成功.
+										// 如果页面出现新弹窗，可由下一步继续处理. 可认为当前步骤执行成功
+										// 初始数据已经满足局部测试步骤的目标状态，无需change，可认为当前步骤执行成功
+		"vote": "1或者2",					// run_success为true时为1, run_success为false时为2
+		"hasDialog": "true/false",		// 是否存在弹窗
+		"elements"：'[{"name":xxx, "id":xxx}...]		// hasDialog为true时，需要给出弹窗按钮信息。否则为[]
+	}
+	
+	{{sys_hint}}
+	
+	# 局部测试步骤为：
+	{{StepTestInfo.current_step}}
+	
+	# 主流程涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+
+	# 初始页面元素结构为：
+	{{StepTestInfo.simplepageinfo}}
+	
+	# 局部测试执行之后的元素结构为：
+	{{fn.str(fn.func('', 'StepTestInfo', true), 'simplepageinfo')}}
+''')
+
+// Triple 结果比较
+define('tpl_cmp_pageresult_Triple','''
+	/*{
+		 "llmType":"alias.highquality"
+	 }*/
+	你是Web测试专家，请分析进行了局部测试前后的页面元素的数据及结构，（json格式：[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, value: 表单元素的值, children:[子元素信息]}...]），请分析前后变化情况，判断局部测试步骤是否执行成功，用JSON给出结果。
+	{
+		"thought": {
+			"change": "前后页面元素的变化情况总结",
+			"reasoning":["结合局部测试步骤在主流程中的位置,结合下一步验证的界面需要,判断是否执行成功.进行3步以上的推理"],
+			"criticism":"推理结果是否符合change的总结",
+			"re_reasoning":"true/false"		// true表示: 推理过程有错误，需要重新推理.  false表示：无需重新推理
+		},
+		"change_element": {"name":xxx, "id":xxx}, // 如果有chang发生, 给出一个变化的元素用于识别标记。否则为{}。
+		"change_behavior": "add/remove/update/other",		// 如果有chang发生, 该变化的元素是发生了什么类型的变化. add表示新出现，remove表示消失，update表示属性或状态有变化，other表示其他类型的变化
+		"run_success":"true/false", 	// 根据推理的结果，判断局部测试步骤是否执行成功.
+										// 如果页面出现新弹窗，可由下一步继续处理. 可认为当前步骤执行成功
+										// 初始数据已经满足局部测试步骤的目标状态，无需change，可认为当前步骤执行成功
+		"vote": "1或者2",					// run_success为true时为1, run_success为false时为2
+		"hasDialog": "true/false",		// 是否存在弹窗
+		"elements"：'[{"name":xxx, "id":xxx}...]		// hasDialog为true时，需要给出弹窗按钮信息。否则为[]
+	}
+	
+	{{sys_hint}}
+	
+	# 局部测试步骤为：
+	{{StepTestInfo.current_step}}
+	
+	# 主流程涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+
+	# 初始页面元素结构为：
+	{{StepTestInfo.simplepageinfo}}
+	
+	# 局部测试执行之后的元素结构为：
+	{{fn.str(fn.func('', 'StepTestInfo', true), 'simplepageinfo')}}
+''')
+
+
+// Execute 结果比较
+define('tpl_cmp_pageresult_Execute','''
+	/*{
+		 "llmType":"alias.highquality"
+	 }*/
+	你是Web测试专家，请分析进行了局部测试前后的页面元素的数据及结构，（json格式：[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, value: 表单元素的值, children:[子元素信息]}...]），请分析前后变化情况，判断局部测试步骤是否执行成功，用JSON给出结果。
+	{
+		"thought": {
+			"change": "前后页面元素的变化情况总结",
+			"reasoning":["结合局部测试步骤在主流程中的位置,结合下一步验证的界面需要,判断是否执行成功.进行3步以上的推理"],
+			"criticism":"推理结果是否符合change的总结",
+			"re_reasoning":"true/false"		// true表示: 推理过程有错误，需要重新推理.  false表示：无需重新推理
+		},
+		"change_element": {"name":xxx, "id":xxx}, // 如果有chang发生, 给出一个变化的元素用于识别标记。否则为{}。
+		"change_behavior": "add/remove/update/other",		// 如果有chang发生, 该变化的元素是发生了什么类型的变化. add表示新出现，remove表示消失，update表示属性或状态有变化，other表示其他类型的变化
+		"run_success":"true/false", 	// 根据推理的结果，判断局部测试步骤是否执行成功.
+										// 如果页面出现新弹窗，可由下一步继续处理. 可认为当前步骤执行成功
+										// 初始数据已经满足局部测试步骤的目标状态，无需change，可认为当前步骤执行成功
+		"vote": "1或者2",					// run_success为true时为1, run_success为false时为2
+		"hasDialog": "true/false",		// 是否存在弹窗
+		"elements"：'[{"name":xxx, "id":xxx}...]		// hasDialog为true时，需要给出弹窗按钮信息。否则为[]
+	}
+	补充说明：change_element中的id和name在前后页面元素数据中只能出现一次
+
+
+	{{sys_hint}}
+	
+	# 局部测试步骤为(括号内容为步骤提示信息)：
+	{{StepTestInfo.current_step}}
+	
+	# 主流程涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+	
+	# 关键元素为：
+	{{tpl_task_element_info}}
+
+	# 初始页面元素结构为：
+	{{StepTestInfo.simplepageinfo}}
+	
+	# 局部测试执行之后的元素结构为：
+	{{new_collect_page}}
+''')
+
+
+// Pamp 结果比较
+define('tpl_cmp_pageresult_Pamp','''
+	/*{
+		 "llmType":"alias.highquality"
+	 }*/
+	你是Web测试专家，请分析进行了局部测试前后的页面元素的数据及结构，（json格式：[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, value: 表单元素的值, children:[子元素信息]}...]），请分析前后变化情况，判断局部测试步骤是否执行成功，用JSON给出结果。
+	{
+		"thought": {
+			"change": "前后页面元素的变化情况总结",
+			"reasoning":["结合局部测试步骤在主流程中的位置,结合下一步验证的界面需要,判断是否执行成功.进行3步以上的推理"],
+			"criticism":"推理结果是否符合change的总结",
+			"re_reasoning":"true/false"		// true表示: 推理过程有错误，需要重新推理.  false表示：无需重新推理
+		},
+		"change_element": {"name":xxx, "id":xxx}, // 如果有chang发生, 给出一个变化的元素用于识别标记。否则为{}。
+		"change_behavior": "add/remove/update/other",		// 如果有chang发生, 该变化的元素是发生了什么类型的变化. add表示新出现，remove表示消失，update表示属性或状态有变化，other表示其他类型的变化
+		"run_success":"true/false", 	// 根据推理的结果，判断局部测试步骤是否执行成功.
+										// 如果页面出现新弹窗，可由下一步继续处理. 可认为当前步骤执行成功
+										// 初始数据已经满足局部测试步骤的目标状态，无需change，可认为当前步骤执行成功
+		"vote": "1或者2",					// run_success为true时为1, run_success为false时为2
+		"hasDialog": "true/false",		// 是否存在弹窗
+		"elements"：'[{"name":xxx, "id":xxx}...]		// hasDialog为true时，需要给出弹窗按钮信息。否则为[]
+	}
+	补充说明：change_element中的id和name在前后页面元素数据中只能出现一次
+
+
+	{{sys_hint}}
+	
+	# 局部测试步骤为(括号内容为步骤提示信息)：
+	{{StepTestInfo.current_step}}
+	
+	# 主流程涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+	
+	# 初始页面元素结构为：
+	{{StepTestInfo.simplepageinfo}}
+	
+	# 局部测试执行之后的元素结构为：
+	{{new_collect_page}}
+''')
+// Save explorer
+agent('agt_save_explorer', {
+	// Save to kb_testcase_step_explorer
+	act_kb.merge?name=kb_testcase_step_explorer&columnValues='''
+			{{fn.json(columns)}}
+		'''&where='''
+			{{fn.json("test_no, test_no, step, StepTestInfo.current_step")}}
+		'''
+})

@@ -1,0 +1,48 @@
+/*
+{
+	"title":"OA expense approval process",
+	"description":"Expense reimbursement approval process, PM approval first, then CFO approval",
+	"parameter":[],
+	"tag":"OA",
+	"uiEntrance":"daily_fee_apply_form",
+	"displayOrder":0,
+	"version":10
+}
+*/
+// PM审批节点
+approve('n_pm_approval', '''
+{
+    "assigneeConfig": {
+        "type": "STATIC",
+        "strategy": "ALL",
+        "targets": [
+            {
+                "targetType": "USER_ID",
+                "value": "250724137567272960",
+                "description": "PM"
+            }
+        ]
+    },
+    "formKey": "n_expense_report_form",
+    "dueDateUnit": "DAYS"
+}
+''')
+
+// 财务总监审批节点
+approve('n_financial_director_approval', '''
+{
+    "assigneeConfig": {
+        "type": "STATIC",
+        "strategy": "ALL",
+        "targets": [
+            {
+                "targetType": "USER_ID",
+                "value": "250724184400871424",
+                "description": "CFO"
+            }
+        ]
+    },
+    "formKey": "n_expense_report_form",
+    "dueDateUnit": "DAYS"
+}
+''')

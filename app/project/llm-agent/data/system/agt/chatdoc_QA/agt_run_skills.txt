@@ -1,0 +1,91 @@
+/*
+{
+	"title":" skills runner ",
+    "description": "skills执行者",
+	"parameter": [
+        {
+            "name":"userInput",
+            "label":"客户问题",
+            "type":"textarea"
+        },
+        {
+            "name":"languageType",
+            "label":"用户主语言",
+            "type":"textarea"
+        },
+        {
+            "name":"milvusRules",
+            "label":"可用的规则 ",
+            "type":"textarea"
+        },
+        {
+            "name":"mongodbSampling",
+            "label":"可用的数据",
+            "type":"textarea"
+        },
+        {
+            "name":"webSearch",
+            "label":"联网搜索结果",
+            "type":"textarea",
+            "default":""
+        },
+        {
+            "name":"expertData",
+            "label":"专家知识库数据",
+            "type":"textarea",
+            "default":""
+        },
+        {
+            "name":"skillName",
+            "label":"skills名称",
+            "type":"textarea"
+        }
+  ],
+	"tag":"chatdoc_QA",
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"n_skills_response",
+	"life":100,
+	"displayOrder":11,
+	"version":2
+}
+*/
+//# run skills skillName
+log('{{skillName}}')
+
+//# skills_content
+assign('skills_content', '{{fn.getSkillMeta(skillName, "solution")}}')
+when('fn.hasValue(skills_content.solution)',{
+    assign('skills_content', '{{skills_content.solution}}')
+})
+
+define("tpl_skills_prompt", '''
+/*{
+  "enable_thinking":"false",
+  "stream":"false"
+}*/
+根据下面的信息，按照sklills的描述，回答用户的问题：
+
+- **用户问题**： 
+{{userInput}}
+
+- **输出语言类型**： 
+{{languageType}}
+
+- **用户可用的规则**：  
+{{milvusRules}}
+
+- **专家知识库资料**：
+{{expertData}}
+
+- **用户可用的数据**：  
+{{mongodbSampling}}
+
+- **用户可用联网搜索的信息**：
+{{webSearch}}
+
+- **可用skills**：
+{{skills_content}}
+''')
+
+//$ n_skills_response
+n_skills_response,tpl_skills_prompt,psr_all

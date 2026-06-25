@@ -1,0 +1,41 @@
+/*
+ {
+	 "title": "All scenario dynamic toolset",
+	 "description": "All scenario dynamic toolset Of AI chat agent.",
+	 "parameter": [
+		{
+			"name":"userInput",
+			"label":"用户输入"
+		},{
+              "name":"toolType",
+              "label":"工具类型"
+        },{
+           "name":"excludeToolType",
+           "label":"不包含工具类型"
+        }
+	],
+	 "llmType": "",
+	 "resultPlan": "",
+	 "uiEntrance": "chatDoc",
+	 "tag": "toolset",
+	 "discoverable": true,
+	 "life": "100"
+ }
+*/
+
+//# Call agent to generate tool set
+n_tool_set_code, agt_toolset_generator?userInput={{userInput}}&toolType={{toolType!}}&excludeToolType={{excludeToolType!}}
+
+when('!fn.hasValue(n_tool_set_code)', {
+    act_flow.fail?result='No tools were generated. Please check input or tool type settings.'&message=true
+})
+
+// 检索全局变量：是否启用本地AC且可用状态
+n_g_local_ac_flag,act_memory.retrieve?var=n_g_localAcFlag&global=true
+
+
+// 检索全局变量：AC检测系统类型 -AC工具有用
+n_g_context_system,act_memory.retrieve?var=n_g_contextSystem&global=true
+
+// call tool set executor
+agt_toolset_executor.toolset?userInput={{userInput}}&toosetCode={{n_tool_set_code}}&manualRequired=true&paramsContext='{{fn.json("contextSystem, n_g_context_system!")}}'

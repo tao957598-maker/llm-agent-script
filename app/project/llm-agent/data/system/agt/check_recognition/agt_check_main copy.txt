@@ -1,0 +1,130 @@
+/*
+{
+	"title":"Cheque Recognition",
+	"description":"Read the cheque image and identify the relevant information.",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"支票图片路径",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"knowledge_space"
+		}
+	],
+	"version":1
+}
+*/
+
+//# Agent status
+assign("status", 'Agent is running')
+// file name
+n_file_name, act_kb.selectBy?sql='select  knowledge_name,store_uri  from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}" '
+assign("file_name", '{{n_file_name[0].knowledge_name}}')
+assign("file_path", '{{n_file_name[0].store_uri}}')
+assign("upload_path", 'test_req_poc')
+// 2. Call image_process_api with file_name and upload_path
+n_image_process_result,act_api.doExecuteDynamic?name="image_process_api"&dynamicParamData='{{fn.json("file_name,file_path,upload_path,upload_path")}}'
+
+assign("search_data", '{{n_image_process_result.upload_path}}/')
+n_file_name, act_kb.selectBy?sql="select  store_uri  from kb_spaces_folder_knowledge where store_uri like  '%{{search_data}}%'  and store_uri!='{{search_data}}' "
+
+act_flow.go?plan=end
+
+//# Agent status
+assign("status", 'Agent is running')
+// 1. 读取图片路径参数
+assign("image_path_list", '''["/check_recognition/image_amount_figures_20251229170151.jpg",
+"/check_recognition/image_amount_words_20251229170146.jpg",
+"/check_recognition/image_corrected_20251229170148.jpg",
+"/check_recognition/image_date_20251229170148.jpg",
+"/check_recognition/image_marked_20251229170149.jpg",
+"/check_recognition/image_memo_20251229170149.jpg",
+"/check_recognition/image_payee_20251229170150.jpg",
+"/check_recognition/image_signature_20251229170151.jpg"]''')
+
+// 异步处理设计数据
+assign('async_content_list', '[]')
+// 异步处理每页数据
+foreach('n_image_path', 'image_path_list', {
+    // 获取当前模块名称
+    assign('image_path', '{{n_image_path.item}}')
+	n_image_type,act_func.run?script='''
+    if (image_path.contains("image_date")) return 1
+	if (image_path.contains("image_amount_figures")) return 2
+    if (image_path.contains("image_amount_words")) return 3
+
+    if (image_path.contains("image_memo")) return 6
+    if (image_path.contains("image_payee")) return 7
+    if (image_path.contains("image_signature")) return 8
+    return 0 // 默认返回值，表示未知类型
+	'''
+    when("n_image_type==1", {
+        n_data,agt_check_date_field?image_path='{{image_path}}'&async=true
+		act_func?script="async_content_list.add(n_data)"
+    })
+	when("n_image_type==2", {
+        n_data,agt_check_amount_figures?image_path='{{image_path}}'&async=true
+		act_func?script="async_content_list.add(n_data)"
+    })
+	when("n_image_type==3", {
+        n_data,agt_check_amount_words?image_path='{{image_path}}'&async=true
+		act_func?script="async_content_list.add(n_data)"
+    })
+	
+	when("n_image_type==6", {
+        n_data,agt_check_memo_field?image_path='{{image_path}}'&async=true
+		act_func?script="async_content_list.add(n_data)"
+    })
+	when("n_image_type==7", {
+        n_data,agt_check_payee_field?image_path='{{image_path}}'&async=true
+		act_func?script="async_content_list.add(n_data)"
+    })
+	when("n_image_type==8", {
+        n_data,agt_check_signature_box?image_path='{{image_path}}'&async=true
+		act_func?script="async_content_list.add(n_data)"
+    })
+
+    
+})
+assign('test_data_list', '[]')
+foreach('n_test_data', 'async_content_list', {
+    assign('test_data', '{{n_test_data.item}}')
+    // test_point_valuetest_point_value map
+    assign('test_data_value', '{{test_data.value}}')
+     act_func?script='''
+                test_data_list.add(test_data_value)
+            '''
+})
+
+
+// define定义对话信息
+define('tpl_date_field_recognition', '''
+# 银行风控导向的总体风险评估
+处理：
+综合判断整张支票是否被修改（只要任一关键字段被篡改即视为“已修改”）。
+根据银行合规标准（如《票据法》及内部风控政策），评定风险等级（如高/中/低）。
+生成风控建议（如“拒绝受理”、“人工复核”、“正常受理”）。
+输出markdown格式数据, 数据包含解释和json数据:
+1.简明的风险原因说明(对于支票修改的信息标记红颜色)。
+2.标准化 JSON 报告，包含：
+是否篡改（is_altered）
+风险等级（overall_risk_level）
+处理建议（recommendation）
+风险原因（reason）
+详细证据（details）
+时间戳（timestamp）
+
+# 输入数据
+{{test_data_list}}
+''')
+tpl_date_field_recognition,psr_all
+//# Recognition Summary
+assign("combined_result",'''
+# 原始支票图片
+![原始支票图片](/check_recognition/image_marked_20251229170149.jpg)
+
+{{tpl_date_field_recognition}}
+
+''')
+n_result,act_memory.assign?value='''{{combined_result}}'''&type=md

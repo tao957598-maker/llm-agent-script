@@ -1,0 +1,12 @@
+/*
+{
+	"title":"员工请假审批流程",
+	"description":"处理员工请假申请的全流程审批",
+	"parameter":[],
+	"tag":"OA审批",
+	"uiEntrance":"leave_application_form444444444444444",
+	"displayOrder":0,
+	"version":136
+}
+*/
+assign("abc","123")

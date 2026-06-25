@@ -1,0 +1,186 @@
+/*{
+	"title":"Gen testcase by KB (Auto Mixed Root)",
+	"description":"Single unified run with source_type=auto (per-page web/api in root).",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		},
+		{
+			"name":"resumeMode",
+			"label":"Resume Mode",
+			"type":"select",
+			"defaultValue":"full",
+			"args":[
+				{"label":"Full","value":"full"},
+				{"label":"From Step2","value":"from_step2"},
+				{"label":"From Step3","value":"from_step3"}
+			]
+		},
+		{
+			"name":"resumeSubmoduleName",
+			"label":"Resume Submodule Name"
+		}
+	],
+	"resultPlan":"status,n_combined_result,n_doc_mind_map",
+	"version":3
+}*/
+assign("status", "Agent is running")
+when('!fn.hasValue(resumeMode)', {
+n_auto_root_err_rm,act_func?script='throw new RuntimeException("【AUTO-ROOT】resumeMode 为空")'
+})
+when('!fn.hasValue(version)', {
+n_auto_root_err_ver,act_func?script='throw new RuntimeException("【AUTO-ROOT】version 不能为空")'
+})
+when('!fn.hasValue(kbSpaceFileId)', {
+n_auto_root_err_kb,act_func?script='throw new RuntimeException("【AUTO-ROOT】kbSpaceFileId 不能为空")'
+})
+assign("documentId", "{{kbSpaceFileId}}")
+assign("effectiveDocumentId", "{{kbSpaceFileId}}")
+
+// [AUTO-ROOT] 预检 agt_detect_source_type_by_page：kbSpaceFileId/pages 须与 root 一致，避免 auto 分流页错位（结果不落 resultPlan）
+n_page_type_preview,agt_detect_source_type_by_page?kbSpaceFileId={{kbSpaceFileId}}&pages={{pages}}
+
+// [AUTO-ROOT] 主跑 root：source_type=auto；resumeSubmoduleName 无值=按 resumeMode 全步骤
+n_auto_result,agt_gen_test_case_root?kbSpaceFileId={{kbSpaceFileId}}&pages={{pages}}&version={{version}}&source_type=auto&resumeMode={{resumeMode}}&resumeSubmoduleName={{fn.optional(resumeSubmoduleName, "")}}
+// [AUTO-ROOT] 解包 n_auto_result：勿用模板点号取 n_combined_result（与 ENTRY 解包动机相同，变量名用 auto_* 区分文件）
+n_auto_unpack,act_func?script='''
+    def toCamel = { String s ->
+        if (s == null || s.length() == 0) return s
+        def p = s.split("_")
+        def sb = new StringBuilder(p[0])
+        for (int i = 1; i < p.length; i++) {
+            if (p[i].length() > 0) sb.append(p[i].substring(0, 1).toUpperCase()).append(p[i].substring(1))
+        }
+        return sb.toString()
+    }
+    def wrapKeys = ["value", "result", "data", "output", "outputs", "results", "agentResult", "returnValue", "payload", "planResult", "response", "body", "extra", "context", "bindings", "ret"]
+    def deepPick
+    deepPick = { obj, String key, int depth ->
+        if (depth > 12 || obj == null) return null
+        def keysTry = [key, toCamel(key)]
+        if (obj instanceof Map) {
+            def m = obj as Map
+            for (def kk : keysTry) {
+                if (kk != null && m.containsKey(kk)) return m.get(kk)
+            }
+            for (def w : wrapKeys) {
+                if (!m.containsKey(w)) continue
+                def inner = deepPick(m.get(w), key, depth + 1)
+                if (inner != null) return inner
+            }
+            for (def e : m.entrySet()) {
+                def inner = deepPick(e.value, key, depth + 1)
+                if (inner != null) return inner
+            }
+        }
+        if (obj instanceof List) {
+            for (def it : (obj as List)) {
+                def inner = deepPick(it, key, depth + 1)
+                if (inner != null) return inner
+            }
+        }
+        return null
+    }
+    def shallowPick = { raw, String k ->
+        try {
+            if (raw instanceof Map) {
+                if (raw.containsKey(k)) return raw.get(k)
+                def ck = toCamel(k)
+                if (raw.containsKey(ck)) return raw.get(ck)
+                for (def alt : wrapKeys) {
+                    def inner = raw.get(alt)
+                    if (inner instanceof Map) {
+                        if (inner.containsKey(k)) return inner.get(k)
+                        if (inner.containsKey(ck)) return inner.get(ck)
+                    }
+                }
+            }
+            if (raw != null && !(raw instanceof Map)) {
+                try { return raw."${k}" } catch (Throwable ignore0) {}
+                try {
+                    def cap = k.length() > 0 ? k.substring(0, 1).toUpperCase() + k.substring(1) : k
+                    def m = raw.getClass().getMethod("get" + cap)
+                    return m.invoke(raw)
+                } catch (Throwable ignore1) {}
+            }
+        } catch (Throwable ignore2) {}
+        return null
+    }
+    def r = n_auto_result
+    def idx = [status: 0, n_combined_result: 1, n_doc_mind_map: 2]
+    def pickOne = { String k ->
+        def v = shallowPick(r, k)
+        if (v != null) return v
+        v = deepPick(r, k, 0)
+        if (v != null) return v
+        if (r instanceof List && idx.containsKey(k)) {
+            def L = r as List
+            int i = idx.get(k)
+            if (L.size() > i) return L.get(i)
+        }
+        if (r instanceof Map) {
+            def innerList = r.get("resultPlanResults")
+            if (innerList == null) innerList = r.get("planResults")
+            if (innerList instanceof List && idx.containsKey(k)) {
+                def L = innerList as List
+                int i = idx.get(k)
+                if (L.size() > i) return L.get(i)
+            }
+        }
+        return null
+    }
+    def s = { x -> x == null ? "" : x.toString() }
+    fn.put("auto_n_combined_str", s(pickOne("n_combined_result")))
+    fn.put("auto_n_doc_mind_map_str", s(pickOne("n_doc_mind_map")))
+    def st = s(pickOne("status"))
+    if (st == null || st.trim().isEmpty()) st = "Agent is running"
+    fn.put("auto_status_str", st)
+    return ""
+'''
+assign("status", "{{fn.get('auto_status_str')}}")
+n_combined_result,act_memory.assign?value='''{{fn.get("auto_n_combined_str")}}'''&type=md
+// 混合文档默认走通用导图模板（兼容 UI+API 混合章节）
+n_doc_mind_map,act_memory.assign?value='''{{fn.get("auto_n_doc_mind_map_str")}}'''&type=mmd
+
+define('tpl_txt_to_mermaid_auto_root', '''
+这个markdown内容转化为mermaid 思维导图,语言格式不变.
+要求: 1.memaid内容中不要出现Mermaid 图表中的 CSS 类定义
+2.Mindmap 语法中，子项必须使用一致的缩进(通常2或4个空格)，且不能混合使用空格和制表符。
+3.Mindmap 解析器对特殊字符（如括号 ()）的处理可能比较严格,节点内容尽量不要用括号 ()
+mermaid参考格式:
+```mermaid
+mindmap
+  root((mindmap))
+    Origins
+      Long history
+      ::icon(fa fa-book)
+      Popularisation
+        British popular psychology author Tony Buzan
+    Research
+      On effectiveness<br/>and features
+      On Automatic creation
+        Uses
+            Creative techniques
+            Strategic planning
+            Argument mapping
+    Tools
+      Pen and paper
+      Mermaid
+```
+
+
+```markdown
+{{fn.get("auto_n_combined_str")}}
+```
+''')

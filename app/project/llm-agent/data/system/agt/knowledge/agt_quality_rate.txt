@@ -1,0 +1,157 @@
+/*
+{
+	"title":"Quality Analysis and Scoring Agent",
+	"description":"Locate raw data based on the user's question, compare with processed data, conduct strict multi-dimensional scoring, and save structured results",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"textarea"
+		}
+	],
+	"life":100,
+	"version":1
+}
+*/
+// 第一步：读取原始数据 查询知识空间的地址路径 isSource为true时，指切片地址
+n_origin_data,rag_kbs.readSectionFile?kbSpaceFileId='{{kbSpaceFileId!}}'&isSource=true
+
+//## n_origin_data  : {{n_origin_data}}
+assign("aaa","")
+
+// 第二步：读取已处理数据
+n_kb_data,act_kb.selectBy?sql='select * from kb_test_data_draft'
+
+// 第三步：提取已处理数据内容
+assign("processed_data", "{{n_kb_data}}")
+
+// 第四步：构造评分提示词
+define("tpl_quality_analysis", '''
+你是一位资深数据质量分析师，请你对【原始数据】与【处理后数据】进行对比，严格评估后者的数据质量。以下是五个评分维度及其标准：
+
+1. 完整性 Completeness：是否存在字段缺失、字段为空、结构不全等情况。
+2. 准确性 Accuracy：字段值是否准确还原原始内容，是否存在误改、错拼、错误识别。
+3. 一致性 Consistency：字段命名统一、枚举值规范、时间格式统一、数据结构稳定。
+4. 合规性 Compliance：字段是否符合预设规范、标准代码、长度限制、类型限制等要求。
+5. 可用性 Usability：是否便于后续分析处理，如字段清晰、命名明确、结构清楚。
+
+请从每个维度为处理后数据严格打分（满分10分），并提供维度、评分、详细评语，不必解释。
+
+输出格式必须为合法 JSON，结构如下：
+{
+  "data": [
+    {
+      "维度": "完整性",
+      "评分": 6,
+      "评语": "存在多个缺失字段（如 industry_code）",
+    },
+    ...
+  ],
+  "total": 42
+}
+
+【原始数据】
+{{n_origin_data}}
+
+【处理后数据】
+{{processed_data}}
+''')
+
+tpl_quality_analysis
+
+// 第五步：提取分析结果
+assign("score_analysis", "{{tpl_quality_analysis.data}}")
+
+// 第六步：仅当总评分大于 39 时，将分析评分结果保存至 KB（kb_test_data_scenarios）
+when('tpl_quality_analysis.total > 39',{
+  // ## {{tpl_quality_analysis.total}}
+  act_kb.defineAndImportData?tableName='kb_test_data_scenarios1'&data='{{score_analysis}}'
+})
+
+// 第七步：输出最终结果
+assign("generated_data", "{{score_analysis}}")
+/*
+{
+  "title": "Quality Analysis and Scoring Agent",
+  "description": "Locate raw data based on the user's question, compare with processed data, conduct strict multi-dimensional scoring, and save structured results",
+  "parameter": [
+    {
+      "name": "userInput",
+      "label": "客户问题",
+      "type": "textarea"
+    },
+    {
+      "name":"kbSpaceFileId",
+      "label":"文件ID",
+      "type":"textarea"
+    },
+  ],
+  "llm_type": "deepseek-chat",
+  "life": "100",
+  "version": "1"
+}
+*/
+
+
+// 第一步：读取原始数据 查询知识空间的地址路径 isSource为true时，指切片地址
+n_origin_data,rag_kbs.readSectionFile?kbSpaceFileId='{{kbSpaceFileId!}}'&isSource=true
+
+//## n_origin_data  : {{n_origin_data}}
+assign("aaa","")
+
+// 第二步：读取已处理数据
+n_kb_data,act_kb.selectBy?sql='select * from kb_test_data_draft'
+
+// 第三步：提取已处理数据内容
+assign("processed_data", "{{n_kb_data}}")
+
+// 第四步：构造评分提示词
+define("tpl_quality_analysis", '''
+你是一位资深数据质量分析师，请你对【原始数据】与【处理后数据】进行对比，严格评估后者的数据质量。以下是五个评分维度及其标准：
+
+1. 完整性 Completeness：是否存在字段缺失、字段为空、结构不全等情况。
+2. 准确性 Accuracy：字段值是否准确还原原始内容，是否存在误改、错拼、错误识别。
+3. 一致性 Consistency：字段命名统一、枚举值规范、时间格式统一、数据结构稳定。
+4. 合规性 Compliance：字段是否符合预设规范、标准代码、长度限制、类型限制等要求。
+5. 可用性 Usability：是否便于后续分析处理，如字段清晰、命名明确、结构清楚。
+
+请从每个维度为处理后数据严格打分（满分10分），并提供维度、评分、详细评语，不必解释。
+
+输出格式必须为合法 JSON，结构如下：
+{
+  "data": [
+    {
+      "维度": "完整性",
+      "评分": 6,
+      "评语": "存在多个缺失字段（如 industry_code）",
+    },
+    ...
+  ],
+  "total": 42
+}
+
+【原始数据】
+{{n_origin_data}}
+
+【处理后数据】
+{{processed_data}}
+''')
+
+tpl_quality_analysis
+
+// 第五步：提取分析结果
+assign("score_analysis", "{{tpl_quality_analysis.data}}")
+
+// 第六步：仅当总评分大于 39 时，将分析评分结果保存至 KB（kb_test_data_scenarios）
+when('tpl_quality_analysis.total > 39',{
+  // ## {{tpl_quality_analysis.total}}
+  act_kb.defineAndImportData?tableName='kb_test_data_scenarios1'&data='{{score_analysis}}'
+})
+
+// 第七步：输出最终结果
+assign("generated_data", "{{score_analysis}}")

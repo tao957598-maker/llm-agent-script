@@ -1,0 +1,49 @@
+/*
+{
+	"title":"OKP Platform Data Flattening",
+	"description":"Flatten nested JSON structure into list of maps",
+	"tag":"Data Transformation",
+	"uiEntrance":"leave_application_form",
+    "resultPlan":"metadata_dc1,medata_dc",
+	"version":2
+}
+*/
+assign("documentId", "{{kbSpaceFileId}}")
+
+// 获取查询结果
+assign("kb_list_data", '[1,2,4,5]')
+
+assign('async_list', '[]')
+// 异步处理每页数据
+foreach('n_page_content', 'kb_list_data', {
+    // 获取当前模块名称
+    assign('page_content', '{{n_page_content.item}}')
+    // 计算数据
+    n_page_content_summary,agt_rag?page_content='{{page_content}}'&async=true
+    n_page_content_summary1,agt_meta?page_content='{{page_content}}'&async=true
+    act_func?script="async_list.add(n_page_content_summary)"
+    act_func?script="async_list.add(n_page_content_summary1)"
+})
+
+// 定义一个空 list
+assign('page_summary_list', '[]')
+// 定义四个空列表用于分类
+assign('background_list', '[]')
+assign('functional_list', '[]')
+assign('compliance_list', '[]')
+assign('other_list', '[]')
+
+// 对查询结果kb_okp_data进行循环处理并分类
+foreach('n_item', 'async_list', {
+    // 获取当前循环项的下标
+    assign('current_index', '{{n_item.index}}')
+    // 获取当前循环项的数据
+    assign('async_summary', '{{n_item.item}}')
+    // page_content_summary
+    assign('page_content_summary', '{{async_summary.value}}')
+    act_func?script='''
+                page_content_summary.each { item ->
+                    page_summary_list.add(item)
+                }
+            '''
+})

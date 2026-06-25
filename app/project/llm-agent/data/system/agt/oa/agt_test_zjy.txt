@@ -1,0 +1,39 @@
+/*
+{
+	"title":"aaaaa",
+	"description":"bbbbbbbb",
+	"parameter":[
+		{
+			"required":true,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"OA",
+	"uiEntrance":"7",
+	"displayOrder":0,
+	"version":32
+}
+*/
+// result_list_test_cases
+assign('result_list_test_cases', '[]')
+
+foreach('n_test_case', 'test_case_list', {
+	// test_contenttest_content map list
+	assign('test_case_map', '{{n_test_case.item}}')
+
+	// result_list_test_cases
+	assign('result_list_test_cases2', '[]')
+
+	foreach('n_test_case_map', 'test_case_map.data', {
+		assign('test_case', '{{n_test_case_map.item}}')
+	
+		assign('item_map', '''{
+					"title": "{{test_case.title}}"
+				}''')
+	})
+
+	// 再插入新数据
+	act_kb.defineAndImportData?tableName='kb_gen_test_case'&data='{{result_list_test_cases2}}'
+})

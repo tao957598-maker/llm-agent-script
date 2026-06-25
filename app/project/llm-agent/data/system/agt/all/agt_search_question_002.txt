@@ -1,0 +1,10 @@
+/*
+{
+	"title":"TEST search abc",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"用户输入\",\"required\":true,\"maxLength\":5000,\"hidden\":false,\"readOnly\":false,\"type\":\"text\"}",
+	"tag":"all",
+	"displayOrder":0,
+	"version":1
+}
+*/
+log('userInput==={{userInput}}')

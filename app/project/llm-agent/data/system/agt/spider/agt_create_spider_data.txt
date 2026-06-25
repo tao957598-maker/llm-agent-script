@@ -1,0 +1,167 @@
+/*
+{
+	"title":"Create Spider Data",
+	"description":"创建爬虫相关数据",
+	"parameter":[
+		{
+			"name":"system_name",
+			"label":"system_name",
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"test_no",
+			"label":"test_no",
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"dependency":"ac",
+	"tag":"spider",
+	"displayOrder":2,
+	"version":2
+}
+*/
+// get n_kb_steps_data
+n_kb_steps_data, act_kb.selectBy?sql='SELECT steps_id,steps,start_uri,end_uri,python_code FROM kb_test_steps_result_data WHERE system_name = "{{system_name}}" and test_no = "{{test_no}}" ORDER BY steps_id ASC'
+
+
+// 生成的步骤列表
+n_spider_data_list,tpl_create_spider_data,psr_json_python
+
+foreach('n_spider_data', 'n_spider_data_list', {
+    assign('spider_data_item', '{{n_spider_data.item}}')
+
+    assign('n_steps_id_list', '{{spider_data_item.steps_id_list}}')
+    
+    """
+    // 待搜索的id列表
+	n_id_list_str,act_func?script=''' 
+		def merged = n_steps_id_list.collect{'"' + it + '"'}.join(',')
+		return merged
+	'''
+    """
+
+    // 找到id最大的(最后一个步骤)
+    n_max_id, act_func?script='''
+        def res = n_steps_id_list
+        res = n_steps_id_list.collect{ it as Long }.max()
+        return res
+    '''
+    
+    // 当前步骤组的数据
+    n_steps_list, act_kb.selectBy?sql='SELECT * FROM kb_test_steps_result_data WHERE system_name = "{{system_name}}" and test_no = "{{test_no}}" and steps_id = "{{n_max_id}}" ORDER BY steps_id ASC'
+
+
+    // 待插入的数据
+    n_insert_spider, act_func?script='''
+        def group_steps = spider_data_item
+        def end_data = n_steps_list[0]
+        def insert_spider = [:]
+
+        insert_spider.system_name = end_data.system_name
+        insert_spider.base_url = end_data.base_url                  // 基础url，需要拼上uri后才能成为完整的url
+        insert_spider.current_uri = group_steps.start_uri           // 执行前该页面的uri
+        insert_spider.action_type = group_steps.action_type         // open_url / execute
+        insert_spider.run_steps = group_steps.run_steps
+        insert_spider.msg = group_steps.msg
+        insert_spider.target_uri = group_steps.end_uri
+        insert_spider.generate_type = 9
+
+        insert_spider.collect_data = end_data.collect_data          // 收集元素
+        insert_spider.title = end_data.title                        // 页面标题
+        insert_spider.text_data = end_data.text_data                // 文本内容
+        insert_spider.page_html = end_data.page_html                // html
+        insert_spider.screenshot = end_data.screenshot              //截图 这里放路径，图片需要自行上传
+
+        return insert_spider
+    '''
+
+    // 执行入库流程
+    agt_insert_spider_data?insert_spider_data={{n_insert_spider}}
+})
+
+// 更新爬虫相关内容
+agt_update_all_spider_data?system_name={{system_name}}
+
+// 执行完毕
+assign('res', '')
+
+
+
+// create_spider_data
+define('tpl_create_spider_data', """
+你是一个自动化步骤重组专家，需要根据输入的步骤列表数据，重新整理为“可执行跳转步骤列表”。
+
+【任务目标】
+根据输入的steps列表（包含steps_id、python_code、start_uri、end_uri、steps等信息），生成一个新的list，每一条代表一个“完整可跳转步骤”。
+
+约束：
+1、根据步骤列表+python代码+start_uri与end_uri总结生成出新的list
+    每一条数据都代表一个可跳转的步骤，这个步骤可能是由原先的list中多个数据组合起来的
+    其中代码会被压缩成这样的格式，表示一个会触发页面跳转的完整步骤：
+    [{"type":"click","target":"id_xxxx"},{"type":"click","target":"id_xxxx"}]
+2、run_steps后期会用来进行md5，因此中间尽量不要使用空格或其他无意义的符号
+3、action_type只允许为："open_url":打开链接, "execute":执行操作
+4、run_steps 中的type只允许为："open_url"、"input"、"click"、""四种，如果不在这四种内，则不参与生成代码
+    当为"open_url"时格式为：{"type":"open_url","value":"xxx uri"}
+    当为"input"时格式为：{"type":"input","target":"id_xxxx","value":"xxxx"}
+    当为"click"时格式为：{"type":"click","target":"id_xxxx"}
+    当为"select"时格式为：{"type":"select","target":"id_xxxx","option":"xxxx"}
+5、每组数据必须存在start_uri、end_uri,start_uri为跳转前的uri，end_uri为页面跳转后的uri,当action_type为open_url的时候，start_uri=""
+6、生成的数据必须为原先的输入生成的，不允许生成虚拟数据
+7、生成的list每一条都必须是代表可以跳转的操作，如果不能跳转则忽略这个数据
+
+工作流：
+1、分析start_uri、end_uri, 当认为这组数据会发生且只发生一次页面跳转的时候,将这组数据组合
+2、将组合的python_code提取核心操作, 生成run_steps字段
+3、通过run_steps与python_code组合，生成msg，使用自然语言进行描述
+
+示例：
+    输入：
+    [
+        {
+            "steps_id": "1111",
+            "end_uri": "/index",
+            "python_code": "# -*- coding: utf-8 -*- \n'''{\"requirement\":\"1. Open url `http://189.1.224.215:8888/index`\",\"url\":\"http://189.1.224.215:8888/index\",\"method\":\"open_index_page\",\"agentName\":\"agt_test_save_file.test\",\"current_step\":\"1. Navigate to the URL: http://189.1.224.215:8888/index.\",\"source\":\"CloudBank.Selenium.pages.index.index\"}'''\n \n \n\n \n\nfrom autotest import *\nfrom autotest_triple import *\n\ndef run(browser, url=\"http://189.1.224.215:8888/index\", **kwargs):\n # 使用gotoPage跳转到指定URL，并验证跳转成功\n try:\n success = gotoPage(browser,'',url)\n if not success:\n writeResult(False, f\"Failed to navigate to {url}\")\n return \n writeResult(success, f\"Successfully navigated to {url}\")\n except Exception as e:\n writeResult(False, \"An error occurred while opening the URL: \" + str(e))\n return\n \n # 等待页面加载完成，检测\"Sign in\"元素出现\n try:\n # 待检测的元素\n item = '{\"name\":\"Sign in\",\"id\":\"id_1580495499\"}'\n \n # 等待元素出现（type='add'表示等待元素出现）\n wait_result = waitElement(browser, item, 'add')\n \n if wait_result:\n writeResult(True, f\"Successfully waited for element '{item}' to appear\")\n else:\n writeResult(False, f\"Failed to wait for element '{item}' to appear\")\n \n except Exception as e:\n writeResult(False, f\"An error occurred while waiting for element: {str(e)}\")",
+            "start_uri": null,
+            "steps": "1. Open url `http://189.1.224.215:8888/index`."
+        },
+        {
+            "steps_id": "2222",
+            "end_uri": "/userFront",
+            "python_code": "# -*- coding: utf-8 -*- \n'''{\"requirement\":\"2. Click the `Me` button.\",\"target\":\"id_1780641033\",\"method\":\"click_me_button\",\"agentName\":\"agt_test_save_file.test\",\"current_step\":\"4. Click the me button.\",\"source\":\"CloudBank.Selenium.pages.index.index\"}'''\n\n\nfrom autotest import *\nfrom autotest_triple import *\ndef run(browser, target=\"id_1780641033\", **kwargs):\n try:\n success = clickTripleMain(browser, target)\n if not success:\n writeResult(False, f\"Failed to click the {target}\")\n return \n writeResult(True, f\"Successfully clicked the {target}.\")\n except Exception as e:\n logging.error(f\"Failed to click the {target}. Error: {e}\")\n writeResult(False, f\"Failed to click the {target}. Error: {e}\")\n return False",
+            "start_uri": "/userFront",
+            "steps": "2. Click the `Me` button."
+        },
+        {
+            "steps_id": "3333",
+            "end_uri": "/index?logout",
+            "python_code": "# -*- coding: utf-8 -*- \n'''{\"requirement\":\"3. Click the `Logout` button.\",\"target\":\"id_1983437434\",\"method\":\"click_logout_button\",\"agentName\":\"agt_test_save_file.test\",\"current_step\":\"4. Click the Logout button.\",\"source\":\"CloudBank.Selenium.pages.index.index\"}'''\n\n\nfrom autotest import *\nfrom autotest_triple import *\ndef run(browser, target=\"id_1983437434\", **kwargs):\n try:\n success = clickTripleMain(browser, target)\n if not success:\n writeResult(False, f\"Failed to click the {target}\")\n return \n writeResult(True, f\"Successfully clicked the {target}.\")\n except Exception as e:\n logging.error(f\"Failed to click the {target}. Error: {e}\")\n writeResult(False, f\"Failed to click the {target}. Error: {e}\")\n return False",
+            "start_uri": "/userFront",
+            "steps": "3. Click the `logout` button."
+        }
+    ]
+    输出：
+    [
+        {
+            "steps_id_list": ["1111"],    # 表示通过这些步骤id组合起来的
+            "action_type": "open_url",
+            "start_uri": "",                # 当action_type为open_url时,start_uri=""
+            "end_uri": "/index",
+            "run_steps": [{"type":"open_url","value":"/index"}],
+            "msg": "open uri ['/index']"       # 由pythoncode + run_steps 总结出来的步骤描述
+        },
+        {   
+            "steps_id_list": ["2222", "3333"],     # 表示通过这些步骤id组合起来的
+            "action_type": "execute",
+            "run_steps": [{"type":"click","target":"id_1780641033"},{"type":"click","target":"id_1983437434"}],
+            "start_uri": "/userFront",
+            "end_uri": "/index?logout",
+            "msg": "先点击[Me]， 然后点击[Logout]按钮退出登录"       # 由pythoncode + run_steps 总结出来的步骤描述
+        }
+    ]
+
+现在输入：
+{{n_kb_steps_data}}
+""")

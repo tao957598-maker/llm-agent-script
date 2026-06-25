@@ -1,0 +1,19 @@
+/*
+{
+	"title":"agt_simple_test",
+	"description":"测试demo 随时用-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"tpl_do_the_math,agt_math_test1",
+	"version":1
+}
+*/
+ 
+assign("combined_result",'''
+# 原始支票图片
+![原始支票图片](/check_recognition/image_marked_20251229170149.jpg)
+
+
+''')
+n_result,act_memory.assign?value='''{{combined_result}}'''&type=md

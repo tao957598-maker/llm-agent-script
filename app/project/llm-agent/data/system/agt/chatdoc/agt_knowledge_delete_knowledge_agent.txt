@@ -1,0 +1,20 @@
+/*
+{
+	"title": "knowledge space - delete knowledge",
+	"description": "Call back the agent after deleting the knowledge",
+    "parameter": [
+                    {
+                        "name":"kbSpaceFileId",
+                        "label":"知识文件Id",
+                        "type":"textarea"
+                    }
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "uiEntrance": "chatdoc",
+	"tag":"chatdoc"
+} */
+
+log("delete knowledge ID:{{kbSpaceFileId}}")
+// 1.删除kbs_doc_page_parse的相关数据信息
+act_kb.delete?name='kbs_doc_page_parse'&where='{"documentId":"{{kbSpaceFileId}}"}'&maxSize=10000

@@ -1,0 +1,2526 @@
+	- Role: 你是一位专业的页面操作流程抽取与步骤映射专家。  
+
+	我会提供一个页面解析的 JSON 数据（包含 system_name、base_url、current_uri、cookie、version、collect_data 等字段）。  
+	- Goals:
+	根据 collect_data 中的元素信息，提取所有 **可能导致页面跳转的操作**，并转化为标准执行步骤 JSON list。  
+	由collect_data生成一个字典列表 [[run_steps1],[run_steps2],[run_steps3]]
+	覆盖范围：登录页、注册页、首页导航、下拉菜单、按钮、超链接、仪表盘操作等常用网页场景。 
+
+	# 生成规则、元素说明：  
+		a. **直接跳转类元素（仅作参考）**（单独生成 click 步骤）  
+		- tag = "a"  
+		- tag = "link"  
+		- tag = "image-button"  
+		- → run_steps: { "type": "click", "target": 元素id, "msg": "根据元素信息推测的描述" }  
+
+		b. **按钮类元素**（需考虑组合逻辑）  
+		- tag = "button"  
+		- 如果按钮关联了用户名输入框 + 密码输入框，则作为 **登录操作**：  
+		1) 用户名输入 → { "type": "input", "target": 用户名id, "value": ..., "msg": "账号输入" }  
+		2) 密码输入 → { "type": "input", "target": 密码id, "value": ..., "msg": "密码输入" }  
+		3) 点击登录按钮 → { "type": "click", "target": 登录按钮id, "msg": "登录操作" }  
+		- 如果按钮关联了其他输入类元素，则和相关输入一起生成组合操作。  
+		- 独立按钮（提交、确认、下一步等） → { "type": "click", "target": 按钮id, "msg": "点击【元素名称或类型】+ 步骤描述" }  
+
+		c. **输入类元素**（仅在与按钮组合时生效）  
+		- tag = "input" / "textarea" / "tableInput" / "switch" / "select"  
+		- 有值时 → { "type": "input", "target": 元素id, "value": 值, "msg": "输入/选择【元素名称或类型】+ 步骤描述" }  
+		- value值可以在自定义参数中(特别要注意区分参数需要添加的字段和页面)提取相关联的值，也可以直接在元素中提取，若无提取值时 → 不生成 value 字段，仅保留 msg 提示  
+
+		d. **其他可能触发跳转的容器类元素**  
+		- tag = "div" / "span"  或其他
+	
+		e. **图片元素定义**
+		- tag = "image" / "image-button" / "svg"
+        	默认忽略所有图片相关元素，当自定义参数中明确包含"需要操作 / 点击 图片"或类似指令时，需要对图片（含svg）元素进行操作
+
+		f. **表格元素定义**
+		- tag = "table-box"
+			当存在表格中的元素或者表格内的子集的时候，需要忽略不允许提取里面的元素，除非自定义参数中明确包含"需要操作 / 点击表格"或类似指令
+		
+
+	## 输出示例：
+	run_steps 示例:
+	- 输入框 → { "type": "input", "target": "id_xxx", "value": "提取元素中的值或对应页面的自定义参数，无则不显示", "msg": "账号输入" }  
+	- 密码框 → { "type": "input", "target": "id_xxx", "value": "提取元素中的值或对应页面的自定义参数，无则不显示", "msg": "密码输入" }  
+	- 点击按钮 → { "type": "click", "target": "id_xxx", "msg": "点击【登录】进行登录" }  
+
+	## 输出要求：  
+	- run_steps 必须带有 msg 字段，用于简要描述操作目的。  
+	- msg为根据元素信息推测的步骤描述，统一输出风格为：点击【xxx】 + 由元素信息用自己的语言总结出描述
+	- 忽略掉图片的数据操作，不对图片、纯文本（不可点击的元素）进行点击操作
+	- 忽略跟文件上传、文件导出、下载、搜索相关的元素
+	- 禁止生成登出类操作（登出按钮、退出按钮、注销按钮等）,如点击Sign Out按钮。  
+	- 忽略tag为表格内的元素，不会表格做任何操作，如勾选、点击、查看数据等 
+	- 禁止点击可能涉及到创建、删除、修改数据、修改状态、表单修改、表单提交、翻页、搜索、条件选择（如选择日期）、日历等的任何按钮
+	- 输出 JSON list，每个run_steps都只对应一个跳转操作，如：[[run_steps1],[run_steps2],[run_steps3]]
+	- 每组操作都包含完整根节点字段
+	- 不要额外解释或说明  
+	- 自定义参数为最高优先级，当自定义参数与要求出现冲突时，冲突部分与自定义参数为准
+
+	- Examples:
+		输入 collect_data：
+		[
+		{"id": "id_2581586144", "tag": "input", "type": "text", "placeholder": "Username"},
+		{"id": "id_1526379877", "tag": "input", "type": "password", "placeholder": "Password"},
+		{"id": "id_1580495499", "tag": "button", "type": "submit", "name": "Sign in"},
+		{"id": "id_1094787217", "tag": "link", "name": "Sign up!"},
+		{"id": "id_1423062691", "tag": "a", "name": "Home"},
+		{"id": "id_171780386", "tag": "image-button", "name": "Accounts"},
+		{"id": "id_171810177", "tag": "div", "name": "Transfer", "onclick": "goTransfer()"}
+		]
+
+		输出 JSON list：
+		[
+		[{"type": "input", "target": "id_2581586144", "value": "admin", "msg": "账号输入"},
+		{"type": "input", "target": "id_1526379877", "value": "xJbNmQnqk4wq0Fc", "msg": "密码输入"},
+		{"type": "click", "target": "id_1580495499", "msg": "点击【Sign in】登录操作"}
+		],
+		[{"type": "click", "target": "id_1094787217", "msg": "点击【Sign up!】注册账号"}]
+		]
+
+	# 输入参数：
+	{"run_steps":"[{"type":"input","target":"id_130757787","value":"admin","msg":"账号输入"},{"type":"input","target":"id_3956508469","value":"gientech","msg":"密码输入"},{"type":"click","target":"id_179741740","msg":"点击【Login】登录操作"}]","cookie":"","create_time":"2026-01-23 18:42:00","action_type":"execute","system_name":"BEA","base_url":"http://172.18.2.14:5172","spider_deep":2,"version":"1.0","update_time":"2026-01-23 18:42:00","target_uri":"","id":266788060182364160,"run_success":"2","folder_id":"261432912946724864","current_uri":"/login"}
+
+	# current_uri：
+	/main
+
+	# 自定义参数：
+	账号：admin  密码：gientech  需要操作图片
+
+	# collect_data：
+
+[
+    {
+        "tag": "container",
+        "name": "app-box",
+        "type": "div",
+        "rect": {
+            "left": 0,
+            "top": 0,
+            "width": 1094,
+            "height": 0
+        },
+        "children": [
+            {
+                "tag": "image-button",
+                "rect": {
+                    "left": 11,
+                    "top": 14,
+                    "width": 197,
+                    "height": 35
+                },
+                "id": "id_3549938045"
+            },
+            {
+                "tag": "font-icon-button",
+                "name": "el-input__prefix-inner",
+                "type": "font-icon-button",
+                "rect": {
+                    "left": 251,
+                    "top": 24,
+                    "width": 15,
+                    "height": 15
+                },
+                "id": "id_2882455965"
+            },
+            {
+                "tag": "input",
+                "type": "text",
+                "rect": {
+                    "left": 275,
+                    "top": 13,
+                    "width": 487,
+                    "height": 37
+                },
+                "placeholder": "Please fill in Customer No. /Customer Name/Customer Name (Chinese)/Document ID/Ultimate Controller No. /Ultimate Controller Name/Ultimate Controller Name (Chinese)",
+                "id": "id_1272290078"
+            },
+            {
+                "tag": "input",
+                "type": "text",
+                "rect": {
+                    "left": 275,
+                    "top": 13,
+                    "width": 487,
+                    "height": 37
+                },
+                "placeholder": "Please fill in Customer No. /Customer Name/Customer Name (Chinese)/Document ID/Ultimate Controller No. /Ultimate Controller Name/Ultimate Controller Name (Chinese)",
+                "id": "id_1272290078"
+            },
+            {
+                "tag": "image-button",
+                "name": "image-button",
+                "type": "image-button",
+                "rect": {
+                    "left": 868,
+                    "top": 2,
+                    "width": 50,
+                    "height": 63
+                },
+                "id": "id_2446904281"
+            },
+            {
+                "tag": "text",
+                "name": "admin",
+                "type": "SPAN",
+                "id": "id_879288691"
+            },
+            {
+                "tag": "text",
+                "name": "(admin)",
+                "type": "SPAN",
+                "id": "id_879288722"
+            },
+            {
+                "tag": "font-icon-button",
+                "name": "logout-text",
+                "type": "font-icon-button",
+                "rect": {
+                    "left": 1054,
+                    "top": 21,
+                    "width": 23,
+                    "height": 23
+                },
+                "id": "id_2878568091"
+            },
+            {
+                "tag": "image-button",
+                "name": "image-button",
+                "type": "image-button",
+                "rect": {
+                    "left": 20,
+                    "top": 77,
+                    "width": 15,
+                    "height": 15
+                },
+                "id": "id_2778565343"
+            },
+            {
+                "tag": "svg",
+                "rect": {
+                    "left": 30,
+                    "top": 112,
+                    "width": 17,
+                    "height": 17
+                },
+                "id": "id_1889423950"
+            },
+            {
+                "tag": "svg",
+                "rect": {
+                    "left": 22,
+                    "top": 149,
+                    "width": 17,
+                    "height": 17
+                },
+                "id": "id_647894325"
+            },
+            {
+                "tag": "svg",
+                "rect": {
+                    "left": 22,
+                    "top": 183,
+                    "width": 17,
+                    "height": 17
+                },
+                "id": "id_239070100"
+            },
+            {
+                "tag": "svg",
+                "rect": {
+                    "left": 22,
+                    "top": 217,
+                    "width": 17,
+                    "height": 17
+                },
+                "id": "id_4125213171"
+            },
+            {
+                "tag": "svg",
+                "rect": {
+                    "left": 22,
+                    "top": 251,
+                    "width": 17,
+                    "height": 17
+                },
+                "id": "id_3716388946"
+            },
+            {
+                "tag": "svg",
+                "rect": {
+                    "left": 22,
+                    "top": 285,
+                    "width": 17,
+                    "height": 17
+                },
+                "id": "id_3307564721"
+            },
+            {
+                "tag": "div",
+                "name": "tags-view-button",
+                "type": "button",
+                "rect": {
+                    "left": 67,
+                    "top": 79,
+                    "width": 37,
+                    "height": 31
+                },
+                "id": "id_1859007367"
+            },
+            {
+                "tag": "link",
+                "name": "Home Page",
+                "rect": {
+                    "left": 122,
+                    "top": 86,
+                    "width": 90,
+                    "height": 19
+                },
+                "id": "id_4275460697"
+            },
+            {
+                "tag": "div",
+                "name": "tags-view-button",
+                "type": "button",
+                "rect": {
+                    "left": 832,
+                    "top": 79,
+                    "width": 37,
+                    "height": 31
+                },
+                "id": "id_2380244798"
+            },
+            {
+                "tag": "div",
+                "name": "tags-view-button",
+                "type": "button",
+                "rect": {
+                    "left": 872,
+                    "top": 79,
+                    "width": 37,
+                    "height": 31
+                },
+                "id": "id_2380244829"
+            },
+            {
+                "tag": "text",
+                "name": "Batch Date:  2024-03-29",
+                "type": "DIV",
+                "id": "id_2380244860"
+            },
+            {
+                "tag": "container",
+                "name": "home-box collapsed",
+                "type": "div",
+                "rect": {
+                    "left": 67,
+                    "top": 123,
+                    "width": 1014,
+                    "height": 408
+                },
+                "children": [
+                    {
+                        "tag": "text",
+                        "name": "My Tasks",
+                        "type": "DIV",
+                        "id": "id_4263985105"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Tasks",
+                        "type": "P",
+                        "id": "id_1378526724"
+                    },
+                    {
+                        "tag": "image-button",
+                        "name": "image-button",
+                        "type": "image-button",
+                        "rect": {
+                            "left": 242,
+                            "top": 187,
+                            "width": 35,
+                            "height": 35
+                        },
+                        "id": "id_3886477273"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "0",
+                        "type": "DIV",
+                        "id": "id_4079663235"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Alerts",
+                        "type": "P",
+                        "id": "id_248568240"
+                    },
+                    {
+                        "tag": "image-button",
+                        "name": "image-button",
+                        "type": "image-button",
+                        "rect": {
+                            "left": 477,
+                            "top": 187,
+                            "width": 35,
+                            "height": 35
+                        },
+                        "id": "id_2018161285"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "0",
+                        "type": "DIV",
+                        "id": "id_3410688599"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Approvals",
+                        "type": "P",
+                        "id": "id_4033001359"
+                    },
+                    {
+                        "tag": "image-button",
+                        "name": "image-button",
+                        "type": "image-button",
+                        "rect": {
+                            "left": 242,
+                            "top": 290,
+                            "width": 35,
+                            "height": 35
+                        },
+                        "id": "id_4275072292"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "0",
+                        "type": "DIV",
+                        "id": "id_469031000"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Schedule",
+                        "type": "P",
+                        "id": "id_3522467182"
+                    },
+                    {
+                        "tag": "image-button",
+                        "name": "image-button",
+                        "type": "image-button",
+                        "rect": {
+                            "left": 477,
+                            "top": 290,
+                            "width": 35,
+                            "height": 35
+                        },
+                        "id": "id_2237016003"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "0",
+                        "type": "DIV",
+                        "id": "id_1822340697"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Tools",
+                        "type": "DIV",
+                        "id": "id_4275991529"
+                    },
+                    {
+                        "tag": "div",
+                        "name": "button-group-right",
+                        "type": "button",
+                        "rect": {
+                            "left": 631,
+                            "top": 126,
+                            "width": 423,
+                            "height": 35
+                        },
+                        "id": "id_579509185"
+                    },
+                    {
+                        "tag": "image-button",
+                        "name": "image-button",
+                        "type": "image-button",
+                        "rect": {
+                            "left": 637,
+                            "top": 177,
+                            "width": 55,
+                            "height": 55
+                        },
+                        "id": "id_1479436477"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "My Submissions",
+                        "type": "P",
+                        "id": "id_3093797352"
+                    },
+                    {
+                        "tag": "image-button",
+                        "name": "image-button",
+                        "type": "image-button",
+                        "rect": {
+                            "left": 790,
+                            "top": 177,
+                            "width": 55,
+                            "height": 55
+                        },
+                        "id": "id_160029849"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "My Followings Ultimate Controller",
+                        "type": "P",
+                        "id": "id_2699961028"
+                    },
+                    {
+                        "tag": "image-button",
+                        "name": "image-button",
+                        "type": "image-button",
+                        "rect": {
+                            "left": 943,
+                            "top": 177,
+                            "width": 55,
+                            "height": 55
+                        },
+                        "id": "id_3949438520"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Customer Portfolio Search",
+                        "type": "P",
+                        "id": "id_147804067"
+                    },
+                    {
+                        "tag": "image-button",
+                        "name": "image-button",
+                        "type": "image-button",
+                        "rect": {
+                            "left": 637,
+                            "top": 283,
+                            "width": 55,
+                            "height": 55
+                        },
+                        "id": "id_3443879895"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Announcement Overview",
+                        "type": "P",
+                        "id": "id_1890614402"
+                    },
+                    {
+                        "tag": "image-button",
+                        "name": "image-button",
+                        "type": "image-button",
+                        "rect": {
+                            "left": 790,
+                            "top": 283,
+                            "width": 55,
+                            "height": 55
+                        },
+                        "id": "id_2938321270"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "My Received Tasks",
+                        "type": "P",
+                        "id": "id_3633424737"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Dashboard",
+                        "type": "DIV",
+                        "id": "id_2237935240"
+                    },
+                    {
+                        "tag": "div",
+                        "name": "button-group-right",
+                        "type": "button",
+                        "rect": {
+                            "left": 171,
+                            "top": 414,
+                            "width": 574,
+                            "height": 35
+                        },
+                        "id": "id_2797267138"
+                    },
+                    {
+                        "tag": "container",
+                        "name": "kpi-box",
+                        "type": "div",
+                        "rect": {
+                            "left": 79,
+                            "top": 465,
+                            "width": 669,
+                            "height": 331
+                        },
+                        "children": [
+                            {
+                                "tag": "container",
+                                "name": "kpi-box-item",
+                                "type": "div",
+                                "rect": {
+                                    "left": 79,
+                                    "top": 465,
+                                    "width": 213,
+                                    "height": 150
+                                },
+                                "children": [
+                                    {
+                                        "tag": "text",
+                                        "name": "As Of Date :",
+                                        "type": "SPAN",
+                                        "id": "id_1007656028"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "-",
+                                        "type": "SPAN",
+                                        "id": "id_1007656059"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "Net Interest Income",
+                                        "type": "DIV",
+                                        "id": "id_1596062266"
+                                    },
+                                    {
+                                        "tag": "input",
+                                        "type": "checkbox",
+                                        "rect": {
+                                            "left": 246,
+                                            "top": 509,
+                                            "width": 0,
+                                            "height": 0
+                                        },
+                                        "value": "on",
+                                        "checked": true,
+                                        "id": "id_3007038343"
+                                    },
+                                    {
+                                        "tag": "input",
+                                        "type": "checkbox",
+                                        "rect": {
+                                            "left": 246,
+                                            "top": 509,
+                                            "width": 0,
+                                            "height": 0
+                                        },
+                                        "value": "on",
+                                        "checked": true,
+                                        "id": "id_3007038343"
+                                    },
+                                    {
+                                        "tag": "div",
+                                        "name": "el-switch__action",
+                                        "type": "button",
+                                        "rect": {
+                                            "left": 268,
+                                            "top": 501,
+                                            "width": 15,
+                                            "height": 15
+                                        },
+                                        "id": "id_4131767151"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "P",
+                                        "id": "id_149176504"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "HKE’000",
+                                        "type": "SPAN",
+                                        "id": "id_3121246722"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "MoM",
+                                        "type": "DIV",
+                                        "id": "id_3099779198"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "SPAN",
+                                        "id": "id_4010631190"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "(",
+                                        "type": "DIV",
+                                        "id": "id_3725312712"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00%",
+                                        "type": "SPAN",
+                                        "id": "id_4010631221"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": ")",
+                                        "type": "DIV",
+                                        "id": "id_3725312712"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "YoY",
+                                        "type": "DIV",
+                                        "id": "id_2676124428"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "SPAN",
+                                        "id": "id_2996654280"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "(",
+                                        "type": "DIV",
+                                        "id": "id_1239975290"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00%",
+                                        "type": "SPAN",
+                                        "id": "id_2996654311"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": ")",
+                                        "type": "DIV",
+                                        "id": "id_1239975290"
+                                    }
+                                ],
+                                "notInView": true,
+                                "id": "id_6016774"
+                            },
+                            {
+                                "tag": "container",
+                                "name": "kpi-box-item",
+                                "type": "div",
+                                "rect": {
+                                    "left": 293,
+                                    "top": 465,
+                                    "width": 228,
+                                    "height": 150
+                                },
+                                "children": [
+                                    {
+                                        "tag": "text",
+                                        "name": "As Of Date :",
+                                        "type": "SPAN",
+                                        "id": "id_3216975510"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "-",
+                                        "type": "SPAN",
+                                        "id": "id_3216975541"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "Non Interest Income",
+                                        "type": "DIV",
+                                        "id": "id_1251688640"
+                                    },
+                                    {
+                                        "tag": "input",
+                                        "type": "checkbox",
+                                        "rect": {
+                                            "left": 474,
+                                            "top": 509,
+                                            "width": 0,
+                                            "height": 0
+                                        },
+                                        "value": "on",
+                                        "checked": true,
+                                        "id": "id_2470605761"
+                                    },
+                                    {
+                                        "tag": "input",
+                                        "type": "checkbox",
+                                        "rect": {
+                                            "left": 474,
+                                            "top": 509,
+                                            "width": 0,
+                                            "height": 0
+                                        },
+                                        "value": "on",
+                                        "checked": true,
+                                        "id": "id_2470605761"
+                                    },
+                                    {
+                                        "tag": "div",
+                                        "name": "el-switch__action",
+                                        "type": "button",
+                                        "rect": {
+                                            "left": 496,
+                                            "top": 501,
+                                            "width": 15,
+                                            "height": 15
+                                        },
+                                        "id": "id_547057909"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "P",
+                                        "id": "id_3773395134"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "HKE’000",
+                                        "type": "SPAN",
+                                        "id": "id_1035598908"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "MoM",
+                                        "type": "DIV",
+                                        "id": "id_2755405572"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "SPAN",
+                                        "id": "id_3894995408"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "(",
+                                        "type": "DIV",
+                                        "id": "id_872523394"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00%",
+                                        "type": "SPAN",
+                                        "id": "id_3894995439"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": ")",
+                                        "type": "DIV",
+                                        "id": "id_872523394"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "YoY",
+                                        "type": "DIV",
+                                        "id": "id_4118302406"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "SPAN",
+                                        "id": "id_2654844110"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "(",
+                                        "type": "DIV",
+                                        "id": "id_2606256000"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00%",
+                                        "type": "SPAN",
+                                        "id": "id_2654844141"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": ")",
+                                        "type": "DIV",
+                                        "id": "id_2606256000"
+                                    }
+                                ],
+                                "notInView": true,
+                                "id": "id_3152144192"
+                            },
+                            {
+                                "tag": "container",
+                                "name": "kpi-box-item",
+                                "type": "div",
+                                "rect": {
+                                    "left": 521,
+                                    "top": 465,
+                                    "width": 228,
+                                    "height": 150
+                                },
+                                "children": [
+                                    {
+                                        "tag": "text",
+                                        "name": "As Of Date :",
+                                        "type": "SPAN",
+                                        "id": "id_3247995317"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "-",
+                                        "type": "SPAN",
+                                        "id": "id_3247995348"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "Monthly Average Deposits",
+                                        "type": "DIV",
+                                        "id": "id_3469446593"
+                                    },
+                                    {
+                                        "tag": "input",
+                                        "type": "checkbox",
+                                        "rect": {
+                                            "left": 702,
+                                            "top": 509,
+                                            "width": 0,
+                                            "height": 0
+                                        },
+                                        "value": "on",
+                                        "checked": true,
+                                        "id": "id_3496097760"
+                                    },
+                                    {
+                                        "tag": "input",
+                                        "type": "checkbox",
+                                        "rect": {
+                                            "left": 702,
+                                            "top": 509,
+                                            "width": 0,
+                                            "height": 0
+                                        },
+                                        "value": "on",
+                                        "checked": true,
+                                        "id": "id_3496097760"
+                                    },
+                                    {
+                                        "tag": "div",
+                                        "name": "el-switch__action",
+                                        "type": "button",
+                                        "rect": {
+                                            "left": 724,
+                                            "top": 501,
+                                            "width": 15,
+                                            "height": 15
+                                        },
+                                        "id": "id_876823670"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "P",
+                                        "id": "id_723192319"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "HKE’000",
+                                        "type": "SPAN",
+                                        "id": "id_1066618715"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "MoM",
+                                        "type": "DIV",
+                                        "id": "id_678196229"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "SPAN",
+                                        "id": "id_1550328367"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "(",
+                                        "type": "DIV",
+                                        "id": "id_617786849"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00%",
+                                        "type": "SPAN",
+                                        "id": "id_1550328398"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": ")",
+                                        "type": "DIV",
+                                        "id": "id_617786849"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "YoY",
+                                        "type": "DIV",
+                                        "id": "id_3863565861"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "SPAN",
+                                        "id": "id_1732160527"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "(",
+                                        "type": "DIV",
+                                        "id": "id_2957055937"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00%",
+                                        "type": "SPAN",
+                                        "id": "id_1732160558"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": ")",
+                                        "type": "DIV",
+                                        "id": "id_2957055937"
+                                    }
+                                ],
+                                "notInView": true,
+                                "id": "id_3152144223"
+                            },
+                            {
+                                "tag": "container",
+                                "name": "kpi-box-item",
+                                "type": "div",
+                                "rect": {
+                                    "left": 79,
+                                    "top": 631,
+                                    "width": 213,
+                                    "height": 150
+                                },
+                                "children": [
+                                    {
+                                        "tag": "text",
+                                        "name": "As Of Date :",
+                                        "type": "SPAN",
+                                        "id": "id_3279015124"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "-",
+                                        "type": "SPAN",
+                                        "id": "id_3279015155"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "Yearly Average Loans",
+                                        "type": "DIV",
+                                        "id": "id_1392237250"
+                                    },
+                                    {
+                                        "tag": "input",
+                                        "type": "checkbox",
+                                        "rect": {
+                                            "left": 246,
+                                            "top": 675,
+                                            "width": 0,
+                                            "height": 0
+                                        },
+                                        "value": "on",
+                                        "checked": true,
+                                        "id": "id_226622463"
+                                    },
+                                    {
+                                        "tag": "input",
+                                        "type": "checkbox",
+                                        "rect": {
+                                            "left": 246,
+                                            "top": 675,
+                                            "width": 0,
+                                            "height": 0
+                                        },
+                                        "value": "on",
+                                        "checked": true,
+                                        "id": "id_226622463"
+                                    },
+                                    {
+                                        "tag": "div",
+                                        "name": "el-switch__action",
+                                        "type": "button",
+                                        "rect": {
+                                            "left": 268,
+                                            "top": 667,
+                                            "width": 15,
+                                            "height": 15
+                                        },
+                                        "notInView": true,
+                                        "id": "id_1206589431"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "P",
+                                        "id": "id_1967956800"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "HKE’000",
+                                        "type": "SPAN",
+                                        "id": "id_1097638522"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "MoM",
+                                        "type": "DIV",
+                                        "id": "id_2895954182"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "SPAN",
+                                        "id": "id_3500628622"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "(",
+                                        "type": "DIV",
+                                        "id": "id_363050304"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00%",
+                                        "type": "SPAN",
+                                        "id": "id_3500628653"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": ")",
+                                        "type": "DIV",
+                                        "id": "id_363050304"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "YoY",
+                                        "type": "DIV",
+                                        "id": "id_3608829316"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "SPAN",
+                                        "id": "id_809476944"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "(",
+                                        "type": "DIV",
+                                        "id": "id_3307855874"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00%",
+                                        "type": "SPAN",
+                                        "id": "id_809476975"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": ")",
+                                        "type": "DIV",
+                                        "id": "id_3307855874"
+                                    }
+                                ],
+                                "notInView": true,
+                                "id": "id_3152144254"
+                            },
+                            {
+                                "tag": "container",
+                                "name": "kpi-box-item",
+                                "type": "div",
+                                "rect": {
+                                    "left": 293,
+                                    "top": 631,
+                                    "width": 228,
+                                    "height": 150
+                                },
+                                "children": [
+                                    {
+                                        "tag": "text",
+                                        "name": "As Of Date :",
+                                        "type": "SPAN",
+                                        "id": "id_3310034931"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "-",
+                                        "type": "SPAN",
+                                        "id": "id_3310034962"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "No. of Dormant Customers",
+                                        "type": "DIV",
+                                        "id": "id_3609995203"
+                                    },
+                                    {
+                                        "tag": "input",
+                                        "type": "checkbox",
+                                        "rect": {
+                                            "left": 474,
+                                            "top": 675,
+                                            "width": 0,
+                                            "height": 0
+                                        },
+                                        "value": "on",
+                                        "checked": true,
+                                        "id": "id_1252114462"
+                                    },
+                                    {
+                                        "tag": "input",
+                                        "type": "checkbox",
+                                        "rect": {
+                                            "left": 474,
+                                            "top": 675,
+                                            "width": 0,
+                                            "height": 0
+                                        },
+                                        "value": "on",
+                                        "checked": true,
+                                        "id": "id_1252114462"
+                                    },
+                                    {
+                                        "tag": "div",
+                                        "name": "el-switch__action",
+                                        "type": "button",
+                                        "rect": {
+                                            "left": 496,
+                                            "top": 667,
+                                            "width": 15,
+                                            "height": 15
+                                        },
+                                        "notInView": true,
+                                        "id": "id_1536355192"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0",
+                                        "type": "P",
+                                        "id": "id_3212721281"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "MoM",
+                                        "type": "DIV",
+                                        "id": "id_818744839"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "SPAN",
+                                        "id": "id_1155961581"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "(",
+                                        "type": "DIV",
+                                        "id": "id_108313759"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00%",
+                                        "type": "SPAN",
+                                        "id": "id_1155961612"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": ")",
+                                        "type": "DIV",
+                                        "id": "id_108313759"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "YoY",
+                                        "type": "DIV",
+                                        "id": "id_3354092771"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "SPAN",
+                                        "id": "id_4181760657"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "(",
+                                        "type": "DIV",
+                                        "id": "id_3658655811"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00%",
+                                        "type": "SPAN",
+                                        "id": "id_4181760688"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": ")",
+                                        "type": "DIV",
+                                        "id": "id_3658655811"
+                                    }
+                                ],
+                                "notInView": true,
+                                "id": "id_3152144285"
+                            },
+                            {
+                                "tag": "container",
+                                "name": "kpi-box-item",
+                                "type": "div",
+                                "rect": {
+                                    "left": 521,
+                                    "top": 631,
+                                    "width": 228,
+                                    "height": 150
+                                },
+                                "children": [
+                                    {
+                                        "tag": "text",
+                                        "name": "As Of Date :",
+                                        "type": "SPAN",
+                                        "id": "id_3341054738"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "-",
+                                        "type": "SPAN",
+                                        "id": "id_3341054769"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "Yearly Average Deposits",
+                                        "type": "DIV",
+                                        "id": "id_1532785860"
+                                    },
+                                    {
+                                        "tag": "input",
+                                        "type": "checkbox",
+                                        "rect": {
+                                            "left": 702,
+                                            "top": 675,
+                                            "width": 0,
+                                            "height": 0
+                                        },
+                                        "value": "on",
+                                        "checked": true,
+                                        "id": "id_2277606461"
+                                    },
+                                    {
+                                        "tag": "input",
+                                        "type": "checkbox",
+                                        "rect": {
+                                            "left": 702,
+                                            "top": 675,
+                                            "width": 0,
+                                            "height": 0
+                                        },
+                                        "value": "on",
+                                        "checked": true,
+                                        "id": "id_2277606461"
+                                    },
+                                    {
+                                        "tag": "div",
+                                        "name": "el-switch__action",
+                                        "type": "button",
+                                        "rect": {
+                                            "left": 724,
+                                            "top": 667,
+                                            "width": 15,
+                                            "height": 15
+                                        },
+                                        "notInView": true,
+                                        "id": "id_1866120953"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "P",
+                                        "id": "id_162518466"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "HKE’000",
+                                        "type": "SPAN",
+                                        "id": "id_1159678136"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "MoM",
+                                        "type": "DIV",
+                                        "id": "id_3036502792"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "SPAN",
+                                        "id": "id_3106261836"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "(",
+                                        "type": "DIV",
+                                        "id": "id_4148544510"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00%",
+                                        "type": "SPAN",
+                                        "id": "id_3106261867"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": ")",
+                                        "type": "DIV",
+                                        "id": "id_4148544510"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "YoY",
+                                        "type": "DIV",
+                                        "id": "id_3099356226"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00",
+                                        "type": "SPAN",
+                                        "id": "id_3259077074"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "(",
+                                        "type": "DIV",
+                                        "id": "id_4009455748"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": "0.00%",
+                                        "type": "SPAN",
+                                        "id": "id_3259077105"
+                                    },
+                                    {
+                                        "tag": "text",
+                                        "name": ")",
+                                        "type": "DIV",
+                                        "id": "id_4009455748"
+                                    }
+                                ],
+                                "notInView": true,
+                                "id": "id_3152144316"
+                            }
+                        ],
+                        "notInView": true,
+                        "id": "id_1655443204"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "My Followings",
+                        "type": "DIV",
+                        "id": "id_199878951"
+                    },
+                    {
+                        "tag": "div",
+                        "name": "button-group-right",
+                        "type": "button",
+                        "rect": {
+                            "left": 907,
+                            "top": 414,
+                            "width": 146,
+                            "height": 35
+                        },
+                        "id": "id_720057795"
+                    },
+                    {
+                        "tag": "image-button",
+                        "rect": {
+                            "left": 844,
+                            "top": 505,
+                            "width": 160,
+                            "height": 119
+                        },
+                        "notInView": true,
+                        "id": "id_949496637"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "No Data",
+                        "type": "P",
+                        "id": "id_3703571390"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Performance Analysis",
+                        "type": "DIV",
+                        "id": "id_2456789958"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Income",
+                        "type": "DIV",
+                        "id": "id_3927483211"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Loans",
+                        "type": "DIV",
+                        "id": "id_876297613"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Deposits",
+                        "type": "DIV",
+                        "id": "id_464384311"
+                    },
+                    {
+                        "tag": "select",
+                        "type": "select",
+                        "placeholder": "MTD",
+                        "name": "Calculation Type",
+                        "id": "id_2585948927"
+                    },
+                    {
+                        "tag": "select",
+                        "type": "select",
+                        "placeholder": "Monthly",
+                        "name": "Display By",
+                        "id": "id_544819059"
+                    },
+                    {
+                        "tag": "image-button",
+                        "rect": {
+                            "left": 489,
+                            "top": 1028,
+                            "width": 160,
+                            "height": 119
+                        },
+                        "notInView": true,
+                        "id": "id_3537411576"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "No Data",
+                        "type": "P",
+                        "id": "id_2324555875"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Customer Ranking",
+                        "type": "DIV",
+                        "id": "id_2933016140"
+                    },
+                    {
+                        "tag": "input",
+                        "type": "text",
+                        "rect": {
+                            "left": 102,
+                            "top": 1282,
+                            "width": 432,
+                            "height": 37
+                        },
+                        "placeholder": "Please select",
+                        "id": "id_2324476481"
+                    },
+                    {
+                        "tag": "input",
+                        "type": "text",
+                        "rect": {
+                            "left": 102,
+                            "top": 1282,
+                            "width": 432,
+                            "height": 37
+                        },
+                        "placeholder": "Please select",
+                        "id": "id_2324476481"
+                    },
+                    {
+                        "tag": "button",
+                        "name": "el-button",
+                        "type": "button",
+                        "rect": {
+                            "left": 546,
+                            "top": 1283,
+                            "width": 45,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_3788684193"
+                    },
+                    {
+                        "tag": "button",
+                        "name": " Export",
+                        "type": "button",
+                        "rect": {
+                            "left": 952,
+                            "top": 1281,
+                            "width": 94,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_3576438685"
+                    },
+                    {
+                        "tag": "table-box",
+                        "rect": {
+                            "left": 91,
+                            "top": 1341,
+                            "width": 1240,
+                            "height": 39
+                        }
+                    },
+                    {
+                        "tag": "text",
+                        "name": "No Data",
+                        "type": "SPAN",
+                        "id": "id_3905309750"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Total 0",
+                        "type": "SPAN",
+                        "id": "id_1402447283"
+                    },
+                    {
+                        "tag": "select",
+                        "name": "5/page",
+                        "type": "dynamics-select",
+                        "id": "id_3504557780"
+                    },
+                    {
+                        "tag": "button",
+                        "name": "btn-prev",
+                        "type": "button",
+                        "rect": {
+                            "left": 806,
+                            "top": 1455,
+                            "width": 31,
+                            "height": 31
+                        },
+                        "disabled": true,
+                        "notInView": true,
+                        "id": "id_4087910219"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "1",
+                        "type": "LI",
+                        "id": "id_2014310091"
+                    },
+                    {
+                        "tag": "button",
+                        "name": "btn-next",
+                        "type": "button",
+                        "rect": {
+                            "left": 886,
+                            "top": 1455,
+                            "width": 31,
+                            "height": 31
+                        },
+                        "disabled": true,
+                        "notInView": true,
+                        "id": "id_4087910250"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Go to",
+                        "type": "SPAN",
+                        "id": "id_385616447"
+                    },
+                    {
+                        "tag": "div",
+                        "name": "el-input el-input--default el-pagination__editor is-in-pagination",
+                        "type": "button",
+                        "rect": {
+                            "left": 982,
+                            "top": 1453,
+                            "width": 55,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_3533186931"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Income",
+                        "type": "DIV",
+                        "id": "id_3927483211"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Loans",
+                        "type": "DIV",
+                        "id": "id_876297613"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Deposits",
+                        "type": "DIV",
+                        "id": "id_464384311"
+                    },
+                    {
+                        "tag": "select",
+                        "type": "select",
+                        "placeholder": "MTD",
+                        "name": "Calculation Type",
+                        "id": "id_2585948927"
+                    },
+                    {
+                        "tag": "select",
+                        "type": "select",
+                        "placeholder": "Monthly",
+                        "name": "Display By",
+                        "id": "id_544819059"
+                    },
+                    {
+                        "tag": "image-button",
+                        "rect": {
+                            "left": 489,
+                            "top": 1028,
+                            "width": 160,
+                            "height": 119
+                        },
+                        "notInView": true,
+                        "id": "id_3537411576"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "No Data",
+                        "type": "P",
+                        "id": "id_2324555875"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Customer Ranking",
+                        "type": "DIV",
+                        "id": "id_2933016140"
+                    },
+                    {
+                        "tag": "input",
+                        "type": "text",
+                        "rect": {
+                            "left": 102,
+                            "top": 1282,
+                            "width": 432,
+                            "height": 37
+                        },
+                        "placeholder": "Please select",
+                        "id": "id_2324476481"
+                    },
+                    {
+                        "tag": "input",
+                        "type": "text",
+                        "rect": {
+                            "left": 102,
+                            "top": 1282,
+                            "width": 432,
+                            "height": 37
+                        },
+                        "placeholder": "Please select",
+                        "id": "id_2324476481"
+                    },
+                    {
+                        "tag": "button",
+                        "name": "el-button",
+                        "type": "button",
+                        "rect": {
+                            "left": 546,
+                            "top": 1283,
+                            "width": 45,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_3788684193"
+                    },
+                    {
+                        "tag": "button",
+                        "name": " Export",
+                        "type": "button",
+                        "rect": {
+                            "left": 952,
+                            "top": 1281,
+                            "width": 94,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_3576438685"
+                    },
+                    {
+                        "tag": "table-box",
+                        "rect": {
+                            "left": 91,
+                            "top": 1341,
+                            "width": 1240,
+                            "height": 39
+                        }
+                    },
+                    {
+                        "tag": "text",
+                        "name": "No Data",
+                        "type": "SPAN",
+                        "id": "id_3905309750"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Total 0",
+                        "type": "SPAN",
+                        "id": "id_1402447283"
+                    },
+                    {
+                        "tag": "select",
+                        "name": "5/page",
+                        "type": "dynamics-select",
+                        "id": "id_3504557780"
+                    },
+                    {
+                        "tag": "button",
+                        "name": "btn-prev",
+                        "type": "button",
+                        "rect": {
+                            "left": 806,
+                            "top": 1455,
+                            "width": 31,
+                            "height": 31
+                        },
+                        "disabled": true,
+                        "notInView": true,
+                        "id": "id_4087910219"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "1",
+                        "type": "LI",
+                        "id": "id_2014310091"
+                    },
+                    {
+                        "tag": "button",
+                        "name": "btn-next",
+                        "type": "button",
+                        "rect": {
+                            "left": 886,
+                            "top": 1455,
+                            "width": 31,
+                            "height": 31
+                        },
+                        "disabled": true,
+                        "notInView": true,
+                        "id": "id_4087910250"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Go to",
+                        "type": "SPAN",
+                        "id": "id_385616447"
+                    },
+                    {
+                        "tag": "div",
+                        "name": "el-input el-input--default el-pagination__editor is-in-pagination",
+                        "type": "button",
+                        "rect": {
+                            "left": 982,
+                            "top": 1453,
+                            "width": 55,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_3533186931"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Tasks",
+                        "type": "DIV",
+                        "id": "id_418733669"
+                    },
+                    {
+                        "tag": "div",
+                        "name": "button-group-right",
+                        "type": "button",
+                        "rect": {
+                            "left": 123,
+                            "top": 1520,
+                            "width": 931,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_860606405"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "My Received Tasks",
+                        "type": "DIV",
+                        "id": "id_2568117859"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "My Created Tasks",
+                        "type": "DIV",
+                        "id": "id_1505747154"
+                    },
+                    {
+                        "tag": "table-box",
+                        "rect": {
+                            "left": 79,
+                            "top": 1626,
+                            "width": 1050,
+                            "height": 62
+                        }
+                    },
+                    {
+                        "tag": "text",
+                        "name": "No Data",
+                        "type": "SPAN",
+                        "id": "id_3304603669"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "My Received Tasks",
+                        "type": "DIV",
+                        "id": "id_2568117859"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "My Created Tasks",
+                        "type": "DIV",
+                        "id": "id_1505747154"
+                    },
+                    {
+                        "tag": "table-box",
+                        "rect": {
+                            "left": 79,
+                            "top": 1626,
+                            "width": 1050,
+                            "height": 62
+                        }
+                    },
+                    {
+                        "tag": "text",
+                        "name": "No Data",
+                        "type": "SPAN",
+                        "id": "id_3304603669"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Alerts",
+                        "type": "DIV",
+                        "id": "id_2675644676"
+                    },
+                    {
+                        "tag": "div",
+                        "name": "button-group-right",
+                        "type": "button",
+                        "rect": {
+                            "left": 126,
+                            "top": 1809,
+                            "width": 927,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_3078364358"
+                    },
+                    {
+                        "tag": "table-box",
+                        "rect": {
+                            "left": 79,
+                            "top": 1860,
+                            "width": 978,
+                            "height": 39
+                        },
+                        "children": [
+                            {
+                                "tag": "table-header",
+                                "type": "table-header",
+                                "text": "No.",
+                                "isHeader": true,
+                                "id": "id_2181842003"
+                            },
+                            {
+                                "tag": "table-header",
+                                "type": "table-header",
+                                "text": "Alert Name",
+                                "isHeader": true,
+                                "id": "id_2181842034"
+                            },
+                            {
+                                "tag": "table-header",
+                                "type": "table-header",
+                                "text": "Received Date",
+                                "isHeader": true,
+                                "id": "id_2181842065"
+                            },
+                            {
+                                "tag": "table-header",
+                                "type": "table-header",
+                                "text": "Status",
+                                "isHeader": true,
+                                "id": "id_2181842096"
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "text",
+                        "name": "No Data",
+                        "type": "SPAN",
+                        "id": "id_3974542328"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Calendar",
+                        "type": "DIV",
+                        "id": "id_637588387"
+                    },
+                    {
+                        "tag": "select",
+                        "name": "HK",
+                        "type": "dynamics-select",
+                        "id": "id_1482362953"
+                    },
+                    {
+                        "tag": "button",
+                        "name": "Today",
+                        "type": "button",
+                        "rect": {
+                            "left": 331,
+                            "top": 1991,
+                            "width": 43,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_174874746"
+                    },
+                    {
+                        "tag": "button",
+                        "name": "el-button el-button--small is-link",
+                        "type": "button",
+                        "rect": {
+                            "left": 93,
+                            "top": 2050,
+                            "width": 35,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_3504951921"
+                    },
+                    {
+                        "tag": "container",
+                        "name": "time-show-box-date",
+                        "type": "span",
+                        "rect": {
+                            "left": 203,
+                            "top": 2058,
+                            "width": 52,
+                            "height": 19
+                        },
+                        "children": [
+                            {
+                                "tag": "text",
+                                "name": "2026-01",
+                                "type": "SPAN",
+                                "id": "id_1276528334"
+                            }
+                        ],
+                        "notInView": true,
+                        "id": "id_1276528334"
+                    },
+                    {
+                        "tag": "button",
+                        "name": "el-button el-button--small is-link",
+                        "type": "button",
+                        "rect": {
+                            "left": 328,
+                            "top": 2050,
+                            "width": 35,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_3504951952"
+                    },
+                    {
+                        "tag": "table-box",
+                        "rect": {
+                            "left": 87,
+                            "top": 2107,
+                            "width": 282,
+                            "height": 410
+                        },
+                        "children": [
+                            {
+                                "type": "table-row",
+                                "children": [
+                                    {
+                                        "type": "cell",
+                                        "text": "28",
+                                        "name": "28",
+                                        "headerIndex": 0,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_2487466153"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "29",
+                                        "name": "29",
+                                        "headerIndex": 1,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_2487466184"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "30",
+                                        "name": "30",
+                                        "headerIndex": 2,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_2487466215"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "31",
+                                        "name": "31",
+                                        "headerIndex": 3,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_2487466246"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "1",
+                                        "name": "1",
+                                        "headerIndex": 4,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_2487466277"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "2",
+                                        "name": "2",
+                                        "headerIndex": 5,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_2487466308"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "3",
+                                        "name": "3",
+                                        "headerIndex": 6,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_2487466339"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "table-row",
+                                "children": [
+                                    {
+                                        "type": "cell",
+                                        "text": "4",
+                                        "name": "4",
+                                        "headerIndex": 0,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_4230276488"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "5",
+                                        "name": "5",
+                                        "headerIndex": 1,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_4230276519"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "6",
+                                        "name": "6",
+                                        "headerIndex": 2,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_4230276550"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "7",
+                                        "name": "7",
+                                        "headerIndex": 3,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_4230276581"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "8",
+                                        "name": "8",
+                                        "headerIndex": 4,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_4230276612"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "9",
+                                        "name": "9",
+                                        "headerIndex": 5,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_4230276643"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "10",
+                                        "name": "10",
+                                        "headerIndex": 6,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_4230276674"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "table-row",
+                                "children": [
+                                    {
+                                        "type": "cell",
+                                        "text": "11",
+                                        "name": "11",
+                                        "headerIndex": 0,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_1678119527"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "12",
+                                        "name": "12",
+                                        "headerIndex": 1,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_1678119558"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "13",
+                                        "name": "13",
+                                        "headerIndex": 2,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_1678119589"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "14",
+                                        "name": "14",
+                                        "headerIndex": 3,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_1678119620"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "15",
+                                        "name": "15",
+                                        "headerIndex": 4,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_1678119651"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "16",
+                                        "name": "16",
+                                        "headerIndex": 5,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_1678119682"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "17",
+                                        "name": "17",
+                                        "headerIndex": 6,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_1678119713"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "table-row",
+                                "children": [
+                                    {
+                                        "type": "cell",
+                                        "text": "18",
+                                        "name": "18",
+                                        "headerIndex": 0,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_3420929862"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "19",
+                                        "name": "19",
+                                        "headerIndex": 1,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_3420929893"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "20",
+                                        "name": "20",
+                                        "headerIndex": 2,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_3420929924"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "21",
+                                        "name": "21",
+                                        "headerIndex": 3,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_3420929955"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "22",
+                                        "name": "22",
+                                        "headerIndex": 4,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_3420929986"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "23",
+                                        "name": "23",
+                                        "headerIndex": 5,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_3420930017"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "24",
+                                        "name": "24",
+                                        "headerIndex": 6,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_3420930048"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "table-row",
+                                "children": [
+                                    {
+                                        "type": "cell",
+                                        "text": "25",
+                                        "name": "25",
+                                        "headerIndex": 0,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_868772901"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "26",
+                                        "name": "26",
+                                        "headerIndex": 1,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_868772932"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "27",
+                                        "name": "27",
+                                        "headerIndex": 2,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_868772963"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "28",
+                                        "name": "28",
+                                        "headerIndex": 3,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_868772994"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "29",
+                                        "name": "29",
+                                        "headerIndex": 4,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_868773025"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "30",
+                                        "name": "30",
+                                        "headerIndex": 5,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_868773056"
+                                    },
+                                    {
+                                        "type": "cell",
+                                        "text": "31",
+                                        "name": "31",
+                                        "headerIndex": 6,
+                                        "containsPointerButton": true,
+                                        "tag": "button",
+                                        "id": "id_868773087"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "tag": "button",
+                        "name": "el-button is-link",
+                        "type": "button",
+                        "rect": {
+                            "left": 643,
+                            "top": 1991,
+                            "width": 29,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_2236939372"
+                    },
+                    {
+                        "tag": "button",
+                        "name": "el-button is-link",
+                        "type": "button",
+                        "rect": {
+                            "left": 684,
+                            "top": 1991,
+                            "width": 29,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_2236939403"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Visit Report",
+                        "type": "DIV",
+                        "id": "id_3343006710"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Schedule",
+                        "type": "DIV",
+                        "id": "id_1671803289"
+                    },
+                    {
+                        "tag": "image-button",
+                        "rect": {
+                            "left": 489,
+                            "top": 2082,
+                            "width": 160,
+                            "height": 119
+                        },
+                        "notInView": true,
+                        "id": "id_2319124340"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "No Data",
+                        "type": "P",
+                        "id": "id_3212357223"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Visit Report",
+                        "type": "DIV",
+                        "id": "id_3343006710"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Schedule",
+                        "type": "DIV",
+                        "id": "id_1671803289"
+                    },
+                    {
+                        "tag": "image-button",
+                        "rect": {
+                            "left": 489,
+                            "top": 2082,
+                            "width": 160,
+                            "height": 119
+                        },
+                        "notInView": true,
+                        "id": "id_2319124340"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "No Data",
+                        "type": "P",
+                        "id": "id_3212357223"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "What's New",
+                        "type": "DIV",
+                        "id": "id_1874088116"
+                    },
+                    {
+                        "tag": "div",
+                        "name": "button-group-right",
+                        "type": "button",
+                        "rect": {
+                            "left": 856,
+                            "top": 1991,
+                            "width": 197,
+                            "height": 35
+                        },
+                        "notInView": true,
+                        "id": "id_3925051158"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "Product Catalog:",
+                        "type": "SPAN",
+                        "id": "id_3123539630"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "关于银行……",
+                        "type": "SPAN",
+                        "id": "id_3123539661"
+                    },
+                    {
+                        "tag": "text",
+                        "name": "2023-02-20",
+                        "type": "P",
+                        "id": "id_2863615231"
+                    }
+                ],
+                "id": "id_3634129341"
+            }
+        ],
+        "id": "id_3984487101"
+    },
+    {
+        "tag": "link",
+        "pageUrl": "http://172.18.2.14:5172/main"
+    },
+    {
+        "pageTitle": "Enterprise Customer Relationships"
+    }
+]

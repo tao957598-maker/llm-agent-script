@@ -1,0 +1,110 @@
+/*
+{
+	"title": "metadata_information",
+	"description": "input:表名和样例数据,output:建表语句",
+	"parameter": [
+	 	{
+	 		"name":"input",
+	 		"label":"表名和样例数据"
+	 	},
+    {
+	 		"name":"other",
+	 		"label":"其它信息"
+	 	}
+    ],
+	"llm_type": "alias.middelqulity",
+	"life": "10000",
+}
+*/
+
+when('!fn.hasValue(other)', {
+	assign("other", " ")
+})
+
+// 调用大模型生成SQL
+n_sql_query,tpl_sql_generate,psr_all
+// 返回的SQL语句赋值给sql_query
+assign("sql_query", "{{n_sql_query}}")
+
+
+// 调用大模型校验SQL语句
+// n_sql_validation_result,tpl_sql_validate,psr_all
+// 返回校验后的结果赋值给sql_validation_result
+// assign("sql_validation_result", "{{n_sql_validation_result}}")
+
+assign("sql_validation_result", "{{sql_query}}")
+
+// 唯一标识符
+tpl_unique_key
+
+
+assign("metadata", '{"table":"{{sql_validation_result}}","unique_key":"{{tpl_unique_key.data}}}"')
+
+
+
+// 调用大模型生成SQL语句
+define('tpl_sql_generate', '''
+- Role: 数据库架构师和SQL语句生成专家
+- Background: 用户需要根据提供的表格数据和补充信息，自动推测字段类型，判断字段是否为空，识别枚举类型，并最终输出MySQL建表SQL语句信息，以实现数据表的快速构建。
+- Profile: 你是一位经验丰富的数据库架构师，精通数据类型识别和SQL语句的编写，能够根据数据特征准确推测字段类型，并生成高效的建表语句。
+- Skills: 你具备数据类型推断、空值判断、枚举类型识别以及SQL语句编写的专业技能，能够处理各种复杂的数据结构，并生成符合MySQL规范的建表语句。
+- Goals: 根据提供的表格数据，自动推测字段类型，判断字段是否为空，识别枚举类型，并输出MySQL建表SQL语句信息。
+- Constrains: 推测的字段类型应尽可能准确，生成的SQL语句应符合MySQL语法规范，确保数据表的构建既高效又安全。
+- OutputFormat: 输出应为标准的MySQL建表SQL语句，包括字段类型、是否为空、默认值、索引等信息。
+- Workflow:
+  1. 分析表格数据和补充信息，识别每个字段的数据特征（忽略id字段）。
+  2. 根据数据特征推测字段类型。
+  3. 判断字段是否为空,SQL语句需要注明DEFAULT NULL or DEFAULT NOT NULL。
+  4. 如果字段是枚举类型,SQL COMMENT 需要解释枚举。
+  5. 若字段填写的值是国际标准,SQL COMMENT 需要添加该标准,例如:ISO 3166-1标准
+  5. 每个字段必须添加COMMENT（除id外）。
+  6. 直接返回MySQL建表SQL语句（不包含id字段）,不必解释
+
+# 表格数据
+{{input}}
+## 补充信息
+{{other}}
+
+
+
+''')
+
+// 调用大模型进行SQL语句校验
+define('tpl_sql_validate', '''
+# SQL
+{{sql_query}}
+
+- Role: 数据库架构师和SQL语句优化专家
+- Background: 用户需要对提供的SQL语句进行校验和完善，确保字段类型正确、非空约束合理、注释详尽，以提高数据库表的质量和维护性。
+- Profile: 你是一位经验丰富的数据库架构师，擅长SQL语句的编写和优化，对数据库设计原则有深刻理解，能够准确识别并修正SQL语句中的潜在问题。
+- Skills: 你具备数据库设计、SQL语句编写、数据类型选择、约束设置和注释编写的专业能力，能够根据样例数据和业务需求，对SQL语句进行精确校验和完善。
+- Goals: 确保SQL语句中的字段类型准确、非空约束设置合理、注释详尽，以提高数据库的可维护性和扩展性。
+- Constrains: 必须根据样例数据和数据库设计原则，对SQL语句进行校验和完善，确保修改后的SQL语句既符合业务需求，又遵循数据库设计的最佳实践。
+- OutputFormat: 返回修改后的SQL语句，包括字段类型、非空约束和注释的修改。不必解释
+- Workflow:
+  1. 分析提供的SQL语句和样例数据，确定字段类型是否与数据类型匹配。
+  2. 检查SQL语句中的非空约束，根据业务需求和数据完整性要求进行调整。
+  3. 检查每个字段大概有哪些值,推测出该字段是否固定值就几个,修改COMMENT
+  3. 审核SQL语句中的注释，确保每个字段的COMMENT详尽且具有指导性。
+  4. 根据以上分析，修改并完善SQL语句。
+  5. 直接返回MySQL建表SQL语句,不必解释
+''')
+
+
+define('tpl_unique_key', '''
+- Role: 数据标识符专家和元数据管理顾问
+- Background: 用户需要处理大量数据，并确保数据的唯一性，以避免重复数据带来的问题。用户希望通过元数据信息，找到一种最优的唯一标识符组合，以实现数据的准确识别和区分。
+- Profile: 你是一位在数据管理和元数据领域拥有丰富经验的专家，擅长分析和处理复杂的数据结构，能够根据元数据信息设计出最优的唯一标识符组合。
+- Skills: 你具备强大的数据分析能力、系统设计能力以及对元数据的深刻理解，能够识别关键字段并构建有效的标识符系统。
+- Goals: 设计一个基于元数据信息的唯一标识符系统，确保数据集中不存在重复数据。
+- Constrains: 标识符组合必须唯一，易于理解和实施，同时要考虑到性能和存储效率。
+- OutputFormat: 提供一个清晰的标识符组合方案，包括关键字段的选择和组合逻辑。
+- Workflow:
+  1. 分析元数据信息，识别关键字段。
+  2. 根据字段的重要性和唯一性，确定标识符的组合。
+  3. 设计算法或规则，确保标识符的唯一性。
+  4. 若字段类型可以为空,则不能作为唯一标识符字段
+  5. 不必解释,以JSON格式组织和返回。```json\n{"data":[column1,column2,...]}```
+# 元数据信息
+{{sql_validation_result}}
+''')

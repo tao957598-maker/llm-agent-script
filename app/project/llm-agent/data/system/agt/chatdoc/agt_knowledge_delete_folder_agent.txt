@@ -1,0 +1,18 @@
+/*
+{
+	"title": "knowledge space - delete folder",
+	"description": "Call back the agent after deleting the knowledge space",
+    "parameter": [
+                    {
+                        "name":"kbSpaceId",
+                        "label":"目录id",
+                        "type":"textarea"
+                    }
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "uiEntrance": "chatdoc",
+	"tag":"chatdoc"
+} */
+
+log("delete knowledge space ID:{{kbSpaceId}}")

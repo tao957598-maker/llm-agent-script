@@ -1,0 +1,151 @@
+/*
+{
+	"title":"Loop Generate Step Test",
+	"description":"生成测试步骤",
+	"parameter":[
+		{
+			"name":"insert_spider_data",
+			"label":"待插入spider表json数据",
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"spider",
+	"displayOrder":2,
+	"version":1
+}
+*/
+
+assign('n_spider_data', '{{insert_spider_data}}')
+
+"""
+{
+    # 任务表
+    "system_name":"",       # 项目名，同一个站点同一个版本使用用一个项目名
+    "base_url":"",          # 基础url，需要拼上uri后才能成为完整的url
+    "current_uri": "",      # 执行前该页面的uri
+    "action_type": "",      # open_url / execute
+    "run_steps":"",         # 执行完该步骤后会发生页面跳转
+    "target_uri": "",       # 目标uri, 执行完任务后得到的页面uri
+    "generate_type": 9,     # int 9：由Python代码补充回写
+
+    # 内容表
+    "collect_data": "",     # 收集元素
+    "title": "",            # 页面标题
+    "text_data": "",        # 文本内容
+    "page_html": "",        # html
+    "screenshot": "",       # 截图 这里放路径，图片需要自行上传
+}
+"""
+
+assign('n_system_name', '{{n_spider_data.system_name}}')
+assign('n_base_url', '{{n_spider_data.base_url}}')
+assign('n_current_uri', '{{n_spider_data.current_uri}}')
+assign('n_action_type', '{{n_spider_data.action_type}}')
+assign('n_run_steps', '{{n_spider_data.run_steps}}')
+assign('n_target_uri', '{{n_spider_data.target_uri}}')
+assign('n_generate_type', '{{n_spider_data.generate_type}}')
+assign('n_collect_data', '{{n_spider_data.collect_data}}')
+assign('n_title', '{{n_spider_data.title}}')
+assign('n_text_data', '{{n_spider_data.text_data}}')
+assign('n_page_html', '{{n_spider_data.page_html}}')
+assign('n_screenshot', '{{n_spider_data.screenshot}}')
+
+
+// 任务表唯一id生成
+assign('n_biz_id_str', '{{n_system_name + n_current_uri + n_target_uri + fn.str(n_run_steps)}}')
+assign('n_biz_id', "{{fn.md5(n_biz_id_str)}}")
+
+// 查询唯一id是否重复
+n_steps_same_biz,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE biz_id = "{{n_new_biz_id}}"'
+when('!fn.hasValue(n_steps_same_biz)', {
+    // 唯一id不存在，开始执行入库流程
+    // 目录id directory_id生成
+    assign('n_directory_id_str', '{{n_system_name + n_target_uri}}')
+    assign('n_directory_id', "{{fn.md5(n_directory_id_str)}}")
+
+    // 查询库内所有目录id，用于计算内容表唯一id、版本号
+    n_content_list,act_kb.selectBy?sql="SELECT content_id, directory_id, collect_data, content_version FROM kb_spiderdeep_content WHERE directory_id = '{{n_directory_id}}'"
+
+    // 内容表唯一id生成，计算是否重复
+    n_same_content, act_func?script='''
+        // 当前页面的 id 集合
+        def currentIds = n_collect_data
+                .findAll { it.containsKey('id') }
+                .collect { it.id }
+                .toSet()
+        def maxVersion = 0
+        def res = [:]
+        for (item in n_content_list) {
+            def libData = item.collect_data
+            def version = item.content_version ?: 0
+            maxVersion = Math.max(maxVersion, version)
+            def libIds_str = fn.str(libData,"id")
+            // .toSet() 会先去重再排序
+            def libIds_list = fn.list(libIds_str).findAll { it != null }.toSet()
+
+            // id 完全一致（忽略顺序）
+            if (currentIds == libIds_list) {
+                res.have_content = true
+                res.directory_id = item.directory_id
+                res.content_id = item.content_id
+                return res
+            }
+        }
+
+        // 都不匹配，返回最大版本号 + 1
+        def newVersion = maxVersion + 1
+        def contentId = "${n_directory_id}${newVersion}".md5()
+
+        res.have_content = false
+        res.max_version = newVersion
+        res.directory_id = n_directory_id
+        res.content_id = contentId
+        return res
+    '''
+
+    when("n_same_content.have_content != true", {
+        // 本内容为首次进入，内容表数据构建
+        n_save_content, act_func?script='''
+            def res = [:]
+            res.content_id = n_same_content.content_id
+            res.content_version = n_same_content.max_version
+
+            res.directory_id = n_same_content.directory_id
+            res.system_name = n_system_name
+            res.collect_data = n_collect_data
+            res.base_url = n_base_url
+            res.current_uri = n_target_uri      // 内容表的当前uri等于任务表的目标uri
+            res.title = n_title
+            res.text_data = n_text_data
+            res.page_html = n_page_html
+            res.screenshot = n_screenshot
+
+            return res
+        '''
+        // 入内容表
+        act_kb.defineAndImportData?tableName=kb_spiderdeep_content&data='{{n_save_content}}'
+    })
+
+    // 构建任务表数据
+    n_save_directory_data, act_func?script='''
+        def res = [:]
+        res.biz_id = n_biz_id
+        res.directory_id = n_same_content.directory_id
+        res.content_id = n_same_content.content_id
+
+        res.system_name = n_system_name
+        res.base_url = n_base_url
+        res.current_uri = n_current_uri
+        res.action_type = n_action_type
+        res.run_steps = n_run_steps
+        res.target_uri = n_target_uri
+        res.run_success = 1     // 手动插入的数据认定为执行成功 1
+        res.generate_type = n_generate_type
+
+        return res
+    '''
+    // 入任务表
+    act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{n_save_directory_data}}'
+})
+

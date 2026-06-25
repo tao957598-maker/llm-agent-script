@@ -1,0 +1,491 @@
+/*
+{
+	"title":"Test Step Generation",
+	"description":"Generate test steps",
+	"parameter":[
+		{
+			"name":"system",
+			"label":"系统名称",
+			"required":true
+		},
+		{
+			"name":"test_no",
+			"label":"测试编号",
+			"required":true
+		},
+		{
+			"name":"version",
+			"label":"Version"
+		},
+		{
+			"name":"steps",
+			"label":"测试步骤",
+			"required":true,
+			"type":"textarea"
+		},
+		{
+			"name":"expected_result",
+			"label":"Expect Result",
+			"type":"textarea"
+		},
+		{
+			"name":"force_update",
+			"label":"强制更新",
+			"args":[
+				{
+					"label":"true",
+					"value":true
+				},
+				{
+					"label":"false",
+					"value":false
+				}
+			],
+			"required":true,
+			"type":"select"
+		},
+		{
+			"name":"step_supplement",
+			"label":"Step Supplement Required",
+			"args":[
+				{
+					"label":"False",
+					"value":"false"
+				},
+				{
+					"label":"True",
+					"value":"true"
+				}
+			],
+			"defaultValue":"false",
+			"type":"select",
+			"required":true
+		}
+	],
+	"resultPlan":"n_format_requirement",
+	"life":100,
+	"version":1
+}
+*/
+// Set default url_data
+assign('url_data', 'Nan')
+
+
+// 流程： 保存testcase ==> 更新test steps OR 生成test steps (注： 每次必然更新或重新生成，如需考虑保持原有数据的场景，在agt_test_steps中提前判断)
+// Load business information from KB
+n_envinfo,act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'
+
+// Prepare requirement
+assign('language', '{{fn.str(n_envinfo, "language")}}')
+assign("n_test_requirement", "{{steps!}}{{fn.when(expected_result '\nExpect Result：\n%{expected_result}%')}}")
+
+//# Load existed test case
+n_db_testcase, act_func?script='
+		String[] strs = n_test_requirement.split("Expect Result：")
+		fn.put("steps", strs[0])
+		if (strs.length >= 2) {
+			fn.put("expected_result", strs[1])
+		}
+	',act_kb.select?name=kb_testcase&column='steps,expected_result'&where='{{fn.json("application,system,version,version,test_no,test_no,steps,steps!,expected_result,expected_result!")}}'
+
+//# Load existed test steps
+n_old_steps, act_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("application,system,version,version,test_no,test_no")}}'
+
+// when('{{n_db_testcase?size==0  ', {
+// 	act_flow.fail?result='复查问题'&message=true
+// })
+
+// act_flow.fail?result='复查问题'&message=true
+// 数据库不存在case 或者需求为空 n_test_requirement
+//# Check test case
+when('{{n_db_testcase?size==0 || n_test_requirement?length==0}}', {
+	// 需求为空 n_test_requirement 且 数据库有步骤
+	// Check if empty requirement 
+	when('{{n_test_requirement?length==0 && (n_old_steps![])?size >= 0}}', {	
+		// End flow
+		act_flow.go?plan=end
+	})
+	// 需求为空 n_test_requirement 且 数据库无步骤
+	// delete test case
+	when('{{n_test_requirement?length==0}}', {	
+		// Save empty test case and reset test steps
+		//# 存储测试步骤
+		act_kb.importData?name=kb_testcase&data='{{fn.json("application,system,version,version,test_no,test_no,steps,steps!,expected_result,expected_result!,application,system")}}'&uniqueKey=test_no,act_kb.delete?name=kb_testcase_step&where='{{fn.json("application,system,version,version,test_no,test_no,application,system,version,version")}}' 
+		
+		// End flow
+		act_flow.go?plan=end
+	})
+	
+	//# Load existed test case again
+	n_old_testcase, act_kb.select?name=kb_testcase&column='steps,expected_result'&where='{{fn.json("application,system,version,version,test_no,test_no")}}'
+	
+	// Save new test case and reset test steps
+	//# 存储测试步骤
+	act_kb.importData?name=kb_testcase&data='{{fn.json("application,system,version,version,test_no,test_no,steps,steps,expected_result,expected_result!")}}'&uniqueKey=test_no,act_kb.delete?name=kb_testcase_step&where='{{fn.json("application,system,version,version,test_no,test_no")}}'
+})
+// 数据库存在case 且steps 存在
+// Check test steps
+when('{{(n_old_testcase![])?size > 0 && (n_old_steps![])?size > 0}}', {
+	// Format existed test case when both test case and test steps exist
+	assign('old_testcase', '''
+		{{fn.when(n_old_testcase[0].expected_result, n_old_testcase[0].steps + "\nExpect Result：\n" + n_old_testcase[0].expected_result, n_old_testcase[0].steps)}}
+	''')
+	when('step_supplement==true',{
+	n_url_data,agt_gen_steps_main.test_gen_steps?system_name={{system}}&userInput={{steps}}
+	// Set default url_data
+	assign('url_data', '{{n_url_data}}')
+	})
+	//# Update test steps
+	n_format_requirement, tpl_update_requirement
+
+	// Clean existed plan and save updated plan to KB
+	act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}","application":"{{system}}","version":"{{version}}"}'
+	//# 测试case入库前是什么
+	n_map_list,act_kb.convert?data={{n_format_requirement}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}","application":"{{system}}","version":"{{version}}"}'
+	
+	// 给测试步骤添加类型
+	foreach('map_list_item','n_map_list',{
+		assign('current_step', '{{map_list_item.item}}')
+		n_step_type_tmp,agt_check_step_type.webTestAutomation.test?platform={{current_step.application}}&test_no={{current_step.test_no}}&steps={{n_map_list}}&current_step={{current_step.step}}
+		//# 检查得到的类型
+		log('{{n_step_type_tmp}}')
+		//# 将数据转为str
+		assign('current_step_json', '{{fn.str(current_step)}}')
+		//# 增加执行类型
+		n_tmp,act_func.run?script='''  
+			def type_tmp = n_step_type_tmp
+			def currentItem = current_step_json
+			currentItem.executor = n_step_type_tmp
+			return  currentItem
+		''' 
+		append('n_map_list_add_type', '{{n_tmp}}')
+	})
+	//# 添加完步骤后
+	log('{{n_map_list_add_type}}')
+	//# 补充验证步骤
+	n_supp_steps,agt_supp_step_type?steps={{n_map_list_add_type}}
+	//# 存储测试步骤
+	act_kb.importData?name=kb_testcase_step&data={{n_supp_steps}}
+}, {
+	//# Prepare the test requirement
+	assign('to_check_steps', '{{fn.when(expected_result, steps + "\nExpect Result：\n" + expected_result, steps)}}')
+	// n_force_update
+	n_force_update,act_func?script='
+		return force_update.toBoolean() || n_old_steps.size() == 0
+	'
+	// Check if force_update is true
+	when('{{n_force_update}}', {
+		when('step_supplement==true',{
+		n_url_data,agt_gen_steps_main.test_gen_steps?system_name={{system}}&userInput={{steps}}
+		// Set default url_data
+		assign('url_data', '{{n_url_data}}')
+		})
+		//# Generate new test steps
+		n_format_requirement, tpl_format_requirement
+		// insert data to  kb_testcase
+		//# 存储测试步骤
+		act_kb.importData?name=kb_testcase&data='{{fn.json("application,system,version,version,test_no,test_no,steps,steps,expected_result,expected_result!")}}'&uniqueKey=test_no
+
+		// Clean existed plan and save new plan to KB
+		act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}","application":"{{system}}","version":"{{version}}"}'
+		//# 测试case入库前是什么
+		n_map_list,act_kb.convert?data={{n_format_requirement}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}","application":"{{system}}","version":"{{version}}"}'
+		
+		assign('n_map_list_add_type', '[]')
+		// 给测试步骤添加类型
+		foreach('map_list_item','n_map_list',{
+			assign('current_step', '{{map_list_item.item}}')
+			n_step_type_tmp,agt_check_step_type.webTestAutomation.test?platform={{current_step.application}}&test_no={{current_step.test_no}}&steps={{n_map_list}}&current_step={{current_step.step}}
+			//# 检查得到的类型
+			log('{{n_step_type_tmp}}')
+			//# 将数据转为str
+			assign('current_step_json', '{{fn.str(current_step)}}')
+			//# 增加执行类型
+			n_tmp,act_func.run?script='''  
+				def type_tmp = n_step_type_tmp
+				def currentItem = current_step_json
+				currentItem.executor = n_step_type_tmp
+				return  currentItem
+			''' 
+			append('n_map_list_add_type', '{{n_tmp}}')
+		})
+		//# 添加完步骤后
+		log('{{n_map_list_add_type}}')
+		//# 补充验证步骤
+		n_supp_steps,agt_supp_step_type?steps={{n_map_list_add_type}}
+		//# 存储测试步骤
+		act_kb.importData?name=kb_testcase_step&data={{n_supp_steps}}
+	},{
+		assign('n_format_requirement', '''{{n_old_steps}}''')
+	})
+})
+
+define('tpl_format_requirement', '''
+	/*{
+		"llmType":"alias.highquality"
+	}*/
+- Role: 软件测试流程优化专家
+- Background: 用户需要对测试任务步骤进行拆分和优化，以确保测试过程更加清晰、准确且易于执行，同时满足一系列特定的规则要求。
+- Profile: 你是一位在软件测试领域深耕多年的资深专家，精通测试流程的拆分、优化与步骤描述规范，能够精准把握用户需求，严格遵循既定规则进行操作，确保输出结果的专业性与一致性。
+- Skills: 你具备卓越的逻辑分析能力、细致入微的观察力以及对软件测试流程的深刻洞察力，熟练运用各类测试工具与方法，准确描述用户操作与系统响应，高效完成测试步骤的拆分、整合与合并。
+- Goals:
+  1. 精准识别并拆分可能引发页面变动的操作（如点击按钮、菜单等），使其成为独立步骤
+  2. 确保同一操作步骤中不包含两个及以上点击动作，避免子菜单显隐冲突
+  3. 识别`补充解释`中标记的PAMP操作类型，将多个连续、紧密关联且不引发页面变动的操作合并为单一连贯步骤
+  4. 保持原有逻辑不变，确保步骤描述准确、清晰、可操作
+  5. 以指定语言输出最终步骤列表，并以JSON格式封装
+- Constrains:
+  1. 严格遵循用户提供的拆分、优化与合并规则，禁止随意添加新逻辑或猜测信息
+  2. 前置条件性质的步骤不予拆解，保持其完整性
+  3. 关键内容（按钮、菜单、输入值、下拉选项、复选框、页面关键元素）必须使用``标记
+  4. 页面URL变化或跳转时，必须在[target_id]之前添加(可选注释)
+  5. [target_id]仅在提供明确id时填写，禁止虚构id
+  6. 禁止输出JSON格式以外的额外解释或冗余内容
+  7. 动作词、说明、等待、验证必须严格使用用户指定的单一语言，禁止多语言混用
+  8. 序号从1开始递增，不同序号代表独立步骤
+- Business Integrity Rules:
+  1. Original task is the source of truth. `url_data` is supplementary only and must not override explicit business intent in the original task.
+  2. If `url_data` contains multiple pages, distinguish main execution page vs optional/context pages. Only the main execution page may enter the main step chain unless the original task explicitly requests the optional page.
+  3. Explicit business slots in the original task must be preserved in the final steps, including target page, source account, target account or recipient, amount, and submit action when present.
+  4. If `url_data` conflicts with the original task, follow the original task and use `url_data` only to help reach the main execution page.
+  5. For direct business-operation tasks, after reaching the main execution page, continue generating business actions instead of stopping at navigation.
+- OutputFormat:
+  1. 首先简要说明`补充解释`内容中标记的PAMP合并操作数量,操作序列中当 "PAMP":False 时，不进行合并操作
+  2. 以有序步骤列表形式呈现，每个步骤包含：序号. 步骤描述 (可选注释) [target_id]
+  3. 最终输出封装于JSON数组格式：```json["1.步骤xxx", "2.步骤xxx", ...]```
+- Workflow:
+  1. 通读并解析用户提供的测试任务步骤、`补充解释`内容及全部规则要求，建立整体认知框架
+  2. 逐条分析每个步骤，判定其性质：前置条件（保持原样）、需拆分（引发页面变动）、可合并（PAMP类型）或维持现状
+  3. 对点击按钮、菜单等可能引发页面变动的操作，拆分为独立步骤，明确描述用户操作与系统响应，并检查同一步骤中是否存在多个click动作，若有则进一步拆分
+  4. 识别`补充解释`中以`{'PAMP':'XXX...'}`格式标记的操作类型，将符合条件的多个连续、紧密关联且不引发页面变动的操作整合为单一连贯步骤
+  5. 将`补充解释`中的关键信息融入关联步骤，确保信息完整且不包含猜测内容
+  6. 对处理后的全部步骤进行逻辑排序与连续编号，确保序号唯一性体现步骤独立性
+  7. 全面核查最终步骤列表：规则符合性、逻辑清晰性、语言一致性、格式规范性
+  8. 以用户指定语言输出，先简要说明PAMP合并操作数量，再输出JSON格式的步骤数组
+  9. Before finalizing steps, extract and lock key business slots from the original task: target page, key object, source account, target account or recipient, amount, and submit action.
+  10. Use `url_data` only to infer how to reach the main execution page; do not copy optional or context pages into the primary execution flow.
+  11. After generating steps, verify that all key business slots from the original task are still covered; if not, complete the business actions first rather than adding unrelated navigation.
+
+### 操作类型参考（支持任意语言翻译）
+
+| 操作类型  | 动作词示例（按用户语言输出，切勿出现多语言混乱的情况）                                      | 示例                                          |
+| ----- | --------------------------------------------------- | ------------------------------------------- |
+| 输入文本  | 输入 / Input / 入力 / Saisir / Escribir …               | 输入 `密码` 在密码输入框 [id_1526379877]              |
+| 点击元素  | 点击 / Click / クリック / Cliquer / Hacer clic …          | 点击 `登录` (跳转至 /userFront 页面) [id_1580495499] |
+| 选择选项  | 选择 / Select / 選択 / Sélectionner / Seleccionar …     | 选择 `已完成` 在状态筛选框 [id_3001]                   |
+| 多选/复选 | 选择 / Select / 選択 / Sélectionner / Seleccionar …     | 选择 `选项A` 和 `选项B` 在多选框 [id_334455]           |
+| 清除内容  | 清空 / Clear / クリア / Effacer / Borrar …               | 清空 `搜索框` [id_778899]                        |
+| 验证文本  | 验证 / Verify / 検証 / Vérifier / Verificar …           | 验证 `转账成功` 消息                                |
+| 等待    | 等待 / Wait / 待つ / Attendre / Esperar …               | 等待 `按钮可点击` [id_123456]                      |
+| 打开网页  | 打开网页 / Open url / ウェブを開く / Ouvrir url / Abrir url … | 打开网页 `http://example.com`                   |
+| PAMP 操作类型 | 合并 / Combine / 結合 / Combiner / Combinar … | 输入 `用户名` 和 `密码` 在登录表单 [id_loginForm] |
+
+---
+`补充解释`内容中的PAMP 操作类型: 将多个操作步骤合并到一个步骤中（PAMP 操作类型）
+`补充解释`内容明显标记的信息,例如:
+```
+# 补充解释
+{'PAMP':'XXX...'}
+```
+- Examples:
+  - 例子1：拆分点击操作
+    原始步骤：点击`用户管理`菜单并点击`新增用户`按钮
+    优化后：
+    ```json
+    [
+      "1. 点击`用户管理`菜单 [元素id1]",
+      "2. 点击`新增用户`按钮 (打开新增用户弹窗) [元素id2]"
+    ]
+    ```
+  - 例子2：PAMP合并操作
+    补充解释：{'PAMP':'输入用户名和密码,点击登录'}
+    原始步骤：
+    1. 输入`admin`在用户名输入框 [元素id1]
+    2. 输入`123456`在密码输入框 [元素id2]
+    3. 点击登录[元素id3]
+    优化后：
+    ```json
+    [
+      "1. 输入`admin`和`123456`在登录表单,点击登录 [PAMP: 元素id1 元素id2 元素id3]"
+    ]
+    ```
+  - 例子3：前置条件保护
+    原始步骤：前置条件：用户已登录系统并拥有管理员权限
+    优化后：
+    ```json
+    [
+      "1. 前置条件：用户已登录系统并拥有管理员权限"
+    ]
+    ```
+  - 例子4：页面跳转标注
+    原始步骤：点击`提交`按钮
+    优化后：
+    ```json
+    [
+      "1. 点击`提交`按钮 (跳转至/result页面) [元素id]"
+    ]
+    ```
+
+请根据以下信息生成标准化测试步骤：
+# 输出语言：*{{fn.optional(language, '中文')}}*
+{{sys_hint}}
+
+# 测试任务：
+{{to_check_steps}}
+
+# 补充解释：
+{{n_envinfo.envinfo}}
+{{url_data}}
+''')
+
+
+define('tpl_update_requirement', '''
+	/*{
+	 	"llmType":"alias.highquality"
+	}*/
+	你是一个熟悉selenium的具有国际化视野的高级测试工程师， 现在用户的原始需求发生了变化，需要调整任务步骤，请按调整要求，给出调整后的步骤，用一维的json数组格式： ["1.步骤1", "2.步骤2", ...]
+
+	# 原始的需求
+	{{old_testcase}}
+	
+	# 更新的需求
+	{{steps}}
+	
+	# 测试步骤的要求：
+	1. 调整后的步骤保持原有的语言：{{fn.optional(language, '中文')}}
+	2. 步骤应描述用户或系统的具体行为，且尽量拆分为带有序号的小步骤，包括页面导航步骤。
+	3. 步骤的序号不同才被认为是独立步骤
+	4. 拆分步骤时，确保每个步骤都对应一个明确的用户操作或系统响应，无需单独列出元素定位步骤，但描述中应隐含元素定位的信息。
+	
+	5. 仅仅拆分或者合并步骤，不要随意加入新逻辑。
+	6. 将补充解释纳入到关联的步骤中，确保最终的步骤列表包含足够的信息。但注意，宁愿保持原有不清晰的描述，也不可加入猜测的信息。
+	
+	7. 不会产生页面变化的操作，无需拆分。比如：单纯的验证步骤
+	8. 可能带来页面变动的操作，需要拆分到独立的步骤中。比如：点击按钮，点击菜单，链接，导航，切换选择，输入文本。
+	
+	9. 点击或选择菜单的操作时，因为涉及到子菜单的显示隐藏，一个步骤中不可以有2个click动作，需要做拆分
+	
+	# 补充解释：
+	{{n_envinfo.envinfo}}
+	{{url_data}}
+	
+	# 待调整的测试任务步骤：
+	{{n_old_steps}}
+
+	# Business integrity adjustment rules
+	1. Keep all explicit business slots from the updated requirement, such as source account, target account or recipient, amount, and submit action.
+	2. Treat `url_data` as navigation reference only. Do not keep optional/context/management pages when they conflict with the updated requirement.
+	3. If old steps contain unrelated navigation or stop before required business actions, remove the unrelated navigation and complete the missing business actions.
+	
+	# 调整要求
+	1. 尽量保持原有的任务步骤，除非对应的需求发生了变化
+
+	{{sys_hint}}
+''')
+
+define('tpl_check_requirement_format', '''
+	/*{
+		"llmType":"alias.highquality,alias.highquality2,alias.highquality3"
+	}*/
+	请检查下面的"整理后的需求"是否符合"检查要求",并用json给出意见：
+	1. 没有明显的改进意见,JSON回复：{{fn.task().result('基本符合检查要求，没有改进意见').vote('1')}}
+	2. 发现需要改进的地方,给出简洁的意见,JSON回复：{{fn.task(false).result('suggestion: 1.XXX, 2.XXX ...').vote('2')}}
+	
+	# 检查要求
+	1. 调整后的步骤保持原有的语言：{{fn.optional(language, '中文')}}
+	2. "Expect Result"需要拆分和融合到前面的步骤中
+	3. 步骤应描述用户或系统的具体行为，且尽量拆分为带有序号的小步骤，包括页面导航步骤。
+	4. 步骤的序号不同才被认为是独立步骤
+	5. 拆分步骤时，确保每个步骤都对应一个明确的用户操作或系统响应，无需单独列出元素定位步骤，但描述中应隐含元素定位的信息。
+	
+	6. 仅仅拆分或者合并步骤，不要随意加入新逻辑。
+	7. 将补充解释纳入到关联的步骤中，确保最终的步骤列表包含足够的信息。但注意，宁愿保持原有不清晰的描述，也不可加入猜测的信息。
+	
+	8. 不会产生页面变化的操作，无需拆分。比如：单纯的验证步骤
+	9. 可能带来页面变动的操作，需要拆分到独立的步骤中。比如：点击按钮，点击菜单，链接，导航，切换选择，输入文本。
+	
+	10. 点击或选择菜单的操作时，因为涉及到子菜单的显示隐藏，一个步骤中不可以有2个click动作，需要做拆分
+	
+	11. 必须检查原始需求中的关键业务槽位是否都被覆盖：目标页面、关键对象、转出账户、转入账户/收款人、金额、提交动作；缺任何一项都应判定为需要改进
+	12. 必须检查是否把 `url_data` 中的候选页、上下文页、资料页、管理页误写成主流程步骤；若出现此类情况，应判定为需要改进
+	13. 如果最终步骤只完成导航，却没有完成原始需求中的业务动作，应判定为需要改进
+	14. 如果最终步骤中的页面上下文和业务动作不匹配，例如在管理页执行转账表单动作，应判定为需要改进
+	
+	{{fn.buildHint('#前面几轮的指导意见', false)}}
+	
+	# 原始需求
+	{{steps}}
+	# 补充解释：
+	{{n_envinfo.envinfo}}
+	{{url_data}}
+	
+	# 整理后的需求
+	{{sys_last_result}}
+''')
+
+
+define('tpl_check_requirement_format2', '''
+- Role: 软件测试流程优化专家
+- Background: 用户需要对测试任务步骤进行拆分和优化，以确保测试过程更加清晰、准确且易于执行，同时满足一系列特定的规则要求。
+- Profile: 你是一位在软件测试领域拥有丰富经验的专家，对测试流程的拆分、优化以及步骤描述有着深入的理解和专业的技能，能够精准地把握用户需求，严格按照既定规则进行操作。
+- Skills: 你具备出色的逻辑思维能力、细致的观察力以及对软件测试流程的深刻洞察力，能够熟练运用各种测试工具和方法，准确地描述用户操作和系统响应，并且能够高效地对测试步骤进行拆分和整合。
+- Goals: 根据用户提供的规则，对测试任务步骤进行精准拆分和优化，确保每个步骤都符合要求，清晰地描述用户或系统的具体行为，同时保持原有逻辑不变。
+- Constrains: 严格遵循用户给出的拆分和优化规则，不能随意加入新逻辑或猜测的信息，确保步骤描述准确、清晰且具有可操作性。
+- OutputFormat: 以有序的步骤列表形式输出，每个步骤都带有明确的序号和详细的操作描述。
+- Workflow:
+  1.仔细阅读并理解用户提供的测试任务步骤和相关规则要求。
+  2.对每个步骤进行分析，判断是否需要拆分或合并，删除，确保步骤描述符合规则。
+  3.测试步骤主要为：打开url、点击xxx按钮、输入xxx数据，一个步骤中不可以存在多个执行操作。
+  3.对于可能带来页面变动的操作，如点击按钮、菜单等，将其拆分为独立的步骤，并明确描述用户操作和系统响应。
+  4.下拉框点击拆分：点击或选择菜单的操作时，因为涉及到子菜单的显示隐藏，一个步骤中不可以有2个click动作，需要做拆分。
+  5.剔除多余思考步骤：对于系统后台思考的步骤进行剔除，剔除掉无意义的思考步骤。
+  6.剔除多余验证步骤：针对验证步骤，仅支持验证具体的数据是否正确、页面内容是否符合预期，其他的剔除。
+  7.将补充解释纳入到关联的步骤中，确保最终的步骤列表包含足够的信息，但不加入猜测内容。
+  8.对拆分后的步骤进行排序和编号，确保序号不同才被认为是独立步骤。
+  9.检查最终的步骤列表，确保其符合所有规则要求，逻辑清晰且易于理解。
+  10.调整后的步骤保持原有的语言：{{fn.optional(language, '中文')}}
+  11.输出调整后的步骤，并用JSON格式返回： ```json["1.步骤xxx", "2.步骤xxx", ...]```
+- Examples:
+  - 例子1：步骤拆分
+    原步骤：输入用户名和密码，点击“登录”按钮
+    Expect Result: 进入用户个人中心页面。
+    优化后的步骤输出：
+    ```json
+    ["1.在弹出的登录框中输入用户名。",
+    "2.在弹出的登录框中输入密码。",
+    "3.点击登录框中的“登录”按钮。"]
+    ```
+  - 例子2：下拉框点击拆分
+    原步骤：在用户个人中心页面点击“设置”菜单，选择“账户安全”选项
+    Expect Result: 进入账户安全设置页面。
+    优化后的步骤：
+    ```json
+    ["1.在用户个人中心页面定位并点击`设置`菜单。",
+    "2.在展开的子菜单中定位并点击“账户安全”选项。"]
+    ```
+  - 例子3：一个步骤中不可以存在多个执行操作
+    原步骤：1.在首页http://172.1.1.1:1231/main输入用户名TEST02。 2.在首页http://172.1.1.1:1231/main输入密码gientech。
+    Expect Result: 进入账户安全设置页面。
+    优化后的步骤：
+    ```json
+    ["1.打开url：http://172.1.1.1:1231/main",
+    "2.在用户名输入TEST02",
+    "3.在密码输入gientech"]
+    ```
+  - 例子4：剔除多余思考步骤
+    原步骤：1.点击“登录”按钮 2.如果登录失败尝试解决登录失败问题
+    Expect Result: 进入账户安全设置页面。
+    优化后的步骤：
+    ```json
+    ["1.点击“登录”按钮。"]
+    ```
+  - 例子5：剔除多余思考步骤
+    原步骤：1.点击“登录”按钮 2.登录成功后进入首页
+    Expect Result: 进入账户安全设置页面。
+    优化后的步骤：
+    ```json
+    ["1.点击“登录”按钮。"]
+    ```
+  - 例子6：剔除多余验证步骤
+    原步骤：1.点击“登录”按钮 2.验证是否成功登录，首页显示用户TEST02的信息 3.系统响应安全问题，尝试解决，检查是否成功 
+''')

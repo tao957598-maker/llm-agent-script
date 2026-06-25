@@ -1,0 +1,155 @@
+/*
+{
+	 "title": "Toolset generator",
+	 "description": "Toolset generator Of AI chat agent.",
+	 "parameter": [
+		{
+			"name":"userInput",
+			"label":"用户输入"
+		},{
+            "name":"toolType",
+            "label":"工具类型"
+        },{
+           "name":"excludeToolType",
+           "label":"不包含的工具类型"
+       }
+	],
+	 "llmType": "",
+	 "resultPlan": "n_result",
+	 "uiEntrance": "chatDoc",
+	 "tag": "toolset",
+	 "discoverable": false,
+	 "life": "100"
+}
+*/
+
+
+// Step1: 查询所有已配置的工具集及其内部工具
+n_existing_toolset_result, act_api.doExecuteDynamic?name=tool_details_list&dynamicParamData='{"toolStatus":"1","mcpStatus":"1","statusLogic":"or"}'
+
+assign("n_existing_toolset", "{{n_existing_toolset_result.data}}")
+
+// Step2: LLM 判断现有工具集是否已有匹配
+n_has_existing_match, tpl_check_existing_match
+assign('n_should_save', 'false')
+
+//# 判断是否已有匹配后应该保存
+when("fn.equals(n_has_existing_match.matched, 'true')", {
+    assign('n_tool_details', "{{n_has_existing_match.toolList}}")
+    assign('n_should_save', 'false')
+    // 已有匹配工具集，直接复用
+    assign('n_tool_set_code', "{{n_has_existing_match.toolsetCode}}")
+}, {
+    //# 无匹配，走向量搜索
+    n_search_result, act_api.search?size=100&query="{{userInput}}"&toolType="{{toolType}}"&excludeToolType="{{excludeToolType}}"
+
+    // 格式化搜索结果：保证 n_tool_details 始终为工具对象列表
+    n_tool_details, act_func.run?script='''
+        def raw = n_search_result ?: []
+        if (raw instanceof Map) {
+            if (raw.data instanceof List) return raw.data
+            return []
+        }
+        if (raw instanceof List) return raw
+        return []
+    '''
+    //# 存在向量搜索的工具集
+    when('fn.hasValue(n_tool_details)', {
+        assign('n_should_save', 'true')
+    }, {
+        assign('n_tool_set_code', '')
+    })
+})
+
+// Step3: 需要保存时，调用 LLM 生成工具集
+when('n_should_save == "true"', {
+    //# LLM 将RAG匹配的工具生成一个工具集
+    n_tools, tpl_choose_tools
+
+    when('fn.hasValue(n_tools.toolList)', {
+        //保存工具集
+        n_save_result, act_api.doExecuteDynamic?name=tool_set_save&dynamicParamData={{n_tools}}
+        // 保存成功或者重复新增
+        when('n_save_result.code == 200 || n_save_result.code == 50003', {
+            assign('n_tool_set_code', "{{n_tools.toolsetCode}}")
+        }, {
+            assign('n_tool_set_code', '')
+        })
+    }, {
+        assign('n_tool_set_code', '')
+    })
+})
+// 最后返回结果
+assign('n_result', '{{n_tool_set_code}}')
+
+// 提示词定义：判断现有工具集是否已有匹配
+define('tpl_check_existing_match', '''
+你是工具集匹配专家。根据用户输入，判断系统中已有的工具集列表中，是否已有工具集的工具与用户需求匹配。
+
+## 判断标准
+如果已有工具集的工具列表中，存在至少一个工具的 description 或 name 与用户输入高度相关（精确或相关匹配），则视为"已匹配"。
+
+## 输出格式（严格 JSON）
+{
+    "matched": true/false,        // 是否有现成的匹配工具集
+    "reason": "简要理由",         // 为什么匹配或不匹配
+    "toolsetCode": "xxx",         // matched=true 时必填，该工具集的唯一标识
+    "toolsetName": "xxx",         // matched=true 时必填
+    "toolList": [...]             // matched=true 时必填，该工具集的全部工具列表
+}
+
+## 用户输入：
+{{userInput}}
+
+## 已有工具集列表：
+{{n_existing_toolset}}
+(每个工具只包含 name/code/type/description 四个字段，toolList 中返回的工具必须原样复制这些字段的值)
+
+请直接输出 JSON，不要有任何额外解释。
+''')
+
+define('tpl_choose_tools', '''
+- Role: 智能办公系统管家
+- Background: 您是一个智能办公系统管家，负责从给定的工具集中，根据用户的输入，精确地理解和匹配其需求，并返回最合适的工具。
+- Requirements:
+1. 核心任务： 分析用户输入，从工具集列表中匹配最合适的工具。
+2. 字段规则：
+   toolsetName：必须根据用户输入的核心意图生成一个简短、贴切的集合名称。例如，用户输入是"查询订单"，则可设为"订单查询工具"；是"会议创建"，则可设为"会议创建工具集"。
+   toolsetCode：必须根据用户输入的核心意图生成一个简短、贴切的集合断码，英文下划线分割。例如，用户输入是"查询订单"，则可设为"order_query_tool_set"；是"会议创建"，则可设为"meeting_create_tool_set"。
+   toolList：最多返回20个工具，按score从高到低排序。每个工具必须包含name, code, type, score这四个字段，其中description字段若源数据有则填入，没有则留空字符串。
+   关键约束：toolList中所有返回的工具对象，其name、code、type和score字段的值必须严格、完整、原样复制自n_tool_details列表中对应工具的原始值。不允许自行修改、截断、重新表述或生成新值。description字段若源数据中有则原样复制，没有则填空字符串。
+3. 匹配逻辑与评分 (score):
+  精确匹配 (score: 9-10): 用户输入与工具的name或description高度相关。例如，用户问"查订单"，优先匹配agent_mcp_http_server02#getOrderInfoById。
+  相关匹配 (score: 5-8): 用户需求与工具的description有部分关键词重叠或语义相关。例如，用户说"分析一下舆论"，可匹配agt_public_opinion_analysis_demo。
+  模糊匹配 (score: 1-4): 需求与工具功能仅有微弱关联，或匹配到泛用类别（如OA）。例如，用户说"批个流程"，可能匹配到agt_my_test.txt.oa。
+  无匹配 (score: 0): 工具集中无任何工具符合需求。此时toolList中返回一个name和description为空的对象，score为0。
+4. 只返回score >= 5的数据集合；如果没有工具达到此阈值，返回空 toolList。
+# 返回示例：
+{
+    "toolsetName": "xxxxx",
+    "toolsetCode": "xxxxx",
+    "toolList": [
+        {
+            "name": "",
+            "code": "",
+            "type": "",
+            "description": ""
+        }
+    ]
+}
+
+# 用户输入：
+{{userInput}}
+
+# 工具列表（向量搜索结果）：
+{{n_tool_details}}
+(此列表是一个JSON数组，包含工具的name、code、type等原始字段（description可能有也可能没有）。toolList中返回的工具信息必须100%来源于此列表，需根据name和type匹配对应的工具，description有则复制，没有则填空字符串)
+
+# 最终指令:
+请严格遵循以上所有要求，分析用户输入，并从工具列表中匹配工具。始终优先考虑选择的agent。
+请特别注意，toolList中每个工具的name、code、type、description字段值，必须是n_tool_details列表中对应字段的完整、原文复制。description字段若有则复制，没有则填空字符串。
+当没有工具达到 score >= 5 时，返回空的 toolList，不要返回一个假的工具对象。
+toolsetName 和 toolsetCode 在任何情况下都不能为空。
+将您的分析结果以指定的JSON格式返回。
+
+''')

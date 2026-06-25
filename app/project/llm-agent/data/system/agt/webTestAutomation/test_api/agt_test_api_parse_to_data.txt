@@ -1,0 +1,348 @@
+/*
+{
+	"title":"API JSON Content parse",
+	"description":"Parse and interpret JSON content including data structures, schemas, and other structured information",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"API File",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"knowledge_space"
+		},
+		{
+			"name":"application",
+			"label":"System",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"Automated Testing",
+	"displayOrder":99,
+	"version":1
+}
+*/
+//# Agent status
+assign("status", 'Agent is running')
+// fileId
+when('fn.hasValue(kbSpaceFileId)', {
+	//# DocumentId
+    assign("documentId", "{{kbSpaceFileId}}")
+
+    //# Read file from kbs
+    n_api_content,act_kb.select?name='kbs_doc_page_parse'&column='fileName,content'&where='{"documentId":"{{kbSpaceFileId}}"}'
+
+    // file name
+    n_file_name,act_func?script='''return n_api_content[0].fileName'''
+
+    // 判断文件是否以json后缀结尾
+    n_is_json, act_func.run?js='''
+        let fileName = '{{n_file_name}}';
+        let isjson = fileName.endsWith('.json');
+        isjson;
+    '''
+    when('n_is_json == true',{
+        // file content
+        n_file_content,act_func?script='''return n_api_content[0].content'''
+    },{
+        // 不是json文件，调用agent解析
+        n_file_content,agt_gen_openapi?kbSpaceFileId={{documentId}}
+    })
+
+    //# Check if it is a JSON document for FastAPI
+    n_check_result,tpl_check_is_openapi,psr_json
+
+    when('n_check_result.is_openapi == true',{
+        // 拆分API接口文档
+        n_api_list, act_func?js='''
+        (function() {
+            // 原始OpenAPI文档
+            let openApiDoc = {{n_file_content}};
+
+            // 拆分函数
+            function splitOpenApiDoc(doc) {
+                const result = [];
+                const baseInfo = {
+                    openapi: doc.openapi,
+                    info: doc.info,
+                    components: {
+                        schemas: {
+                            HTTPValidationError: doc.components.schemas.HTTPValidationError,
+                            ValidationError: doc.components.schemas.ValidationError
+                        }
+                    }
+                };
+
+                for (const [path, methods] of Object.entries(doc.paths)) {
+                    for (const [method, operation] of Object.entries(methods)) {
+                        const singleEndpoint = JSON.parse(JSON.stringify(baseInfo));
+                        // 添加路径和操作
+                        singleEndpoint.paths = {
+                            [path]: {
+                                [method]: operation
+                            }
+                        };
+                        
+                        // 添加相关的schema
+                        const refs = findSchemaRefs(operation);
+                        for (const ref of refs) {
+                            const schemaName = ref.split('/').pop();
+                            if (doc.components.schemas[schemaName]) {
+                                singleEndpoint.components.schemas[schemaName] = doc.components.schemas[schemaName];
+                            }
+                        }
+                        result.push(JSON.stringify(singleEndpoint));
+                    }
+                }
+                return JSON.stringify(result);
+            }
+
+            // 辅助函数：查找schema引用
+            function findSchemaRefs(obj, refs = new Set()) {
+                if (typeof obj !== 'object' || obj === null) return refs;
+                
+                for (const [key, value] of Object.entries(obj)) {
+                    if (key === '$ref') {
+                        refs.add(value);
+                    } else if (typeof value === 'object') {
+                        findSchemaRefs(value, refs);
+                    }
+                }
+                return refs;
+            }
+
+            // 执行拆分
+            const splitApis = splitOpenApiDoc(openApiDoc);
+
+            // 返回拆分结果
+            return splitApis;
+        })();
+        '''         
+
+        // 重组api数据
+        foreach('n_api','n_api_list', {
+            // 单个api接口数据
+            assign('openapi_json', '{{n_api.item}}')
+
+            // 提取数据
+            n_data,act_func?js='''
+            (function() {
+                let openApiJson = {{openapi_json}};
+                const fileName = "{{n_file_name}}";
+                const application = "{{application}}";
+
+                const result = [];
+                const paths = openApiJson.paths || {};
+
+                // 遍历每一个路径，比如 "/"
+                Object.keys(paths).forEach(path => {
+                    const methods = paths[path];
+
+                    // 遍历请求类型，比如 get / post
+                    Object.keys(methods).forEach(method => {
+                        const apiInfo = methods[method];
+
+                        result.push({
+                            // apiName: apiInfo.operationId || "",
+                            description: apiInfo.description || "",
+                            method: method.toUpperCase(),
+                            api_name: path,
+                            file_name: fileName,
+                            application: application,
+                            content: openApiJson
+                        });
+                    });
+                });
+		        return JSON.stringify(result);
+            })();
+            '''
+
+            // Send single api test data to kb
+	        act_kb.defineAndImportData?tableName='kb_api_testcase'&data='{{n_data}}'
+
+            // 写入 kb_api_test_data
+            agt_api_insert_data?fileName={{n_file_name}}&content={{openapi_json}}&&application={{application}}&is_need_performance='1'&version='V1.0'
+        })
+    },
+    {
+        // The document format of the API is error
+        assign('result','Check if the API document format is in the correct JSON format')
+
+    })
+
+},
+{
+    //# Error
+    assign("result", "Need to provide documents")
+})
+
+agent('agt_api_insert_data',{
+    // Get api content
+    assign("n_api_data", "{{content}}")
+    // Get File Name
+    assign("n_file_name", "{{fileName}}")
+
+
+    // 拆分API接口文档
+    n_api_list, act_func?js='''
+    (function() {
+        // 原始OpenAPI文档
+        let openApiDoc = {{n_api_data}};
+
+        // 拆分函数
+        function splitOpenApiDoc(doc) {
+            const result = [];
+            const baseInfo = {
+                openapi: doc.openapi,
+                info: doc.info,
+                components: {
+                    schemas: {
+                        HTTPValidationError: doc.components.schemas.HTTPValidationError,
+                        ValidationError: doc.components.schemas.ValidationError
+                    }
+                }
+            };
+
+            for (const [path, methods] of Object.entries(doc.paths)) {
+                for (const [method, operation] of Object.entries(methods)) {
+                    const singleEndpoint = JSON.parse(JSON.stringify(baseInfo));
+                    // 添加路径和操作
+                    singleEndpoint.paths = {
+                        [path]: {
+                            [method]: operation
+                        }
+                    };
+                    
+                    // 添加相关的schema
+                    const refs = findSchemaRefs(operation);
+                    for (const ref of refs) {
+                        const schemaName = ref.split('/').pop();
+                        if (doc.components.schemas[schemaName]) {
+                            singleEndpoint.components.schemas[schemaName] = doc.components.schemas[schemaName];
+                        }
+                    }
+                    result.push(JSON.stringify(singleEndpoint));
+                }
+            }
+            return JSON.stringify(result);
+        }
+
+        // 辅助函数：查找schema引用
+        function findSchemaRefs(obj, refs = new Set()) {
+            if (typeof obj !== 'object' || obj === null) return refs;
+            
+            for (const [key, value] of Object.entries(obj)) {
+                if (key === '$ref') {
+                    refs.add(value);
+                } else if (typeof value === 'object') {
+                    findSchemaRefs(value, refs);
+                }
+            }
+            return refs;
+        }
+
+        // 执行拆分
+        const splitApis = splitOpenApiDoc(openApiDoc);
+
+        // 返回拆分结果
+        return splitApis;
+    })();
+    '''
+    on_failure({
+        // 拆分失败
+        // =========================================================================
+    })
+
+    // Get version
+    assign("n_version", "{{version}}")
+
+    assign('async_list', '[]')
+    // 获取application
+    assign('n_application', '{{application}}')
+
+    // Generate the data for api test
+    foreach('n_api','n_api_list', {
+        // 单个api接口数据
+        assign('api_json_data', '{{n_api.item}}')
+        n_gen_task,agt_gen_api_test_data?application={{n_application}}&file_name={{n_file_name}}&openapi_data={{api_json_data}}&performance={{is_need_performance}}&version={{version}}&async=true
+        n_gen_task_tmp,act_func?script='''
+            def var_tmp = n_gen_task
+            async_list.add(var_tmp)
+            return var_tmp
+        '''
+    })
+
+    // 对数据生成结果进行循环处理并分类
+    foreach('n_item', 'async_list', {
+        assign('async_summary', '{{n_item.item}}')
+        // Current async result
+        assign('answer_summary', '{{async_summary.value}}')
+    })
+})
+
+
+
+// Generate performance test data for interface
+define('tpl_check_is_openapi', '''
+你是一个专业的后端架构与 API 规范校验助手。
+
+用户向你传入一段数据，请你判断该数据是否是：
+【一个完整、合法、可用的 JSON 格式 FastAPI 接口文档（OpenAPI 规范）】。
+
+请严格按照以下步骤进行判断：
+
+一、基础格式校验
+1. 判断该数据是否是合法的 JSON（能被 JSON.parse 成功解析）
+2. 根节点必须是一个 JSON 对象（Object），不能是数组或基本类型
+
+二、OpenAPI / FastAPI 结构校验（必要条件）
+至少需要满足以下结构特征：
+1. 存在 "openapi" 字段（如 "3.0.0" / "3.0.2" / "3.1.0"）
+2. 存在 "info" 对象，且 info.title 和 info.version 至少存在
+3. 存在 "paths" 对象
+4. paths 中至少包含一个接口路径
+5. 每个路径下至少包含一个 HTTP 方法（get / post / put / delete / patch 等）
+6. 每个 HTTP 方法下至少包含：
+   - summary 或 description 之一
+   - responses 对象
+   - responses 中至少存在一个 HTTP 状态码（如 200 / 201 / 400 等）
+
+三、FastAPI 兼容性判断（弱约束，不作为否定条件）
+以下内容如果存在视为加分项，但缺失不影响通过：
+- operationId
+- tags
+- requestBody
+- components / schemas
+- responses.content.application/json.schema
+
+四、明确排除的情况（任一命中即判定为否）
+- 不是 JSON 格式
+- 只是单个接口片段（只有 paths 的某一部分）
+- 仅包含某个 path.method，没有 openapi / info / paths 根结构
+- 仅包含 schema 或 components
+- 明显是 Swagger UI 示例代码或非 OpenAPI 文档
+
+五、输出要求（非常重要）
+你必须严格以 JSON 格式输出判断结果，结构如下：
+
+{
+  "is_openapi": true | false,
+  "reason": "简要说明判断原因",
+  "errors": [
+    "如果不通过，这里列出关键缺失或错误点；通过时可为空数组"
+  ]
+}
+
+⚠️ 注意：
+- 不要输出任何解释性自然语言
+- 不要输出 Markdown
+- 不要输出除 JSON 以外的任何内容
+
+
+# 用户输入:
+{{n_file_content}}
+
+
+''')

@@ -1,0 +1,321 @@
+/*
+{
+	"title":"Public Opinion Analysis Agent",
+	"description":"基于AI的文档内容智能解析系统，支持多种分片策略，实现高效文本处理与语义分析",
+	"parameter":[
+		{
+			"name":"operation",
+			"label":"Operation Type",
+			"required":true,
+			"options":[
+				"create_task",
+				"manage_tasks",
+				"generate_report"
+			]
+		},
+		{
+			"name":"task_config",
+			"label":"Task Configuration (JSON)",
+			"required":false
+		},
+		{
+			"name":"report_topic",
+			"label":"Report Topic/Keywords",
+			"required":false
+		},
+		{
+			"name":"time_period",
+			"label":"Time Range",
+			"required":false,
+			"options":[
+				"today",
+				"last_7_days",
+				"last_30_days",
+				"custom"
+			]
+		},
+		{
+			"name":"start_date",
+			"label":"Start Date (YYYY-MM-DD)",
+			"required":false
+		},
+		{
+			"name":"end_date",
+			"label":"End Date (YYYY-MM-DD)",
+			"required":false
+		}
+	],
+	"uiEntrance":"public_opinion_analysis",
+	"version":18
+}
+*/
+// 1. Create Information Collection Task
+when('{{operation == "create_task"}}', {
+    log('Starting to create information collection task...')
+    
+    // Parse task configuration using LLM
+    n_task_config, psr_json
+    define('tpl_task_config', '''
+Parse the following task configuration into JSON format:
+{{task_config}}
+
+Requirements:
+1. Include task name (name)
+2. Include data source list (sources), e.g.: ["news_api", "rss_feeds", "web_scraping"]
+3. Include collection frequency (frequency), e.g.: "daily", "weekly", "once"
+4. Include keyword list (keywords)
+5. Include API endpoints configuration (api_endpoints) - optional
+6. Include whether enabled (enabled)
+
+Return JSON directly, no explanation:
+{
+    "name": "Public Opinion Monitoring Task",
+    "sources": ["news_api", "rss_feeds"],
+    "frequency": "daily",
+    "keywords": ["artificial intelligence", "AI"],
+    "api_endpoints": {
+        "news": "https://newsapi.org/v2/everything",
+        "rss": "https://rss.news.com/feed"
+    },
+    "enabled": true
+}
+''')
+    
+    // Import task to knowledge base
+    n_task_result, act_kb.importData?name='kb_opinion_tasks'&data='[{{n_task_config}}]'
+    
+    // Create scheduled job for periodic tasks
+    when('{{n_task_config.frequency != "once"}}', {
+        assign('jobData', '{"agentName":"agt_opinion_collector","jobDesc":"Public Opinion Collection: {{n_task_config.name}}","notifyStrategy":"Failure Only","executorParam":{"task_id":"{{n_task_result.id}}","config":{{n_task_config}}},"cronExpression":"{{fn.when(n_task_config.frequency == "daily", "0 0 9 * * ?", fn.when(n_task_config.frequency == "weekly", "0 0 9 ? * MON", "0 0 9 1 * ?"))}}"}')
+        
+        n_job_created, act_job.createAndTrigger?data={{jobData}}&isOneOffTask=false
+        assign('result', 'Task created successfully, ID: {{n_task_result.id}}, scheduled job configured')
+    }, {
+        // One-time task, execute immediately
+        agt_opinion_collector?task_id={{n_task_result.id}}&config={{n_task_config}}&async=true
+        assign('result', 'One-time task created successfully, ID: {{n_task_result.id}}, execution started')
+    })
+})
+
+// 2. Task Management Function
+when('{{operation == "manage_tasks"}}', {
+    log('Starting task management...')
+    
+    // Get all tasks
+    n_all_tasks, act_kb.select?name='kb_opinion_tasks'&column='id,name,sources,frequency,keywords,enabled,created_time,last_run_time'&orderBy='created_time desc'
+    
+    // Define task management prompt
+    define('tpl_task_management', '''
+All current public opinion collection tasks:
+{{n_all_tasks}}
+
+User operation request:
+{{task_config}}
+
+Return task management operation JSON based on user requirements:
+- Enable tasks: {"operation": "enable", "task_ids": [1,2,3]}
+- Disable tasks: {"operation": "disable", "task_ids": [1,2,3]}
+- Delete tasks: {"operation": "delete", "task_ids": [1,2,3]}
+- Update task: {"operation": "update", "task_id": 1, "updates": {"keywords": ["new keywords"], "frequency": "weekly"}}
+
+Return JSON directly, no explanation
+''')
+    
+    n_management_op, psr_json
+    
+    // Execute management operations
+    when('{{n_management_op.operation == "enable"}}', {
+        foreach('n_task_ids', '{{n_management_op.task_ids}}', {
+            act_kb.update?name='kb_opinion_tasks'&columnValues='{"enabled":true}'&where='{"id":"{{n_task_ids.item}}"}'
+        })
+        assign('result', 'Enabled tasks: {{fn.join(n_management_op.task_ids, ",")}}')
+    })
+    elsewhen('{{n_management_op.operation == "disable"}}', {
+        foreach('n_task_ids', '{{n_management_op.task_ids}}', {
+            act_kb.update?name='kb_opinion_tasks'&columnValues='{"enabled":false}'&where='{"id":"{{n_task_ids.item}}"}'
+        })
+        assign('result', 'Disabled tasks: {{fn.join(n_management_op.task_ids, ",")}}')
+    })
+    elsewhen('{{n_management_op.operation == "delete"}}', {
+        foreach('n_task_ids', '{{n_management_op.task_ids}}', {
+            act_kb.delete?name='kb_opinion_tasks'&where='{"id":"{{n_task_ids.item}}"}'
+        })
+        assign('result', 'Deleted tasks: {{fn.join(n_management_op.task_ids, ",")}}')
+    })
+    elsewhen('{{n_management_op.operation == "update"}}', {
+        act_kb.update?name='kb_opinion_tasks'&columnValues={{n_management_op.updates}}&where='{"id":"{{n_management_op.task_id}}"}'
+        assign('result', 'Updated task {{n_management_op.task_id}}')
+    })
+})
+
+// 3. Theme Report Generation Function
+when('{{operation == "generate_report"}}', {
+    log('Starting to generate public opinion analysis report...')
+    
+    // Determine time range
+    assign('date_filter', '{{fn.when(time_period == "today", fn.today(), fn.when(time_period == "last_7_days", fn.dateAdd(fn.today(), -7, "day"), fn.when(time_period == "last_30_days", fn.dateAdd(fn.today(), -30, "day"), start_date)))}}')
+    assign('end_date_filter', '{{fn.when(time_period == "custom", end_date, fn.today())}}')
+    
+    // Query relevant opinion data
+    n_opinion_data, act_kb.select?name='kb_opinion_collected_data'&column='id,title,content,source,url,publish_time,keywords,sentiment'&where='{"publish_time": {"gte": "{{date_filter}}", "lte": "{{end_date_filter}}"}}'&orderBy='publish_time desc'
+    
+    // Generate report using LLM
+    define('tpl_report_generator', '''
+# Public Opinion Analysis Report Generation
+
+## Report Topic
+{{report_topic}}
+
+## Analysis Time Range
+{{date_filter}} to {{end_date_filter}}
+
+## Raw Data Summary
+Collected {{n_opinion_data?size}} relevant data items
+Source distribution: {{fn.groupBy(n_opinion_data, "source")}}
+
+## Detailed Data
+{{n_opinion_data}}
+
+## Report Generation Requirements
+Generate a professional public opinion analysis report including:
+1. Executive Summary
+2. Public Opinion Overview (quantity trends, source distribution)
+3. Theme Analysis (keyword clustering, hot topics)
+4. Sentiment Analysis (positive/negative/neutral ratios)
+5. Key Content Summary
+6. Recommendations and Insights
+7. Appendix (raw data references)
+
+Use Markdown format, ensure clear structure and accurate data.
+''')
+    
+    // Generate and save report
+    tpl_report_generator, psr_md, vrf_flag?value='{{fn.hasValue(sys_last_result, "Public Opinion")}}',
+    act_memory.assign?var=report_content&value={{tpl_report_generator}}&type=md
+    
+    // Save report record to knowledge base
+    assign('report_record', '{"topic":"{{report_topic}}","period_start":"{{date_filter}}","period_end":"{{end_date_filter}}","data_count":"{{n_opinion_data?size}}","generated_time":"{{fn.now()}}"}')
+    n_saved_report, act_kb.importData?name='kb_opinion_reports'&data='[{{report_record}}]'
+    
+    // Save report content as file
+    assign('filename', 'reports/opinion_report_{{fn.timestamp()}}.md')
+    act_func.write?filename={{filename}}&data={{report_content}}
+    
+    assign('result', 'Report generated successfully! Saved to {{filename}}, Report ID: {{n_saved_report.id}}')
+})
+
+// Error handling
+on_failure({
+    assign('error_result', 'Operation failed: {{sys_last_error}}')
+    log('Public Opinion Analysis Agent execution failed: {{sys_last_error}}')
+    act_flow.go?plan=end
+})
+
+// Define data collection sub-agent
+agent('agt_opinion_collector', {
+    /*{
+        "title": "Public Opinion Data Collector",
+        "parameter": [
+            {"name": "task_id", "label": "Task ID", "required": true},
+            {"name": "config", "label": "Collection Configuration"}
+        ],
+        "version": 1
+    }*/
+    
+    log('Starting public opinion data collection, Task ID: {{task_id}}')
+    
+    // Collect data based on configured sources
+    foreach('n_source', '{{config.sources}}', {
+        when('{{n_source.item == "news_api"}}', {
+            // Use generic API call for news collection
+            assign('api_params', '{"url": "{{fn.when(fn.hasValue(config.api_endpoints.news), config.api_endpoints.news, "https://newsapi.org/v2/everything")}}", "method": "GET", "params": {"q": "{{fn.join(config.keywords, " OR ")}}", "from": "{{fn.dateAdd(fn.today(), -1, "day")}}", "sortBy": "publishedAt", "pageSize": 50}}')
+            
+            n_news_data, act_api?name="get_api_data"&params={{api_params}}
+            
+            // Process and save news data
+            when('{{fn.hasValue(n_news_data, "articles")}}', {
+                foreach('n_article', '{{n_news_data.articles}}', {
+                    assign('article_record', '{"task_id":"{{task_id}}","title":"{{n_article.item.title}}","content":"{{n_article.item.description}}","source":"news_api","url":"{{n_article.item.url}}","publish_time":"{{n_article.item.publishedAt}}","keywords":{{config.keywords}}}')
+                    act_kb.importData?name='kb_opinion_collected_data'&data='[{{article_record}}]'
+                })
+            })
+        })
+        
+        elsewhen('{{n_source.item == "rss_feeds"}}', {
+            // Use generic API for RSS feeds
+            assign('rss_params', '{"url": "{{fn.when(fn.hasValue(config.api_endpoints.rss), config.api_endpoints.rss, "https://rss.news.com/feed")}}", "method": "GET"}')
+            
+            n_rss_data, act_api?name="get_api_data"&params={{rss_params}}
+            
+            // Process RSS data (simplified parsing)
+            when('{{fn.hasValue(n_rss_data, "items")}}', {
+                foreach('n_item', '{{n_rss_data.items}}', {
+                    assign('rss_record', '{"task_id":"{{task_id}}","title":"{{n_item.item.title}}","content":"{{n_item.item.description}}","source":"rss_feeds","url":"{{n_item.item.link}}","publish_time":"{{n_item.item.pubDate}}","keywords":{{config.keywords}}}')
+                    act_kb.importData?name='kb_opinion_collected_data'&data='[{{rss_record}}]'
+                })
+            })
+        })
+        
+        elsewhen('{{n_source.item == "web_scraping"}}', {
+            // Use available web scraping agent
+            log('Using web scraping for data collection with keywords: {{config.keywords}}')
+            
+            // You can integrate with existing web scraping agents here
+            // For example: agt_auto_test_get_data?keywords={{fn.join(config.keywords, ",")}}
+            
+            assign('scraping_result', 'Web scraping initiated for task {{task_id}}')
+        })
+    })
+    
+    // Update task status
+    act_kb.update?name='kb_opinion_tasks'&columnValues='{"last_run_time":"{{fn.now()}}","status":"completed"}'&where='{"id":"{{task_id}}"}'
+    
+    assign('collector_result', 'Data collection completed, Task ID: {{task_id}}')
+})
+
+// Define sentiment analysis prompt
+define('tpl_sentiment_analysis', '''
+Analyze the sentiment tendency of the following text:
+
+Text content:
+{{content}}
+
+Return sentiment analysis result in JSON format:
+{
+    "sentiment": "positive/negative/neutral",
+    "confidence": 0.95,
+    "key_phrases": ["phrase1", "phrase2"]
+}
+''')
+
+// Define data cleaning prompt
+define('tpl_data_cleaner', '''
+Clean and standardize the following public opinion data:
+
+Raw data:
+{{raw_data}}
+
+Cleaning requirements:
+1. Remove duplicate content
+2. Standardize time format to YYYY-MM-DD HH:mm:ss
+3. Extract key entities (person names, organization names, product names)
+4. Classify content types (news, comment, report)
+
+Return cleaned JSON array.
+''')
+
+// Define data enrichment function
+define('tpl_data_enrichment', '''
+Enrich the following public opinion data with additional insights:
+
+Original data:
+{{data}}
+
+Enrichment requirements:
+1. Add sentiment score (-1 to 1)
+2. Identify main topics
+3. Extract key statistics
+4. Add relevance score to keywords
+
+Return enriched data in JSON format.
+''')

@@ -1,0 +1,253 @@
+/*
+{
+	"title": "agent编程测试代码",
+	"description": "RQ+TestCase",
+	"parameter": [
+	 	{
+	 		"name":"input",
+	 		"label":"流程描述"
+	 	}],
+	"llm_type": "deepseek-chat",
+	"life": "100",
+	"modified_by": "lht",
+	"modified_time": "2024-11-28",
+	"version": "1"
+}
+*/
+
+when('!fn.hasValue(input)', {
+assign("input", '''1.input: 单个业务模块需求文档
+2.需求文档评分tpl_requirement_analysis_scoring
+3.模块划分tpl_gen_test_module_divided
+4.校验测试模块tpl_check_gen_test_module_divided
+5.测试点划分''')
+})
+
+// 定义chat
+define('tpl_gen_drawio', '''
+# drawio模板
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/26.0.4 Chrome/128.0.6613.186 Electron/32.2.5 Safari/537.36" version="26.0.4">
+  <diagram name="第 1 页" id="lw8dIzRXETJYTjuvGXGT">
+    <mxGraphModel dx="1687" dy="984" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="4681" pageHeight="3300" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="yJYIBjCMx1z9KmkcvuN8-4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="yJYIBjCMx1z9KmkcvuN8-1" target="yJYIBjCMx1z9KmkcvuN8-3" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="yJYIBjCMx1z9KmkcvuN8-1" value="读取表元数据信息" style="whiteSpace=wrap;html=1;aspect=fixed;" parent="1" vertex="1">
+          <mxGeometry x="80" y="180" width="80" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="yJYIBjCMx1z9KmkcvuN8-3" value="调用大模型&lt;div&gt;返回{&quot;data&quot;:[ {&quot;table1&quot;:table1的元数据信息} ]}&lt;/div&gt;" style="whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="210" y="190" width="120" height="60" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
+
+# 要求根据drawio模板,按照input内容生成 xml代码,从左到右排列，节点选择不同的颜色 并使用连接线连接, 直接返回,不必解释
+
+# input
+1. 用户输入指令
+用户 通过前端界面输入指令（例如：“登录到网站并填写表格”）。
+
+前端 将指令发送到 大模型引擎。
+
+2. 大模型引擎解析指令
+大模型引擎 接收到用户指令后，首先解析指令，理解用户的意图。
+
+大模型引擎 可能会向 Web RPA 发送请求，以获取当前页面的状态信息（例如：当前页面的URL、元素信息等）。
+
+3. 大模型引擎生成Selenium代码
+大模型引擎 根据解析后的指令和页面状态信息，生成相应的Selenium代码（例如：点击某个按钮、输入文本等）。
+
+大模型引擎 将生成的Selenium代码发送给 Web RPA。
+
+4. Web RPA执行Selenium代码
+Web RPA 接收到Selenium代码后，执行相应的操作（例如：打开浏览器、导航到指定URL、点击按钮、输入文本等）。
+
+Web RPA 在执行过程中，可能会遇到需要进一步信息的情况（例如：需要选择哪个按钮、输入什么文本等）。
+
+5. Web RPA反馈执行结果
+Web RPA 执行完Selenium代码后，将执行结果反馈给 大模型引擎。执行结果可能包括：
+
+操作成功或失败的标志。
+
+操作后的页面状态信息（例如：新的URL、新的元素信息等）。
+
+任何错误信息或异常情况。
+
+6. 大模型引擎处理反馈结果
+大模型引擎 接收到执行结果后，根据结果决定下一步操作：
+
+如果操作成功且指令完成，将结果反馈给用户。
+
+如果操作成功但指令未完成，继续生成下一步的Selenium代码并发送给 Web RPA。
+
+如果操作失败，可能需要重新生成Selenium代码或请求用户进一步的指令。
+
+7. 用户反馈
+如果 大模型引擎 需要用户进一步的输入或确认，它会通过前端界面请求用户反馈。
+
+用户提供反馈后，流程重新回到步骤2，继续解析和执行。
+
+8. 持续交互
+这个流程可以是持续的，直到用户指令完全执行完毕或用户选择终止操作。
+
+详细交互流程图
+复制
+用户 -> 前端 -> 大模型引擎
+大模型引擎 -> Web RPA (获取页面状态)
+Web RPA -> 大模型引擎 (页面状态信息)
+大模型引擎 -> Web RPA (生成Selenium代码)
+Web RPA -> 执行Selenium代码
+Web RPA -> 大模型引擎 (执行结果)
+大模型引擎 -> 用户 (反馈结果或请求进一步指令)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+1. 数据解析与关联关系识别
+1.1 解析表元数据
+分别加载 A表 和 B表 的元数据：
+提取字段信息（名称、类型、约束等）。
+提取主外键关系：
+确认 A表 的主键字段（如 USER_ID）。
+确认 B表 的外键字段及其关联的主键（如 LOGIN_LOG.USER_ID -> USER.USER_ID）。
+1.2 样例数据分析
+解析两表样例数据，识别字段类型、允许为空的情况、枚举值范围等。
+确认 B表 中外键字段的取值范围必须是 A表 主键字段的子集。
+2. 数据生成规则设计
+2.1 A表（主表）生成规则
+根据 A表 的字段定义，生成主表数据：
+主键字段：生成唯一值（如自增数值或 UUID）。
+普通字段：根据字段类型生成随机数据，参考样例数据、长度限制等。
+关联性字段：如果 A表 中存在外键字段，需考虑与其他表的主外键约束。
+2.2 B表（从表）生成规则
+B表 的生成需依赖于 A表 的数据：
+外键字段：
+随机选择 A表 主键字段的值，作为 B表 的外键。
+可以控制分布，如根据 A表 的用户活跃度生成更多或更少的关联记录。
+普通字段：根据字段类型生成随机数据。
+记录数控制：
+根据需求，控制每个 A表 主键在 B表 中的记录数量（如每个用户有 0~5 条登录日志）。
+3. 数据生成执行
+3.1 生成 A表 数据
+根据 A表 的生成规则，生成指定数量的记录。
+保持主键值唯一。
+3.2 生成 B表 数据
+基于 A表 数据生成 B表 的关联数据：
+遍历 A表 的主键值。
+为每个主键生成随机数量的 B表 记录（如 0~5 条）。
+将 A表 主键值填入 B表 的外键字段。
+3.3 模型辅助生成
+将表的元数据、关联规则及样例数据作为上下文输入 GPT：
+让 GPT 辅助生成符合规则的多表数据。
+如生成 B表 的登录日志时，输入的提示包括 A表 的用户 ID 数据及字段定义。
+4. 数据验证与修正
+4.1 表内验证
+检查生成数据是否符合单表字段类型和约束：
+主键唯一性。
+字段值类型正确性（如整数、日期等）。
+4.2 表间验证
+检查 B表 的外键字段值是否都存在于 A表 的主键字段中。
+4.3 数据质量检查
+控制生成数据分布：
+确保 B表 的外键字段值分布均匀，或按照需求模拟某些主键的高频出现。
+5. 数据输出
+将最终生成的 A表 和 B表 数据保存为所需格式（如 CSV、SQL INSERT 语句等）。
+提供日志，记录生成数据的统计信息（如每个 A表 主键在 B表 中的关联记录数分布）。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+flowchart TD
+    文件 --> 元数据文件
+    文件 --> 表格数据
+    文件 --> SQL_ETL文件[SQL ETL文件]
+
+    表格数据 --> 元数据处理Agent[元数据处理Agent]
+    元数据文件 --> 元数据处理Agent
+
+    subgraph 元数据处理Agent
+        文本内容切块
+        文本内容切块 --> 提取元数据[提取/推理表元数据信息]
+        提取元数据 --> 推理外键信息[提取/推理外键信息]
+        推理外键信息 --> 推理唯一标识符[推理唯一标识符]
+        推理唯一标识符 --> 生成元数据[{metadata,join key,unique key},...]
+    end
+
+    生成元数据 --> for循环表
+    for循环表 --> llm生成数据
+    for循环表 --> Python生成[python代码生成 Mimesis/fake]
+
+    llm生成数据 --> 程序验证[程序处理生成数据是否符合去重要求]
+    Python生成 --> 程序验证
+
+    程序验证 -- 符合要求 --> 输出[输出文件, 数据仓库等]
+    程序验证 -- 不符合要求 --> 生成建议[输出生成建议]
+
+
+
+
+
+
+[用户输入指令]
+        ↓
+[Web RPA 接收指令并解析]
+        ↓
+[获取页面元素信息]
+        ↓
+[返回页面元素给大模型]
+        ↓
+[大模型生成 Selenium 代码]
+        ↓
+[代码交由 RPA 执行]
+        ↓
+[返回执行日志和页面信息]
+        ↓
+[大模型分析结果并判断]
+   ↙          ↘
+[失败：调整策略] [成功：终止或执行下一步]
+
+{{input}}
+
+# 要求根据drawio模板,按照input内容生成 xml代码,从左到右排列，并使用连接线连接, 直接返回,不必解释
+''')
+
+define('tpl_gen_drawio2', '''
+帮我设计一个流程: 我有一个web RPA, 我通过一些自然语言描述 让RPA帮我执行某些任务:
+例如: 点击登录按钮`login`
+web RPA 首先会返回页面相关元素给大模型, 大模型选择操作的元素生成selenium代码, 代码交给RPA执行,执行完成之后,返回脚本执行日志(执行有无报错或成功)和页面相关信息,大模型根据这两个信息判断是否执行成功
+
+例如: 点击登录按钮login , RPA 需要返回页面说什么相关信息. 举例说明多个场景, 例如链接 输入 菜单栏.
+''')

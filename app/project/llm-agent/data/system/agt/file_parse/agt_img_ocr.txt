@@ -1,0 +1,36 @@
+
+/*
+{
+	"title": "Image OCR Agent",
+	"description": "Extract text from images using OCR API",
+	"parameter": [
+	 	{
+	 		"name":"image_file",
+	 		"label":"Image File",
+	 		"type":"file"
+	 	},
+	 	{
+	 		"name":"base64",
+	 		"label":"Base64"
+	 	},
+	],
+	"tag":"OCR, Image Processing",
+	"uiEntrance": "ocr_image_form",
+	"version": "1"
+}
+*/
+
+// Call OCR API with the image file
+n_ocr_result,act_api.doExecuteDynamic?name="img_ocr_api"&dynamicParamData='{{fn.json("img_file,image_file,img_base64,base64")}}'
+
+// Assign the OCR result as final output
+assign('ocr_text', '{{n_ocr_result.ocr_content}}')
+
+// Handle API failure
+on_failure('ocr_text', {
+    assign('error_message', 'OCR processing failed: {{n_ocr_result.msg}}')
+    act_flow.fail?result='{{error_message}}'
+})
+
+// Final result assignment
+assign('result', '{{ocr_text}}')

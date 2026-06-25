@@ -1,0 +1,75 @@
+/*
+{
+	"title": "API Page Content Summary",
+    "description": "Classify API/OpenAPI style page content into the same JSON shape as Web page summary for downstream module generation",
+	"parameter": [
+		{
+			"name": "page_content",
+			"label": "页面内容（含 page 字段的 map 或 JSON）"
+		}
+	],
+	"version": "1"
+}
+*/
+
+n_dbg_psum_api_in,act_func?script='''
+try {
+  def pc = page_content
+  println("[agt_page_content_summary_api] page_content_binding=" + (pc != null) + (pc instanceof Map ? (" page=" + pc.get("page")) : ""))
+} catch (Throwable t) {
+  println("[agt_page_content_summary_api] page_content_binding_error=" + t.message)
+}
+return ""
+'''
+// [PAGE-SUM-API] root 在 n_work_queue 项 st=api 时唯一入口；若改 JSON 字段名须同步 Web 摘要与 functional 分类 foreach
+// [PAGE-SUM-API] 输出须为英文 JSON 数组，与 Web 页摘要同一 schema，否则 requirement_type 分流与 func_modules 输入会断
+// tpl_page_summary_api
+n_page_content_summary,tpl_page_summary_api,psr_json
+
+
+define('tpl_page_summary_api', '''
+# API / HTTP specification extraction
+Analyze the following document slice. Treat it as **API contract** material (REST/OpenAPI/Swagger style): paths, methods, parameters, headers, auth, status codes, request/response bodies, error models.
+
+## Output format (must match downstream pipeline)
+Return a **JSON array** of objects (list of maps). Output text in **English**. Same schema as the Web page summary agent:
+```json
+[{
+  "page": 1,
+  "requirement_type": "Functional",
+  "section": "API group name",
+  "title": "Endpoint or operation title",
+  "description": "What the API does and key rules",
+  "business_rules": ["rule1"],
+  "acceptance_criteria": ["HTTP 200 with expected schema", "401 when token missing"],
+  "dependencies": [],
+  "testability": true
+}]
+```
+
+## requirement_type
+- Prefer **Functional** for endpoints, schemas, and error contracts.
+- Use **Compliance** only if the text is purely legal/regulatory without callable API.
+- Use **Background** only for glossary with no testable API surface.
+- Use **Other** sparingly.
+
+## Rules
+1) Ignore pure TOC / navigation-only lines with no API semantics.
+2) Do **not** merge Web UI concerns; focus on machine-readable contracts.
+3) Split distinct operations into separate array entries when evidence supports it.
+4) If the slice has no API-relevant content, return [].
+
+## Downstream uses same JSON keys as Web — fill them with **API meaning** (not Web UI wording)
+| Field | API-oriented content (English) |
+|-------|--------------------------------|
+| section | OpenAPI **tag** / resource group, or service name + area |
+| title | Prefer **HTTP_METHOD path** (e.g. `POST /v1/{resource}`) or **operationId** if named in spec |
+| description | One paragraph: purpose, auth (Bearer/API-key), major query/body params, idempotency if stated |
+| business_rules | Constraints: required headers, rate limits, enum values, schema refs, deprecation |
+| acceptance_criteria | Verifiable lines: expected **HTTP status**(es), error code mapping, response schema highlights |
+| page | Keep document page/slice number from payload for traceability |
+
+# Page payload
+{{page_content}}
+
+''')

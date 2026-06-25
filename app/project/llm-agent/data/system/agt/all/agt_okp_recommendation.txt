@@ -1,0 +1,274 @@
+/*
+{
+	"title":"agt_okp_risk_recommendation",
+	"description":"Use seven JSON inputs plus knowledge-base search results to determine final recommendation output",
+	"parameter":[
+		{
+			"name":"caseId",
+			"label":"Case Id",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"customerProfile",
+			"label":"Customer Profile JSON",
+			"required":false,
+			"maxLength":20000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"companySearchData",
+			"label":"Company Search JSON",
+			"required":false,
+			"maxLength":20000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"transactionReportData",
+			"label":"Transaction Report JSON",
+			"required":false,
+			"maxLength":20000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"nameScreeningReportData",
+			"label":"Name Screening Report JSON",
+			"required":false,
+			"maxLength":20000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"gapAnalysisReportData",
+			"label":"Gap Analysis Report JSON",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"eddFormJson",
+			"label":"EDD Form JSON",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"riskAnalysisData",
+			"label":"Risk Analysis Data",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		}
+	],
+	"displayOrder":0,
+	"version":9
+}
+*/
+// =====================================================
+// Customer Recommendation Agent
+//
+// Purpose:
+// 1. Receive seven JSON inputs from upstream agents
+// 2. Query knowledge base API for policy / framework / internal rules
+// 3. Combine KB result + seven inputs
+// 4. Generate structured recommendationData
+//
+// IMPORTANT:
+// Replace the KB API name below if needed:
+//   okp_agent_tool_knowledge_search
+// =====================================================
+
+assign('n_agent_name', 'agt_customer_risk_recommendation')
+assign('n_case_id', '{{caseId}}')
+assign('n_kb_query', '{{kbQuery}}')
+
+log('Start {{n_agent_name}}, caseId={{n_case_id}}')
+
+// ---------- Step 1: normalize seven inputs ----------
+n_customer,act_func?script=''' return fn.map(customerProfile) ?: [:] '''
+n_company,act_func?script=''' return fn.map(companySearchData) ?: [:] '''
+n_txn,act_func?script=''' return fn.map(transactionReportData) ?: [:] '''
+n_screen,act_func?script=''' return fn.map(nameScreeningReportData) ?: [:] '''
+n_gap,act_func?script=''' return fn.map(gapAnalysisReportData) ?: [:] '''
+n_edd,act_func?script=''' return fn.map(eddFormJson) ?: [:] '''
+
+log('Inputs normalized')
+
+
+// ---------- Step 3: query knowledge base by agt_test_kb_argus.chatdoc_QA agent begin----------
+n_test_kb_argus_result,agt_test_kb_argus.chatdoc_QA?userInput="The Hong Kong Association of Banks Frequently Asked Questions in relation to Anti-Money Laundering and Counter-Financing of Terrorism"&kbSpaceId="273100032240091136"&kbSpaceFileId="273100032245334016,273100120520753152,273100121353322496,273100121980370944"
+
+log('n_kb_api_result={{n_test_kb_argus_result}}')
+
+// ---------- Step 7: recommendation prompt ----------
+define('tpl_recommendation_json', '''
+    You are a professional AML / KYC recommendation decision engine.
+
+    Your task is to generate a structured recommendation output based on:
+    1. the final risk assessment
+    2. seven structured input datasets
+    3. knowledge-base search results
+    4. fill the best possible recommendation content in the value field.
+
+    # IMPORTANT
+    Return JSON only.
+    All keys are fixed.
+    All fields must contain:
+    - value
+    - aiRationale
+    - knowledgeBaseUsed
+    - dataSource
+
+    # FIELD DEFINITIONS
+    1. value
+    - The final recommendation content.
+
+    2. aiRationale
+    - Explain why this value is chosen.
+    - Do not mention "AI" or "model".
+
+    3. knowledgeBaseUsed
+    - List only policy / framework / knowledge-base references actually used.
+    - If no KB or policy is used, return "".
+
+    4. dataSource
+    - Describe which upstream input(s) support this value.
+    - Allowed examples:
+    Customer Profile
+    Company Search Data
+    Transaction Report
+    Name Screening Report
+    Gap Analysis Report
+    EDD Form
+    Risk Assessment Output
+    Knowledge Search Result
+    if none is available, return "".
+
+    caseId={{n_case_id}}
+
+    # GLOBAL RULES
+    1. recommendationType.value must be one of:
+    - MAINTAIN
+    - UPGRADE
+    - DOWNGRADE
+    - EXIT
+    2. priority.value must be one of:
+    - LOW
+    - MEDIUM
+    - HIGH
+    3. nextReviewDate.value must be a concrete date or a concrete review-cycle statement.
+    4. actionRequired.value must be actionable and formatted clearly.
+    5. Do not hallucinate policies.
+    6. Keep aiRationale concise but specific.
+
+    # INPUT
+    ## Risk Assessment Output
+    {{n_risk_result}}
+
+    ## Customer Data
+    {{n_customer}}
+
+    ## Company Search Data
+    {{n_company}}
+
+    ## Transaction Report Data
+    {{n_txn}}
+
+    ## Name Screening Report Data
+    {{n_screen}}
+
+    ## Gap Analysis Report Data
+    {{n_gap}}
+
+    ## EDD Form JSON
+    {{n_edd}}
+
+    ## Knowledge Search Result
+    {{n_test_kb_argus_result}}
+
+    # OUTPUT
+    {
+    "recommendationData": {
+        "caseId": "{{n_case_id}}",
+        "recommendationType": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        },
+        "recommendationDetail": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        },
+        "actionRequired": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        },
+        "nextReviewDate": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        },
+        "priority": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        }
+    }
+    }
+''')
+
+// ---------- Step 8: run recommendation ----------
+n_recommendation_result,tpl_recommendation_json,psr_json
+log('n_recommendation_result={{n_recommendation_result}}')
+
+//Step 11: Call report pdf generator agent
+n_pdf_url,agt_report_pdf_generator_okp?reportName='NSR1{{n_random_3}}'&reportJsonData='{{n_recommendation_result.data}}'&caseId='{{caseId}}'&userInput='样式设计要求简约清晰、视觉美观，优先使用表格呈现结构化信息'
+log('******n_pdf_url=={{n_pdf_url}}')
+n_update_url_json,act_func?script='''
+    def reportJson = n_recommendation_result
+    // 1. 确保 reportJson 存在
+    if(reportJson == null){
+        return [:]
+    }
+    // 2. 确保 data 存在
+    if(reportJson.data == null){
+        reportJson.data = [:]
+    }
+    // 3. 只在有 URL 时才更新
+    if(n_pdf_url != null && n_pdf_url.toString().trim() != ""){
+        reportJson.data.put("reportUrlWithRationale", n_pdf_url)
+        reportJson.data.put("reportUrl", n_pdf_url)
+    }
+    // 4. 返回最终结果
+    return reportJson
+'''
+log('-------n_update_url_json===={{n_update_url_json}}')
+
+// save recommendation data
+n_report_callback, act_api.doExecute?name='okp_agent_tool_save_recommendation'&params='{{n_update_url_json}}'
+
+// ---------- Failure Handling ----------
+on_failure({
+    log('agt_customer_risk_recommendation execution failed')
+    act_flow.go?plan=end
+})

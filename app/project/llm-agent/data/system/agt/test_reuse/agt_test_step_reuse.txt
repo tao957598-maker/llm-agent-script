@@ -1,0 +1,129 @@
+/*
+{
+	"title": "Test Case Reuse Analysis Agent",
+	"description": "Compare generated and ungenerated test cases to analyze reusable test steps",
+	"parameter": [
+		{
+			"name": "system_name",
+			"label": "System Name"
+		},
+		{
+			"name":"filter_type",
+			"label":"Filter Type",
+			"args":[
+				{"label":"Full Data","value":"full"},
+				{"label":"Empty","value":"empty"},
+				{"label":"No Reuse","value":"no_reuse"},
+				{"label":"Partial Reuse","value":"partial_reuse"},
+			],
+			"defaultValue":"empty",
+			"required":true,
+			"type":"select"
+		}
+	],
+	"tag": "Automated Testing",
+	"uiEntrance": "",
+	"life": 1000,
+	"version": "1"
+}
+*/
+
+// Check system_name
+when('!fn.hasValue(system_name)', {
+	act_flow.fail?result="system_name cannot be empty"
+})
+
+// Query store
+n_store_list, act_kb.selectBy?sql='SELECT id FROM llm_agent_store WHERE tag = "Automated Testing" AND agent_name = "agt_test_steps.test" AND last_version = 1 LIMIT 1'
+
+// Get store id
+n_store_id, act_func?script='''return (n_store_list && n_store_list.size() > 0) ? n_store_list[0].id : ""'''
+
+// Check store id
+when('!fn.hasValue(n_store_id)', {
+	act_flow.fail?result="agent_store_id is empty, cannot proceed"
+})
+
+// Build where clause based on filter_type
+n_query_where, act_func?script='''
+def whereClause = ""
+switch(filter_type) {
+    case "empty":
+        whereClause = "AND is_flow IS NULL"
+        break
+    case "no_reuse":
+        whereClause = "AND is_flow = 'No Reuse'"
+        break
+    case "partial_reuse":
+        whereClause = "AND is_flow = 'Partial Reuse'"
+        break
+    default:
+        whereClause = ""
+}
+return whereClause
+'''
+
+// Query cases
+n_case_list, act_kb.selectBy?sql='SELECT * FROM kb_gen_test_case WHERE application = ? {{n_query_where}}'&parameters='{{system_name}}'
+
+// Iterate cases
+foreach('n_case_item', 'n_case_list', {
+	// Extract case params
+	assign("platform", '{{n_case_item.item.platform}}')
+	assign("test_no", '{{n_case_item.item.test_no}}')
+	assign("case_steps", '{{n_case_item.item.steps}}')
+	assign("case_id", '{{n_case_item.item.id}}')
+
+	// Query matching instance
+	n_case_instance_list, act_kb.selectBy?sql='SELECT * FROM llm_agent_instance WHERE agent_store_id = ? AND status = 500 AND JSON_EXTRACT(parameters, "$.test_no") = ? AND JSON_EXTRACT(parameters, "$.platform") = ? ORDER BY create_time DESC LIMIT 1'&parameters='["{{n_store_id}}", "{{test_no}}", "{{platform}}"]'
+
+	// Check if list has data
+	n_has_instance, act_func?script='''return (n_case_instance_list != null && n_case_instance_list.size() > 0 && n_case_instance_list[0] != null)'''
+
+	// Execute based on result
+	when('{{n_has_instance == true}}', {
+		// Has data: extract params and compare
+		assign("instance_params", '{{n_case_instance_list[0].parameters}}')
+		// Compare steps via prompt
+		n_get_compare_steps, tpl_compare_steps, psr_json
+		assign("compare_steps", '{{n_get_compare_steps}}')
+
+		// Update case table
+		act_kb.update?name='kb_gen_test_case'&columnValues='{"is_flow":"{{compare_steps.is_flow}}", "step_flow":"{{compare_steps.step_flow}}"}'&where='{"id":"{{case_id}}"}'
+	}, {
+		// No data: set is_flow to No Reuse
+		act_kb.update?name='kb_gen_test_case'&columnValues='{"is_flow":"No Reuse"}'&where='{"id":"{{case_id}}"}'
+	})
+})
+
+// Define prompt for comparing steps
+define('tpl_compare_steps', '''
+请对比以下两个测试步骤，分析它们的可复用性：
+
+【已生成案例的测试步骤】
+{{instance_params.steps}}
+
+【待分析案例的测试步骤】
+{{case_steps}}
+
+请按照以下JSON格式输出分析结果：
+{
+  "is_flow": "枚举值",
+  "step_flow": "复用的步骤列表"
+}
+
+其中is_flow的枚举值规则：
+- Full Reuse：待分析案例的所有步骤都可以从已生成案例中复用
+- Partial Reuse：待分析案例的部分步骤可以从已生成案例中复用
+- No Reuse：待分析案例没有任何步骤可以从已生成案例中复用
+
+step_flow格式：如果有可复用步骤，提取原序号和内容，用逗号分隔，如"1.登录系统，3.填写表单"；如果没有可复用步骤则为空字符串。
+
+只输出JSON格式，不要输出其他任何内容。
+
+例：
+{
+  "is_flow": "Full Reuse",
+  "step_flow": "1.登录系统，3.填写表单"
+}
+''')

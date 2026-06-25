@@ -1,0 +1,197 @@
+/*{
+  "title": "执行项目构建",
+  "description": "执行项目构建，支持分层打包和标准 Maven 构建",
+  "parameter": [
+    {
+      "name": "os",
+      "label": "操作系统",
+      "required": true
+    },
+    {
+      "name": "project_root",
+      "label": "项目根目录",
+      "required": true
+    },
+    {
+      "name": "skip_tests",
+      "label": "是否跳过测试",
+      "required": true
+    },
+    {
+      "name": "mvn_bin",
+      "label": "Maven bin目录"
+    },
+    {
+      "name": "server_id",
+      "label": "服务器ID"
+    }
+  ],
+  "resultPlan": "n_build_plan_result",
+  "discoverable": false,
+  "life": "100"
+}*/
+
+assign('n_log', '')
+assign('n_build_cmd', '')
+
+// 先检查目录是否存在
+when('os == "windows"', {
+  assign('n_check_dir_cmd', 'if exist "{{project_root}}" (echo EXISTS) else (echo NOT_EXISTS)')
+}, {
+  assign('n_check_dir_cmd', 'if [ -d "{{project_root}}" ]; then echo EXISTS; else echo NOT_EXISTS; fi')
+})
+n_dir_check, agt_cmd_executor.assistant?cmd={{n_check_dir_cmd}}&cmd_executor_name="检查项目目录"&server_id={{server_id}}
+assign('n_dir_exists', '{{n_dir_check?trim == "EXISTS"}}')
+when('!fn.bool(n_dir_exists)', {
+  assign('n_log', '{{n_log}}\n❌ 项目目录不存在: {{project_root}}')
+  assign("n_build_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"true"}')
+})
+
+//## 检查并下载 JDK
+//assign('n_jdk_home', '')
+assign('n_is_llm_agent', '{{project_root?ends_with("llm-agent")}}')
+
+// 获取当前 JDK 版本
+n_jdk_check, agt_cmd_executor.assistant?cmd='java -version 2>&1 | head -1'&cmd_executor_name="检查JDK版本"&server_id={{server_id}}
+n_jdk_version, act_func?script='''
+    def output = n_jdk_check ?: ""
+    def notFound = output.contains("not found") || output.contains("command not found") || output.isEmpty()
+    if (notFound) {
+        fn.put("n_jdk_major_version", "-1")
+        return -1
+    }
+    def matcher = output =~ /version "(\d+)/
+    def major = 1
+    if (matcher.find()) {
+        def versionStr = matcher.group(1)
+        def parts = versionStr.split(/\./)
+        major = (parts[0] ?: "1").toInteger()
+    }
+    fn.put("n_jdk_major_version", major)
+    return major
+'''
+
+when('fn.bool(n_is_llm_agent)', {
+    // llm-agent 项目：必须 JDK 21
+    assign('n_is_jdk21', '{{n_jdk_version == 21}}')
+    when('fn.bool(n_is_jdk21)', {
+        assign('n_log', '{{n_log}}\n✓ JDK 21 已安装，无需额外配置')
+        assign('n_jdk_home', '')
+    }, {
+        assign('n_log', '{{n_log}}\n📥 llm-agent 项目需要 JDK 21，当前版本不满足，检查缓存...')
+        n_cached_jdk, agt_cmd_executor.assistant?cmd='ls -d /tmp/jdk-* 2>/dev/null | grep "jdk-21" | head -1'&cmd_executor_name="检查缓存JDK"&server_id={{server_id}}
+        when('fn.hasValue(n_cached_jdk) && fn.contains(n_cached_jdk, "jdk-21")', {
+            assign('n_jdk_home', '{{n_cached_jdk?trim}}')
+            assign('n_log', '{{n_log}}\n✓ 使用已缓存的 JDK 21: {{n_jdk_home}}')
+        }, {
+            assign('n_log', '{{n_log}}\n📥 未找到缓存，开始下载 JDK 21...')
+            n_download_result, agt_cmd_executor.assistant?cmd='mkdir -p /tmp && curl -fsSL https://download.oracle.com/java/21/latest/jdk-21_linux-x64_bin.tar.gz -o /tmp/jdk-21.tar.gz && tar -xzf /tmp/jdk-21.tar.gz -C /tmp && rm /tmp/jdk-21.tar.gz && ls -d /tmp/jdk-* | head -1'&cmd_executor_name="下载JDK21"&server_id={{server_id}}
+            assign('n_download_success', '{{!fn.contains(n_download_result, "error") && !fn.contains(n_download_result, "failed") && fn.contains(n_download_result, "/tmp/jdk")}}')
+            when('fn.bool(n_download_success)', {
+                n_jdk21_path, act_func?script='''
+                    def output = n_download_result ?: ""
+                    def path = output.trim()
+                    fn.put("n_jdk_path", path)
+                    return path
+                '''
+                assign('n_jdk_home', '{{n_jdk21_path}}')
+                assign('n_log', '{{n_log}}\n✓ JDK 21 下载完成: {{n_jdk_home}}')
+            }, {
+                assign('n_log', '{{n_log}}\n⚠️ JDK 21 下载失败，将使用当前 JDK')
+            })
+        })
+    })
+}, {
+    // 其他项目：优先使用缓存的 JDK 21，其次用系统 JDK
+    n_cached_jdk, agt_cmd_executor.assistant?cmd='ls -d /tmp/jdk-* 2>/dev/null | grep "jdk-21" | head -1'&cmd_executor_name="检查缓存JDK"&server_id={{server_id}}
+    when('fn.hasValue(n_cached_jdk) && fn.contains(n_cached_jdk, "jdk-21")', {
+        assign('n_jdk_home', '{{n_cached_jdk?trim}}')
+        assign('n_log', '{{n_log}}\n✓ 使用已缓存的 JDK 21: {{n_jdk_home}}')
+    }, {
+        assign('n_is_jdk21', '{{n_jdk_version == 21}}')
+        when('fn.bool(n_is_jdk21)', {
+            assign('n_log', '{{n_log}}\n✓ 检测到系统 JDK 21')
+            assign('n_jdk_home', '')
+        }, {
+            assign('n_is_jdk_installed', '{{n_jdk_version > 0}}')
+            when('fn.bool(n_is_jdk_installed)', {
+                assign('n_jdk_home', '')
+                assign('n_log', '{{n_log}}\n⚠️ 未检测到 JDK 21，当前系统 JDK {{n_jdk_version}} 可能不满足要求，将尝试构建')
+            }, {
+                assign('n_log', '{{n_log}}\n⚠️ 未检测到系统 JDK，将尝试构建')
+            })
+        })
+    })
+})
+
+//## 构建 JDK 前缀命令
+assign('n_has_jdk', '{{fn.hasValue(n_jdk_home)}}')
+when('n_has_jdk == "true"', {
+  assign('n_jdk_prefix_linux', 'export JAVA_HOME={{n_jdk_home}} && export PATH={{mvn_bin}}:$JAVA_HOME/bin:$PATH && ')
+}, {
+  assign('n_jdk_prefix_linux', 'export PATH={{mvn_bin}}:$PATH && ')
+})
+when('n_has_jdk == "true"', {
+  assign('n_jdk_prefix_win', 'set JAVA_HOME={{n_jdk_home}} && set PATH=%JAVA_HOME%\\bin;%PATH% && ')
+}, {
+  assign('n_jdk_prefix_win', '')
+})
+
+// 检查是否有分层打包脚本
+when('os == "windows"', {
+  assign('n_check_script_cmd', 'if exist "{{project_root}}\\deploy\\build_thin_all.bat" (echo EXISTS) else (echo NOT_EXISTS)')
+}, {
+  assign('n_check_script_cmd', 'if [ -f "{{project_root}}/deploy/build_thin_all.sh" ]; then echo EXISTS; else echo NOT_EXISTS; fi')
+})
+n_script_check, agt_cmd_executor.assistant?cmd={{n_check_script_cmd}}&cmd_executor_name="检查分层打包脚本"&server_id={{server_id}}
+assign('n_has_thin_script', '{{n_script_check?trim == "EXISTS"}}')
+
+// 根据检测结果选择构建方式
+when('fn.bool(n_has_thin_script)', {
+  // 使用分层打包脚本 针对我们自己系统的项目（别叫特别，如果以后其他项目也可以统一以这个脚本名称来统一
+  assign('n_log', '{{n_log}}\n📦 检测到分层打包脚本，使用分层打包')
+  when('os == "windows"', {
+    when('skip_tests == "true"', {
+      assign('n_build_cmd', '{{n_jdk_prefix_win}}cd /d "{{project_root}}" && call "{{project_root}}/deploy/build_thin_all.bat" -DskipTests')
+    }, {
+      assign('n_build_cmd', '{{n_jdk_prefix_win}}cd /d "{{project_root}}" && call "{{project_root}}/deploy/build_thin_all.bat"')
+    })
+  }, {
+  when('skip_tests == "true"', {
+    assign('n_build_cmd', '{{n_jdk_prefix_linux}} cd "{{project_root}}" && bash deploy/build_thin_all.sh -DskipTests')
+  }, {
+    assign('n_build_cmd', '{{n_jdk_prefix_linux}} cd "{{project_root}}" && bash deploy/build_thin_all.sh')
+  })
+  })
+}, {
+  // 使用标准 Maven 命令
+  assign('n_log', '{{n_log}}\n📦 未检测到分层打包脚本，使用标准 Maven 构建')
+  when('os == "windows"', {
+    when('skip_tests == "true"', {
+      assign('n_build_cmd', '{{n_jdk_prefix_win}}cd /d "{{project_root}}" && mvn clean install -DskipTests')
+    }, {
+      assign('n_build_cmd', '{{n_jdk_prefix_win}}cd /d "{{project_root}}" && mvn clean install')
+    })
+  }, {
+    when('skip_tests == "true"', {
+      assign('n_build_cmd', '{{n_jdk_prefix_linux}} cd "{{project_root}}" && mvn clean install -DskipTests')
+    }, {
+      assign('n_build_cmd', '{{n_jdk_prefix_linux}} cd "{{project_root}}" && mvn clean install')
+    }) 
+  })
+})
+
+assign('n_log', '{{n_log}}\n🔨 执行构建命令: {{n_build_cmd}}')
+n_build_result, agt_cmd_executor.assistant?cmd={{n_build_cmd}}&cmd_executor_name="执行构建"&server_id={{server_id}}&async="true"
+assign('n_build_output', '{{n_build_result}}')
+// 判断构建是否成功
+assign('n_build_ok', '{{fn.contains(n_build_result, "BUILD SUCCESS")}}')
+when('fn.bool(n_build_ok)', {
+  assign('n_log', '{{n_log}}\n✓ 构建成功')
+  // 返回成功
+  assign("n_build_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_build_output}}","is_plan_break":"false"}')
+}, {
+  assign('n_log', '{{n_log}}\n❌ 构建失败')
+  // 返回失败
+  assign("n_build_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"true"}')
+})

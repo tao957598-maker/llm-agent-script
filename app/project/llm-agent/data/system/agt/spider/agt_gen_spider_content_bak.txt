@@ -1,0 +1,117 @@
+/*
+{
+	"title":"Generate Spider Content",
+	"description":"Generate spider content",
+	"parameter":[
+		{
+			"name":"system_name",
+			"label":"系统名称",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"spider",
+	"uiEntrance":"graph",
+	"displayOrder":3,
+	"version":1
+}
+*/
+// get n_kb_spiderdeep_directory_data
+n_kb_spiderdeep_directory_data, act_kb.selectBy?sql='SELECT directory_id, biz_id, current_uri, target_uri, run_steps, system_name, version, spider_deep, create_time, update_time FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" and version = "{{version}}" and run_success = "1" and directory_id is not NULL'
+
+// foreach n_kb_spiderdeep_directory_data
+foreach('n_data', 'n_kb_spiderdeep_directory_data', {
+    assign('z_spiderdeep_directory_item', '{{n_data.item}}')
+    // z_current_uri
+    assign('z_current_uri', '{{z_spiderdeep_directory_item.current_uri}}')
+    assign('z_directory_id', '{{z_spiderdeep_directory_item.directory_id}}')
+    // z_target_uri
+    assign('z_target_uri', '{{z_spiderdeep_directory_item.target_uri}}')
+    assign('z_run_steps', '{{z_spiderdeep_directory_item.run_steps}}')
+    assign('z_biz_id', '{{z_spiderdeep_directory_item.biz_id}}')
+    assign('z_system_name', '{{z_spiderdeep_directory_item.system_name}}')
+    assign('z_version', '{{z_spiderdeep_directory_item.version}}')
+
+    assign('z_spider_deep', '{{z_spiderdeep_directory_item.spider_deep}}')
+    assign('z_create_time', '{{z_spiderdeep_directory_item.create_time}}')
+    assign('z_update_time', '{{z_spiderdeep_directory_item.update_time}}')
+    when("!z_spider_deep", {
+        assign('z_spider_deep', '')
+    })
+    when("!z_create_time", {
+        assign('z_create_time', '')
+    })
+    when("!z_update_time", {
+        assign('z_update_time', '')
+    })
+
+
+    when('z_current_uri!=z_target_uri',{
+
+      // 查找父节点, 用子节点的current_uri查找父节点的target_uri
+      n_select_data, act_kb.selectBy?sql='SELECT directory_id, current_uri, target_uri, run_steps FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" and version = "{{version}}" and target_uri = "{{z_current_uri}}" and run_success = "1" and directory_id is not NULL'
+
+      when('{{(n_select_data![])?size == 0}}',{
+          // 没有查到数据，则当前数据为顶级节点
+          n_data_item, act_func?script='''
+            def variable = [
+                properties: [
+                    current_uri: "{{z_target_uri}}",
+                    directory_id: "{{z_directory_id}}",
+                    system_name: "{{z_system_name}}",
+                    relationKey: "directory_id"
+                ]
+            ]
+            return variable
+            '''
+      },{
+        n_data_item, act_func?script='''
+        def variable = n_select_data[0]
+        return variable
+        '''
+        // f_data_item
+        assign('f_data_item', '{{n_data_item}}')
+
+        assign('f_directory_id', '{{f_data_item.directory_id}}')
+        assign('f_current_uri', '{{f_data_item.current_uri}}')
+        assign('f_target_uri', '{{f_data_item.target_uri}}')
+
+        n_data_item, act_func?script='''
+          def variable = [
+              properties: [
+                  directory_id: "{{f_directory_id}}",
+                  current_uri: "{{f_target_uri}}",
+                  relationKey: "directory_id"
+              ],
+              subNode: [
+                  [
+                      properties: [
+                          directory_id: "{{z_directory_id}}",
+                          current_uri: "{{z_target_uri}}",
+                          system_name: "{{z_system_name}}",
+                          relationKey: "directory_id"
+                      ],
+                      "relationProps":[
+                        current_uri: "{{z_current_uri}}",
+                        target_uri: "{{z_target_uri}}",
+                        "run_steps": z_run_steps.toString(),
+                        system_name: "{{z_system_name}}",
+                        version: "{{z_version}}",
+                        spider_deep: "{{z_spider_deep}}",
+                        "relationType" :"inherit"
+                      ]
+                  ]
+              ]
+          ]
+          return variable
+          '''
+      })
+      // data_item
+      assign('a_data_item', '{{n_data_item}}')
+      //# Update2
+      act_kb.update?name=kb_spiderdeep_directory&columnValues="{'graph_content':'{{a_data_item}}'}"&where='{"biz_id":"{{z_biz_id}}"}'
+
+    })
+
+})

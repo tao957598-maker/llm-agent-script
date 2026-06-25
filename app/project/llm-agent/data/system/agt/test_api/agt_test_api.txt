@@ -1,0 +1,81 @@
+/*
+{
+	"title":"API Interface Test Code Generator",
+	"description":"API Test",
+	"parameter":[
+		{
+			"name":"input",
+			"label":"API名称和数据"
+		},
+		{
+			"name":"file_path",
+			"label":"Save path for file upload"
+		}
+	],
+	"resultPlan":"generated_python_code,n_rpa_test",
+	"life":10000,
+	"version":1
+}
+*/
+define('tpl_gen_data', '''
+- Role: 数据生成专家
+- Background: 用户需要根据特定的元数据信息和补充信息来生成测试数据，这些数据需要尽可能地符合实际场景，以便进行有效的测试和验证。
+- Profile: 你是一位经验丰富的数据生成专家，擅长使用python的request模块编写接口测试代码。
+- Skills: 你具备数据建模、编程和逻辑分析能力，能够理解json数据的结构和含义，以及如何根据补充信息生成真实感强的数据。
+- Goals: 生成一个python接口测试方法。
+- Constrains: 输出的python代码必须符合标准，确保接口测试的准确性和可靠性。
+- OutputFormat: 输出python代码
+- Workflow:
+  1. 分析json数据信息，理解数据结构和字段要求。
+  2. 结合补充信息，确定数据生成的具体规则和约束条件。
+  3. json数据中"method": "post", 则使用requests.post方法; base_url和api组成接口的url
+  4. 如果json数据含有para字段，file_to_byte为读取本地api_test.msg文件的二进制数据，最后para字段作为接口参数传入
+  5. 因为使用pytest框架, 接口测试代码的方法名以test_开头, 结合api最后一个字段生成方法名，如：def test_email()
+  6. 不必解释
+  
+# json数据信息
+{
+	"method": "post"
+	"base_url": "http://172.18.12.70:6060",
+	"api": "/api_pj/RAG/Document_Parser/email",
+	"para": {
+		"files":{
+			"file": file_to_byte
+		}
+	}
+}
+
+输出的Python代码示例:
+```python
+import request
+
+
+API = {
+	"method": "post"
+	"base_url": "http://172.18.3.3:6060",
+	"api": "/api_pj/RAG/Document_Parser/email",
+	"para": {
+		"files":{
+			"file": file_to_byte
+		}
+	}
+}
+
+
+def test_email():
+	response = requests.post(f"{API["base_url"]}{API["api"]}", files=API["para]["files"])
+    assert response.status_code == 200
+
+只需返回完整的Python代码，不要解释。
+''')
+
+// 调用大模型生成Python代码，结果赋值给变量generated_python_code
+n_python_code , tpl_gen_data,psr_json_python
+assign("generated_python_code", "{{tpl_gen_data}}")
+assign("task_name", "{{sys_task_name}}")
+
+// 写入后端文件库 yml  应用的根目录 data\selenium
+n_python_file, act_python.writeTmp?requirement='test0314'&pythonCode={{generated_python_code}}&pythonType='selenium'
+// 运行 Selenium 脚本通过 RPA 客户端 合并测试步骤结果到知识库 等待一段时间 返回 [{},{}] 数据
+n_rpa_test, act_rpa.send?name={{python_file}}&parameters='{"file_path":"upload/{{task_name}}"}'&command=apiTest&result="upload/{{task_name}}"
+assign("result", 'Agent task ended')

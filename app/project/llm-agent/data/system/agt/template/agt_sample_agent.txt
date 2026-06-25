@@ -1,0 +1,38 @@
+/*{
+  "title": "Selenium Python 代码生成",
+  "parameter": [
+    {"name":"current_step","label":"当前步骤","required":true},
+    {"name":"envinfo","label":"环境信息","required":false}
+  ],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+// 读取必传入参 current_step
+assign('step_text', '{{current_step}}')
+// 读取可选入参 envinfo
+assign('env_text', '{{envinfo}}')
+
+// 主结果链路：生成 Python Selenium 代码并输出原始文本
+n_result, tpl_gen_selenium_py, psr_all
+
+// 定义生成 Selenium Python 代码的提示模板
+define('tpl_gen_selenium_py', '''
+你是资深自动化测试工程师，请根据输入生成可执行的 Python Selenium 代码。
+
+输入信息：
+- 当前步骤（必有）：
+{{step_text}}
+
+- 环境信息（可能为空）：
+{{env_text}}
+
+要求：
+1. 仅输出 Python 代码，不要输出解释、markdown、注释块边界符号。
+2. 使用 Selenium WebDriver（Python）标准写法，优先使用 WebDriverWait 与 expected_conditions。
+3. 代码需可直接运行，包含必要 import、driver 初始化、核心操作步骤、异常处理与 driver.quit()。
+4. 当环境信息为空时，使用合理默认值（如 Chrome、本地驱动初始化）。
+5. 选择器与操作必须贴合“当前步骤”描述；若信息不足，用 TODO 占位并保持代码可运行。
+6. 输出应包含一个可直接执行入口（如 if __name__ == "__main__":）。
+7. 若涉及登录、跳转、点击、输入等操作，优先使用显式等待后再执行动作。
+''')

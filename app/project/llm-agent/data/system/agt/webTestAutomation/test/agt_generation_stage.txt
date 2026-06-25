@@ -1,0 +1,139 @@
+/*
+{
+	"title":"Web 自动化测试(生成阶段)",
+	"description":"基于 AI 智能语义分析的 Web 测试用例辅助编写与自动化补全引擎。（生成方案待优化）",
+	"parameter":[
+		{
+			"name":"platform",
+			"label":"系统名称",
+			"required":true
+		},
+		{
+			"name":"module_name",
+			"label":"module_name",
+			"defaultValue":"def_module",
+			"required":true,
+			"description":"module_name"
+		},
+		{
+			"name":"test_no",
+			"label":"测试编号",
+			"required":true
+		},
+		{
+			"name":"steps",
+			"label":"测试步骤",
+			"type":"textarea"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"defaultValue":"1",
+			"required":true
+		},
+		{
+			"name":"expected_result",
+			"label":"Expect Result",
+			"type":"textarea"
+		},
+		{
+			"name":"dependent_test_no",
+			"label":"Dependent Test No"
+		},
+		{
+			"name":"restart_browser",
+			"label":"Restart Browser",
+			"defaultValue":"1",
+			"required":true
+		},
+		{
+			"name":"explore_mode",
+			"label":"Running Mode",
+			"args":[
+				{
+					"label":"开发模式",
+					"value":"开发模式"
+				},
+				{
+					"label":"生产模式",
+					"value":"生产模式"
+				}
+			],
+			"defaultValue":"开发模式",
+			"type":"select",
+			"required":true
+		},
+		{
+			"name":"programming_language",
+			"label":"Programming Language",
+			"args":[
+				{
+					"label":"selenium",
+					"value":"selenium"
+				},
+				{
+					"label":"java",
+					"value":"java"
+				}
+			],
+			"defaultValue":"selenium",
+			"type":"select",
+			"required":true
+		},
+		{
+			"name":"step_supplement",
+			"label":"Step Supplement Required",
+			"args":[
+				{
+					"label":"False",
+					"value":"false"
+				},
+				{
+					"label":"True",
+					"value":"true"
+				}
+			],
+			"defaultValue":"false",
+			"type":"select",
+			"required":true
+		}
+	],
+	"tag":"Automated Testing",
+	"uiEntrance":"?isFullScreen=true",
+	"dependency":"ac",
+	"displayOrder":40,
+	"version":2
+}
+*/
+
+// Initialize parameters
+assign('pythonType', 'selenium', 'explore_mode', '{{fn.optional(explore_mode,1)}}', 'subfolder', '{{test_no}}')
+
+// Change page view to full screen
+act_flow.changeView?field=isFullScreen&value=true
+
+// Load business information from knowledge base
+n_envinfo, act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'
+
+// Set system language
+assign('language', '{{fn.str(n_envinfo, "language")}}')
+assign('system', '{{platform}}')
+
+
+// Call agent to generate test steps
+agt_test_steps_gen?system={{system}}&test_no={{test_no}}&version={{version}}&steps={{steps}}&expected_result={{expected_result}}&force_update=false&step_supplement={{step_supplement}}
+
+// TODO callback
+n_plan_steps, act_plan.convert?var=steps&callback=agt_plan_save_testcase_step.rpa.webTestAutomation
+
+//# 环境参数
+log('pythonType: {{pythonType}}   language: {{language}}   subfolder: {{subfolder}}')
+
+//# 测试参数
+log('系统system: {{system}} 环境explore_mode: {{explore_mode}} 编号test_no: {{test_no}} 版本version: {{version}}')
+
+//# 原始测试步骤
+log('{{steps}}')
+
+//# 测试步骤规范化
+log('{{n_plan_steps}}')

@@ -1,0 +1,105 @@
+/*
+{
+	"title":"Quality Analysis and Scoring Agent - Batch",
+	"description":"Locate raw data based on the user's question, compare with processed data, conduct strict multi-dimensional scoring, and save structured results",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"textarea"
+		}
+	],
+	"life":100,
+	"version":1
+}
+*/
+/
+
+// 第一步：读取原始数据 act_kbs.readSectionFile?folderName='Agent_code'&knowledgeName='data'&isSource=true
+n_origin_data,rag_kbs.readSectionFile?kbSpaceFileId='{{kbSpaceFileId!}}'&isSource=true
+
+// 第二步：调用自动生成sql的agent 读取已处理数据
+agt_auto_sql1?userInput='{{userInput}}'
+n_kb_data, act_kb.selectBy?sql='{{sys_last_result}}'
+assign("table_list", "{{n_kb_data}}")
+
+// 第三步：分组，每组10条
+n_group_batches, act_func?script='''
+def batchSize = 10
+def grouped = []
+for (int i = 0; i < table_list.size(); i += batchSize) {
+  int end = Math.min(i + batchSize, table_list.size())
+  grouped.add(table_list.subList(i, end))
+}
+return grouped
+'''
+
+// 初始化总输出
+assign("all_scored_data", "[]")
+
+// 遍历每组数据
+foreach('batch_group', 'n_group_batches', {
+  assign('batch_data', '{{batch_group.item}}')
+
+  // 构造提示词
+  define('tpl_score_batch_prompt', '''
+    </no_think>你是一位资深数据质量分析师，请你对【原始数据】与【处理后数据】进行对比，严格评估后者的数据质量。以下是五个评分维度及其标准：
+
+    1. 完整性 Completeness：是否存在字段缺失、字段为空、结构不全等情况。
+    2. 准确性 Accuracy：字段值是否准确还原原始内容，是否存在误改、错拼、错误识别。
+    3. 一致性 Consistency：字段命名统一、枚举值规范、时间格式统一、数据结构稳定。
+    4. 合规性 Compliance：字段是否符合预设规范、标准代码、长度限制、类型限制等要求。
+    5. 可用性 Usability：是否便于后续分析处理，如字段清晰、命名明确、结构清楚。
+
+    请从每个维度为处理后数据严格打分（满分10分），每条数据仅返回一个整数分值（可取各维度平均分），不必解释。
+    返回一个与【处理后数据】条数相匹配的JSON 数组，例：【处理后数据】为十条，评分后的数据也需要返回十条，格式如下：
+    [
+      {"index": 0, "score": 9},
+      {"index": 1, "score": 8},
+      ...
+    ]
+
+    评分范围为 1-10，越高代表质量越好，不需要解释说明。
+
+    【原始数据】
+    {{n_origin_data}}
+
+    【处理后数据列表】（每条用 --- 分隔）
+    ---
+    {{batch_data}}
+    ''')
+
+  n_batch_score, tpl_score_batch_prompt
+
+  // 合并分数并去除 id
+  n_scored_batch, act_func?script='''
+  def scored = []
+  for (int i = 0; i < batch_data.size(); i++) {
+    def item = batch_data[i]
+    def scoreItem = n_batch_score.find { it.index == i }
+    if (scoreItem != null && scoreItem.score >= 6) {
+      item["quality_score"] = scoreItem.score
+      if (item.containsKey("id")) {
+        item["item_id"] = item.remove("id")
+      }
+      scored.add(item)
+    }
+  }
+  return scored
+  '''
+
+  // 合并到总结果中
+  act_func?script="all_scored_data.addAll(n_scored_batch)"
+})
+
+// 第四步：写入数据库
+assign("result_data", '{{all_scored_data}}')
+act_kb.defineAndImportData?tableName='kb_test_data_scenarios_demo'&data='{{result_data}}'
+
+// 第五步：输出结果
+assign("generated_data", "数据批次评分已完成，已保存至数据库")

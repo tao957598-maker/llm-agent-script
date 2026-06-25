@@ -1,0 +1,131 @@
+/*
+{
+	"title":"费用流程0730",
+	"tag":"OA",
+	"uiEntrance":"daily_fee_apply_form0730",
+	"displayOrder":0,
+	"version":5
+}
+*/
+// 项目经理(PM)审批节点
+approve('n_pm_approval', '''
+{
+    "assigneeConfig": {
+        "type": "ROLE",
+        "strategy": "ALL",
+        "targets": [
+            {
+                "targetType": "USER_ID",
+                "value": 1,
+                "description": "admin"
+            }
+        ]
+    },
+    "formKey": "n_expense_form",
+    "approvalTitle": "项目经理审批费用申请",
+    "dueDateUnit": "DAYS"
+}
+
+{
+  "assigneeConfig": {
+    "type": "ROLE",
+    "strategy": "ALL",
+    "targets": [
+      {
+                "targetType": "USER_ID",
+                "value": 1,
+                "description": "admin"
+      }
+    ]
+  },
+  "formKey": "n_expense_form",
+  "approvalTitle": "财务总监审批费用申请"
+}
+
+
+{
+    "assigneeConfig": {
+        "type": "ROLE",
+        "strategy": "ALL",
+        "targets": [
+            {
+                "targetType": "USER_ID",
+                "value": 1,
+                "description": "admin"
+            }
+        ]
+    },
+    "formKey": "n_expense_form",
+    "approvalTitle": "项目经理审批费用申请",
+    "dueDateUnit": "DAYS"
+}
+
+{
+  "assigneeConfig": {
+    "type": "ROLE",
+    "strategy": "ALL",
+    "targets": [
+      {
+        "targetType": "ROLE_NAME",
+        "value": "财务总监"
+      }
+    ]
+  },
+  "formKey": "n_expense_form",
+  "approvalTitle": "财务总监审批费用申请"
+}
+
+
+{
+    "assigneeConfig": {
+        "type": "ROLE",
+        "strategy": "ALL",
+        "targets": [
+            {
+                "targetType": "USER_ID",
+                "value": 1,
+                "description": "admin"
+            }
+        ]
+    },
+    "formKey": "n_expense_form",
+    "approvalTitle": "项目经理审批费用申请",
+    "dueDateUnit": "DAYS"
+}
+''')
+
+// 财务总监审批节点
+approve('n_financial_director_approval', '''
+{
+    "assigneeConfig": {
+        "type": "ROLE",
+        "strategy": "ALL",
+        "targets": [
+            {
+                "targetType": "USER_ID",
+                "value": 1,
+                "description": "admin"
+            }
+        ]
+    },
+    "formKey": "n_expense_form",
+    "approvalTitle": "项目经理审批费用申请",
+    "dueDateUnit": "DAYS"
+}
+
+{
+  "assigneeConfig": {
+    "type": "ROLE",
+    "strategy": "ALL",
+    "targets": [
+      {
+                "targetType": "USER_ID",
+                "value": 1,
+                "description": "admin"
+      }
+    ]
+  },
+  "formKey": "n_expense_form",
+  "approvalTitle": "财务总监审批费用申请"
+}
+''')

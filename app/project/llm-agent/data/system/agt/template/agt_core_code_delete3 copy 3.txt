@@ -1,0 +1,46 @@
+/*
+{
+	"title":"test demo tmp",
+    "description": "test demo tmp",
+	"parameter": [
+   {
+      "name":"userInput",
+      "label":"客户问题",
+      "type":"textarea"
+    }],
+	"tag":"chatdoc_QA",
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"chatdoc_answer",
+	"life":100,
+	"displayOrder":0,
+	"version":2
+}
+*/
+
+// test demo tmp
+assign('question','{{userInput}}') 
+assign('system_prompt','用户输入什么,就回答什么内容')
+//# 测试用模板
+n_data,tpl_qa_chatdoc_test,psr_all
+when('userInput="专家知识库问题1"', {
+//$ Finally Answer
+assign('chatdoc_answer', '专家知识库问题1 答案是: 今天天气很好')
+},{
+
+n_qa_chatdoc,tpl_qa_chatdoc,psr_all
+//$ Finally Answer
+assign('chatdoc_answer', '{{tpl_qa_chatdoc}}')
+})
+// # historyhistory
+assign('history','{{fn.queryMessages("n_qa_chatdoc",0,10)}}')
+define('tpl_qa_chatdoc', '''
+	 
+用户输入：{{question}}
+
+    {{fn.chatFlag('%{system_prompt}%', 'question', 'chatdoc_answer', '', 10)}}
+''')
+
+
+define('tpl_qa_chatdoc_test', '''
+	直接回答:`QQQ`
+''')

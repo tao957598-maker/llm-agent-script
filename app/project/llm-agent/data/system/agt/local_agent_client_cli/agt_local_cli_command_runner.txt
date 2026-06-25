@@ -1,0 +1,14 @@
+/*{
+  "title": "本地 Agent Client CLI 命令执行",
+  "parameter": [
+    {"name":"terminal_command","label":"终端命令","required":true}
+  ],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+//# 读取用户传入的终端命令参数
+assign('cmd_text', '{{terminal_command}}')
+
+// 执行命令：通过 act_rpa.send 转发到本地 agent client
+n_result, act_rpa.send?command=RunShell&parameters='{"shell_input":"{{cmd_text}}"}'

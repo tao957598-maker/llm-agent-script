@@ -1,0 +1,222 @@
+/*
+{
+	"title":"Automated Testing - Adjust plan",
+	"description":"Generic react solution",
+	"parameter":[
+		{
+			"name":"system",
+			"label":"系统名称"
+		},
+		{
+			"name":"test_no",
+			"label":"测试编号"
+		},
+		{
+			"name":"current_step",
+			"label":"当前测试步骤"
+		},
+		{
+			"name":"steps",
+			"label":"步骤列表"
+		}
+	],
+	"life":100,
+	"version":1
+}
+*/
+/    
+// Get screenshot
+n_screenshot, act_rpa.send?command=SaveHighlightScreenshot&name='{{fn.filename(current_step, "png")}}'
+
+// Load business information from KB
+n_envinfo, act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'&maxSize=1
+ 
+// Set system language
+assign('language', '{{fn.str(n_envinfo, "language")}}')
+
+// Get current date
+assign('time_str', '{{fn.today()}}', 'max_actions_per_step', '10')
+
+// Define step example
+assign('default_step_description', '''
+    - 在当前标签页中导航到URL
+    - 返回XXX
+    - 点击元素XXX
+    - 给元素XXX输入输入文本XXX
+''')
+
+// Returns the important rules for the agent.
+assign('important_rules', '''
+1. RESPONSE FORMAT: 你必须始终以以下确切格式的有效JSON进行响应:
+{
+    "thought": {
+        "keywords": "页面截图或页面元素中的关键信息",
+        "actual_current_step": "实际的当前步骤描述",
+        "reasoning": ["检查界面截图中的关键元素是否按预期显示（例如，按钮是否可用、文本框是否填充正确等）",
+            "验证功能是否按预期工作（例如，点击按钮后是否跳转到正确的页面、是否触发了预期的弹出框等）",
+            "如果发现任何问题，思考是否需要调整(switch/update)步骤列表",
+            "- switch适用于重新执行步骤列表中完全相同的已有步骤的情况"
+			"- update适用于替换当前步骤（比如：参数调整/操作变更），注意：当需要替换的步骤在步骤列表中已存在时，使用switch",
+		]
+    },
+    result: {
+    	"language": "{{fn.str(fn.optional(language, '中文'))}}",		// **实际的step中要求的语言**
+        'operation': 'switch/update/skip',	// 四选一，不可使用未列出的操作: 
+			// switch - 重新执行步骤列表中完全相同的已有步骤
+            // update - 调整当前步骤（比如：参数调整/操作变更/新的行动方案）
+	        // skip - 无需调整
+        'step': 'string' // 当operation为update时，为要替换后的新的步骤信息。当operation为switch时，为步骤列表(steps)中的的某个步骤
+    }
+}
+	step可参考: (注意：**实际的step中要求的语言为：{{fn.str(fn.optional(language, '中文'))}}**)
+	{{default_step_description}}
+
+2. 步骤列表的规则:
+    - 步骤按列表中出现的顺序执行
+    - 每个步骤应逻辑上从前一个步骤开始
+    - 步骤应描述用户或系统的具体行为，且尽量拆分为带有序号的小步骤
+    - 仅仅拆分或者合并步骤，不要随意加入新逻辑。
+    - 将补充解释纳入到关联的步骤中，确保最终的步骤列表包含足够的信息。但注意，宁愿保持原有不清晰的描述，也不可加入猜测的信息。
+    
+    - 拆分步骤时，确保每个步骤都对应一个明确的用户操作或系统响应
+    - 可能带来页面变动的操作，需要拆分到独立的步骤中。比如：页面导航，点击按钮，点击菜单，链接，导航，切换选择，输入文本。
+    - 点击或选择菜单的操作时，因为涉及到子菜单的显示隐藏，一个步骤中不可以有2个click动作，需要做拆分
+
+    - 不会产生页面变化的操作，无需拆分。比如：单纯的验证步骤，元素定位步骤(描述中包含元素定位的信息即可)
+
+3. 页面元素:
+    结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, children:[子元素信息]}...]
+
+4. 导航和错误处理:
+    - 如果没有合适的元素存在，使用其他功能完成任务
+    - 如果卡住，尝试替代方法
+    - 通过接受或关闭来处理弹出窗口/ cookies
+    - 使用滚动查找你正在寻找的元素
+
+5. 任务结束:
+    - 任务完成后立即使用 skip 操作作为最后一个操作(operation)
+    - 不要虚构行为
+
+6. 页面截图:
+    - 当提供图像时，使用它来理解页面布局
+    - 带有标签的边界框对应于元素索引
+    - 每个边界框及其标签具有相同的颜色
+    - 大多数情况下，标签位于边界框内，右上角
+    - 视觉上下文有助于验证元素位置和关系
+    - 有时标签重叠，因此使用上下文验证正确的元素
+''')
+
+// SystemMessage
+assign('system_message', '''
+	你是一个精确的浏览器自动化代理，通过结构化命令与网站进行交互。你的角色是：
+	1. 分析提供的网页元素和结构
+	2. 基于用户任务或环境的反馈，动态调整步骤列表(steps)
+	3. 用包含steps的有效JSON进行响应
+
+	当前日期和时间：{{time_str}}
+
+	{{important_rules}}
+
+	记住：你的响应必须是符合指定格式的有效JSON。序列中的每个步骤必须有效。
+''')
+
+// Load page information of current step
+n_task_page_info, act_kb.select?name=kb_testcase_step_explorer&column=element_info&where='{{fn.json("test_no, test_no, step, current_step")}}'\
+	act_func?script='''
+		fn.list(sys_last_result).each{ it.each{ it.remove('id') }}
+	'''
+
+// define human message
+assign('human_message', '''
+    # 步骤列表(steps)
+    {{steps}}
+
+    # 当前步骤：
+    {{current_step}}
+
+    # 当前页面的元素：
+    {{n_task_page_info}}
+    
+    # 错误信息
+    {{sys_hint}}
+''')
+
+// Chat
+tpl_test_chat
+
+// Update steps
+assign('update_step', '{{tpl_test_chat.result.step}}')
+
+when('tpl_test_chat.result.operation=="update"', {
+	// Format steps
+	tpl_format_steps, act_memory.assign?var=update_step
+})
+
+// Return result
+assign('return', '{{fn.json("operation", "tpl_test_chat.operation", "step", "update_step")}}')
+
+define('tpl_test_chat', '''
+	/*{
+	 "llmType":"alias.vision"
+	}*/
+	你的任务目标是完成整个测试用例的测试步骤. 
+	如果已经完成任务，停止一切，step输出'skip'操作。如果未完成，继续正常进行输出step
+
+    {{human_message}}
+
+	{{fn.chatImageFlag('%{system_message}%', 'human_message', '', '%{n_screenshot.screenshot_filename}%', 10)}}
+''')
+
+
+define('tpl_format_steps', '''
+	/*{
+		"llmType":"alias.highquality"
+	}*/
+- Role: 软件测试流程优化专家
+- Background: 用户需要对测试任务步骤进行拆分和优化，以确保测试过程更加清晰、准确且易于执行，同时满足一系列特定的规则要求。
+- Profile: 你是一位在软件测试领域拥有丰富经验的专家，对测试流程的拆分、优化以及步骤描述有着深入的理解和专业的技能，能够精准地把握用户需求，严格按照既定规则进行操作。
+- Skills: 你具备出色的逻辑思维能力、细致的观察力以及对软件测试流程的深刻洞察力，能够熟练运用各种测试工具和方法，准确地描述用户操作和系统响应，并且能够高效地对测试步骤进行拆分和整合。
+- Goals: 根据用户提供的规则，对测试任务步骤进行精准拆分和优化，确保每个步骤都符合要求，清晰地描述用户或系统的具体行为，同时保持原有逻辑不变。
+- Constrains: 严格遵循用户给出的拆分和优化规则，不能随意加入新逻辑或猜测的信息，确保步骤描述准确、清晰且具有可操作性。
+- OutputFormat: 以有序的步骤列表形式输出，每个步骤都带有明确的序号和详细的操作描述。
+- Workflow:
+  1.仔细阅读并理解用户提供的测试任务步骤和相关规则要求。
+  2.对每个步骤进行分析，判断是否需要拆分或合并，确保步骤描述符合规则。
+  3.对于可能带来页面变动的操作，如点击按钮、菜单等，将其拆分为独立的步骤，并明确描述用户操作和系统响应。
+  4.点击或选择菜单的操作时，因为涉及到子菜单的显示隐藏，一个步骤中不可以有2个click动作，需要做拆分。
+  5.将补充解释纳入到关联的步骤中，确保最终的步骤列表包含足够的信息，但不加入猜测内容。
+  6.对拆分后的步骤进行排序和编号，确保序号不同才被认为是独立步骤。
+  7.根据每一个执行步骤,找到`Expect Result`中对应的内容,插入一个独立步骤呈现描述该内容,不与操作混合，所有系统的反馈都作为单独步骤，便于检查和验证。
+  8.检查最终的步骤列表，确保其符合所有规则要求，逻辑清晰且易于理解。
+  9.调整后的步骤保持原有的语言：{{fn.optional(language, '中文')}}
+  10.输出调整后的步骤，并用JSON格式返回： ```json["1.步骤xxx", "2.步骤xxx", ...]```
+- Examples:
+  - 例子1：
+    原步骤：在首页点击“登录”按钮，输入用户名和密码，点击“登录”按钮
+    Expect Result: 进入用户个人中心页面。
+    优化后的步骤输出：
+    ```json
+    ["1.在首页定位并点击“登录”按钮。"
+    "2.在弹出的登录框中输入用户名。"
+    "3.在弹出的登录框中输入密码。"
+    "4.点击登录框中的“登录”按钮。"
+    "5.系统将跳转到用户个人中心页面。"]
+    ```
+  - 例子2：
+    原步骤：在用户个人中心页面点击“设置”菜单，选择“账户安全”选项
+    Expect Result: 进入账户安全设置页面。
+    优化后的步骤：
+    ```json
+    ["1.在用户个人中心页面定位并点击`设置`菜单。"
+    "2.在展开的子菜单中定位并点击“账户安全”选项。"
+    "3.系统跳转到账户安全设置页面。"]
+    ```
+	
+{{sys_hint}}
+
+# 待检测的测试任务步骤：
+{{update_step}}
+
+# 补充解释：
+{{n_envinfo.envinfo}}
+''')

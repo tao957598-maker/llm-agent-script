@@ -1,0 +1,8 @@
+, {			
+				// Remove the old script
+				act_python.remove?requirement={{current_step}}
+				
+				// Call similar selenium agent to generate code
+				n_python_file_4, agt_test_selenium_similar?test_no={{test_no}}&current_step={{current_step}}&steps={{steps}}&envinfo={{envinfo}}&system={{system}}&filename={{n_similar_file.fullFilename}}\
+						act_memory.assign?var=python_code&value={{fn.readFile(sys_last_result.fullFilename)}}
+			}

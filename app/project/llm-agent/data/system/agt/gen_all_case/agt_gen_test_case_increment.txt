@@ -1,0 +1,364 @@
+/*
+{
+	"title": "增量测试用例生成",
+	"description": "基于文档变更增量生成测试用例，对比新旧版本模块差异，复用未变更数据",
+	"parameter": [
+		{
+			"name": "old_document_id",
+			"label": "旧文档ID",
+			"type": "knowledge_space"
+		},
+		{
+			"name": "old_version",
+			"label": "旧版本号",
+			"required": true
+		},
+		{
+			"name": "new_document_id",
+			"label": "新文档ID",
+			"type": "knowledge_space"
+		},
+		{
+			"name": "version",
+			"label": "新版本号",
+			"required": true
+		},
+		{
+			"name": "pages",
+			"label": "Pages (spilt by `,` )"
+		}
+	],
+	"resultPlan": "status,n_combined_result,n_doc_mind_map,n_diff_result",
+	"tag": "Automated Testing",
+	"version": "1"
+}
+*/
+
+//# Agent status
+assign("status", "增量更新 Agent 正在运行")
+
+//# 参数校验
+when("!fn.hasValue(old_document_id)", {
+	n_param_err_old_doc, act_func?script='throw new RuntimeException("【增量】old_document_id 不能为空")'
+})
+when("!fn.hasValue(old_version)", {
+	n_param_err_old_ver, act_func?script='throw new RuntimeException("【增量】old_version 不能为空")'
+})
+when("!fn.hasValue(new_document_id)", {
+	n_param_err_new_doc, act_func?script='throw new RuntimeException("【增量】new_document_id 不能为空")'
+})
+when("!fn.hasValue(version)", {
+	n_param_err_ver, act_func?script='throw new RuntimeException("【增量】version 不能为空")'
+})
+
+//# 文件名称
+n_file_name, act_kb.selectBy?sql='select knowledge_name from kb_spaces_folder_knowledge where id="{{new_document_id}}"'
+assign("file_name", "{{n_file_name[0].knowledge_name}}")
+assign("documentId", "{{new_document_id}}")
+assign("effectiveDocumentId", "{{new_document_id}}")
+
+//# ========== Step 1: 新文档生成模块结构（与原流程一致） ==========
+// 读取新文档页面数据
+when("!fn.hasValue(pages)", {
+	n_kb_data, act_kb.selectBy?sql='''select
+		*
+	from
+		(SELECT
+		page,
+		CASE
+			WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+			ELSE analysis_content
+		END AS content
+	FROM
+		kbs_doc_page_parse
+	WHERE
+		documentId = "{{new_document_id}}"
+	ORDER BY
+		CAST(page AS SIGNED) ASC) as a where a.content is not null'''
+}, {
+	n_kb_data, act_kb.selectBy?sql='''select
+		*
+	from
+		(SELECT
+		page,
+		CASE
+			WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+			ELSE analysis_content
+		END AS content
+	FROM
+		kbs_doc_page_parse
+	WHERE
+		documentId = "{{new_document_id}}" and page in ({{pages}})
+	ORDER BY
+		CAST(page AS SIGNED) ASC) as a where a.content is not null'''
+})
+assign("kb_list_data", "{{n_kb_data}}")
+
+// 页面摘要和分类
+assign("page_summary_list", "[]")
+assign("background_list", "[]")
+assign("functional_list", "[]")
+assign("compliance_list", "[]")
+assign("other_list", "[]")
+
+foreach("n_wx", "n_kb_data", {
+	assign("page_content", "{{n_wx.item}}")
+	n_page_content_summary, agt_page_content_summary?page_content="{{page_content}}"
+	act_func?script='''
+		def raw = n_page_content_summary
+		def lst = null
+		if (raw instanceof List) lst = raw
+		else if (raw instanceof Map && raw.get("value") instanceof List) lst = raw.get("value")
+		if (lst == null) return
+		lst.each { item ->
+			if (item instanceof Map) {
+				item.put("source_type", "web")
+				page_summary_list.add(item)
+			}
+		}
+	'''
+})
+
+// 分类处理
+foreach("n_page_data", "page_summary_list", {
+	assign("page_data", "{{n_page_data.item}}")
+	assign("current_type", "{{page_data['requirement_type']}}")
+	when("current_type == 'Background'", {
+		act_func?script='background_list.add(page_data)'
+	})
+	when("current_type == 'Functional'", {
+		act_func?script='functional_list.add(page_data)'
+	})
+	when("current_type == 'Compliance'", {
+		act_func?script='compliance_list.add(page_data)'
+	})
+	when("current_type == 'Other'", {
+		act_func?script='other_list.add(page_data)'
+	})
+})
+
+// 生成模块结构
+n_modules, agt_test_doc_func_modules?input_data="{{functional_list}}"
+
+// 展平模块数据
+assign("new_module_list", "[]")
+foreach("n_item", "n_modules.modules", {
+	assign("module", "{{n_item.item}}")
+	foreach("n_sub", "module.submodules", {
+		assign("sub", "{{n_sub.item}}")
+		act_func?script='''
+			def row = [
+				platform: n_modules.platform,
+				main_module_name: module.name,
+				main_module_source: module.source,
+				submodule_name: sub.name,
+				submodule_description: sub.description,
+				submodule_source: sub.source,
+				documentId: "{{effectiveDocumentId}}",
+				version: "{{version}}",
+				source_type: "web"
+			]
+			new_module_list.add(row)
+		'''
+	})
+})
+
+// Step1 去重
+act_func?script='''
+	def normName = { s ->
+		def x = (s == null ? "" : s.toString()).toLowerCase()
+		x = x.replaceAll(/[\\[\\]【】()]/, " ")
+		x = x.replaceAll(/\\s*-\\s*/, " ")
+		x = x.replaceAll(/\\s+/, " ").trim()
+		return x
+	}
+	def merged = new LinkedHashMap()
+	new_module_list.each { r ->
+		if (!(r instanceof Map)) return
+		def k = normName(r.main_module_name) + "||" + normName(r.submodule_name)
+		if (!merged.containsKey(k)) {
+			merged.put(k, r)
+		}
+	}
+	new_module_list = new ArrayList(merged.values())
+	fn.put("new_module_list", new_module_list)
+'''
+
+//# ========== Step 2: 查询旧文档的模块数据 ==========
+n_old_modules, act_kb.selectBy?sql='''select * from kb_gen_test_module 
+									  where version = "{{old_version}}" 
+									    and documentId = "{{old_document_id}}"'''
+act_func?script='fn.put("old_module_list", n_old_modules ?: [])'
+
+//# ========== Step 3: 模块级别对比 ==========
+n_diff_result, act_func?script='''
+	def normalize = { s ->
+		def x = (s == null ? "" : s.toString()).toLowerCase()
+		x = x.replaceAll(/[\\[\\]【】()]/, " ")
+		x = x.replaceAll(/\\s*-\\s*/, " ")
+		x = x.replaceAll(/\\s+/, " ").trim()
+		return x
+	}
+	
+	def matchKey = { mod ->
+		def main = normalize(mod.main_module_name)
+		def sub = normalize(mod.submodule_name)
+		return "${main}||${sub}"
+	}
+	
+	def isModified = { oldMod, newMod ->
+		if (!oldMod || !newMod) return true
+		if (normalize(oldMod.submodule_description) != normalize(newMod.submodule_description)) return true
+		if (normalize(oldMod.main_module_name) != normalize(newMod.main_module_name)) return true
+		return false
+	}
+	
+	def oldList = fn.get("old_module_list") ?: []
+	def newList = fn.get("new_module_list") ?: []
+	
+	def oldMap = new LinkedHashMap()
+	oldList.each { r ->
+		if (r instanceof Map) {
+			def k = matchKey(r)
+			oldMap.put(k, r)
+		}
+	}
+	
+	def diff = [
+		unchanged: [],
+		modified: [],
+		new: [],
+		deleted: []
+	]
+	
+	newList.each { newMod ->
+		if (!(newMod instanceof Map)) return
+		def k = matchKey(newMod)
+		if (oldMap.containsKey(k)) {
+			def oldMod = oldMap.get(k)
+			if (isModified(oldMod, newMod)) {
+				diff.modified.add(newMod)
+			} else {
+				diff.unchanged.add(oldMod)  // 保留旧记录用于后续复用
+			}
+			oldMap.remove(k)
+		} else {
+			diff.new.add(newMod)
+		}
+	}
+	
+	// 剩余的旧模块就是被删除的
+	oldMap.each { k, oldMod ->
+		diff.deleted.add(oldMod)
+	}
+	
+	fn.put("diff_result", diff)
+	return diff
+'''
+assign("n_diff_result", "{{n_diff_result}}")
+
+//# ========== Step 4: 数据合并处理 ==========
+// 记录对比结果统计
+n_diff_stats, act_func?script='''
+	def diff = fn.get("diff_result")
+	def stats = [
+		total_old: (fn.get("old_module_list") ?: []).size(),
+		total_new: (fn.get("new_module_list") ?: []).size(),
+		unchanged: diff.unchanged.size(),
+		modified: diff.modified.size(),
+		new: diff.new.size(),
+		deleted: diff.deleted.size()
+	]
+	return stats
+'''
+
+// 1. unchanged: 更新版本号后直接复用（包括 Step2/Step3 数据）
+when("fn.hasValue(n_diff_result.unchanged) && n_diff_result.unchanged.size() > 0", {
+	// 更新模块表
+	foreach("n_unchanged", "n_diff_result.unchanged", {
+		assign("mod", "{{n_unchanged.item}}")
+		act_func?script='''
+			mod.documentId = "{{new_document_id}}"
+			mod.version = "{{version}}"
+		'''
+		act_kb.defineAndImportData?tableName="kb_gen_test_module"&data="{{mod}}"
+	})
+	
+	// 查询并复用旧文档的 Step2 设计数据
+	n_old_design, act_kb.selectBy?sql='''select * from kb_gen_test_module_design 
+										where version = "{{old_version}}" 
+										  and documentId = "{{old_document_id}}"'''
+	foreach("n_design", "n_old_design", {
+		assign("design", "{{n_design.item}}")
+		act_func?script='''
+			design.documentId = "{{new_document_id}}"
+			design.version = "{{version}}"
+		'''
+		act_kb.defineAndImportData?tableName="kb_gen_test_module_design"&data="{{design}}"
+	})
+	
+	// 查询并复用旧文档的 Step3 用例数据
+	n_old_case, act_kb.selectBy?sql='''select * from kb_gen_test_case 
+									  where version = "{{old_version}}" 
+									    and documentId = "{{old_document_id}}"'''
+	foreach("n_case", "n_old_case", {
+		assign("case_item", "{{n_case.item}}")
+		act_func?script='''
+			case_item.documentId = "{{new_document_id}}"
+			case_item.version = "{{version}}"
+		'''
+		act_kb.defineAndImportData?tableName="kb_gen_test_case"&data="{{case_item}}"
+	})
+})
+
+// 2. new + modified: 走完整的设计生成流程
+assign("need_regenerate_list", "[]")
+act_func?script='''
+	def diff = fn.get("diff_result")
+	def needRegen = []
+	needRegen.addAll(diff.modified ?: [])
+	needRegen.addAll(diff.new ?: [])
+	fn.put("need_regenerate_list", needRegen)
+'''
+
+when("fn.hasValue(need_regenerate_list) && need_regenerate_list.size() > 0", {
+	// 写入模块表
+	foreach("n_regen", "need_regenerate_list", {
+		assign("mod", "{{n_regen.item}}")
+		act_kb.defineAndImportData?tableName="kb_gen_test_module"&data="{{mod}}"
+	})
+	
+	// 走 Step2/Step3 流程
+	foreach("n_regen_item", "need_regenerate_list", {
+		assign("test_module_content", "{{n_regen_item.item}}")
+		// Step2: 生成设计
+		n_design, agt_test_doc_design?input_data="{{test_module_content}}"&documentId="{{effectiveDocumentId}}"&async=false&pipelineDesignMode="web"
+		// 设计数据入库（简化处理，实际应展平）
+		act_func?script='''
+			def designData = n_design
+			if (designData && designData instanceof Map && designData.data) {
+				def data = designData.data
+				if (data instanceof List) {
+					data.each { item ->
+						if (item instanceof Map) {
+							item.documentId = "{{effectiveDocumentId}}"
+							item.version = "{{version}}"
+							act_kb.defineAndImportData(tableName: "kb_gen_test_module_design", data: item)
+						}
+					}
+				}
+			}
+		'''
+	})
+	
+	// Step3: 生成测试用例（调用现有流程）
+	n_final_case, agt_test_doc_gen_case?documentId="{{effectiveDocumentId}}"&version="{{version}}"
+})
+
+// 3. deleted: 不需要处理，新版本没有就跳过
+
+//# 输出结果
+assign("combined_result", "# {{file_name}} - 增量更新结果\n\n## 对比统计\n\n- 旧版本模块数: {{n_diff_stats.total_old}}\n- 新版本模块数: {{n_diff_stats.total_new}}\n- 未变更: {{n_diff_stats.unchanged}}\n- 修改: {{n_diff_stats.modified}}\n- 新增: {{n_diff_stats.new}}\n- 删除: {{n_diff_stats.deleted}}")
+n_combined_result, act_memory.assign?value="{{combined_result}}"&type=md
+
+assign("status", "增量更新完成")

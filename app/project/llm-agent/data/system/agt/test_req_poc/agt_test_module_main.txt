@@ -1,0 +1,146 @@
+/*
+{
+	"title": "文档查询Agent",
+	"description": "根据documentId查询文档元数据并调用处理模块",
+	"parameter": [
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"resultPlan":"status,n_combined_result,n_doc_mind_map",
+	"version": "1"
+}
+*/
+//# Agent status
+assign("status", 'Agent is running')
+// file name
+n_file_name, act_kb.selectBy?sql='select  knowledge_name  from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}" '
+assign("file_name", '{{n_file_name[0].knowledge_name}}')
+// Document ID
+assign("documentId", '{{kbSpaceFileId}}')
+
+when('!fn.hasValue(Pages)', {
+// All data
+n_doc_metadata, act_kb.selectBy?sql='SELECT * FROM kb_doc_req_metadata WHERE documentId ="{{documentId}}"'
+},{
+// Page data 
+n_doc_metadata, act_kb.selectBy?sql='SELECT * FROM kb_doc_req_metadata WHERE documentId ="{{documentId}}" and page in ({{pages}})'
+
+})
+
+
+n_combined,tpl_metadata_to_md,psr_all
+// Combined result
+assign('combined_result', '# {{file_name}} \n{{n_combined}}')
+//#  doc combined result
+n_combined_result,act_memory.assign?value='''{{combined_result}}'''&type=md
+//# get doc mind map
+n_doc_mind_map,tpl_txt_to_mermaid,psr_mmd
+
+
+// 功能模块
+n_modules,agt_test_doc_func_modules?input_data='{{n_doc_metadata}}'
+
+
+// 使用展平模块数据
+assign('result_list', '[]')
+
+foreach('n_item', 'n_modules.modules', {
+    assign('module', '{{n_item.item}}')
+    
+    foreach('n_sub', 'module.submodules', {
+		assign('sub', '{{n_sub.item}}')
+        assign('item_map', '''{
+            "platform": "{{n_modules.platform}}",
+            "main_module_name": "{{module.name}}",
+            "main_module_source": "{{module.source}}",
+            "submodule_name": "{{sub.name}}",
+            "submodule_description": "{{sub.description}}",
+            "submodule_source": "{{sub.source}}",
+            "documentId": "{{fn.optional(kbSpaceFileId, '')}}",
+            "version":"{{version}}"
+        }''')
+        act_func?script='''
+            result_list.add(item_map)
+        '''
+    })
+})
+// test_module_flattened_data
+assign('test_module_flattened_data', '{{result_list}}')
+
+act_kb.selectBy?sql='delete from kb_gen_test_module where version = "{{version}}" and documentId = "{{documentId}}"'
+on_failure({
+	// Force to success status
+	act_flow.success
+})
+// 保存展平数据到数据库
+act_kb.defineAndImportData?tableName='kb_gen_test_module'&data='{{test_module_flattened_data}}'
+//# kb_gen_test_module
+assign('kb_gen_test_module', 'Download <a href="/knowledge-base/retrieval?title=knowledgeBaseList/knowledgeRetrieval/kb_gen_test_module&tableName=kb_gen_test_module&schema=llm_agent" target="_blank">kb_gen_test_module</a>')
+
+ 
+
+
+define("tpl_metadata_to_md","""
+# Requirements
+** Task Objective ** :
+1. Please extract the content information into summary Markdown content
+2.Markdown content has no first-level headings
+3.Markdown has only one level 2 header, which is defined as extracted based on the 'content information' and the requirement_type
+4.Markdown content starts from level 3 headings
+5. It must be answered completely at one time,Return the text content in Markdown format
+
+### ✅ disassembly principles
+1. ** Use the hypha "-" to connect the context with the specific page ** to reflect the path or navigation relationship where the module is located, and retain the semantic hierarchy of the module.
+2. Mark the source page numbers, for example: Pagexx,Pagexxx
+3. Language style: It is better to adhere to the original terms in the document (such as those in English in the title) and maintain consistency
+
+# Content Information
+{{n_doc_metadata}}
+
+""")
+
+
+define('tpl_txt_to_mermaid', '''
+这个markdown内容转化为mermaid 思维导图,语言格式不变.
+要求: 1.memaid内容中不要出现Mermaid 图表中的 CSS 类定义
+2.Mindmap 语法中，子项必须使用一致的缩进(通常2或4个空格)，且不能混合使用空格和制表符。
+3.Mindmap 解析器对特殊字符（如括号 ()）的处理可能比较严格,节点内容尽量不要用括号 ()
+mermaid参考格式:
+```mermaid
+mindmap
+  root((mindmap))
+    Origins
+      Long history
+      ::icon(fa fa-book)
+      Popularisation
+        British popular psychology author Tony Buzan
+    Research
+      On effectiveness<br/>and features
+      On Automatic creation
+        Uses
+            Creative techniques
+            Strategic planning
+            Argument mapping
+    Tools
+      Pen and paper
+      Mermaid
+```
+
+
+```markdown
+{{combined_result}}
+```
+    
+''')

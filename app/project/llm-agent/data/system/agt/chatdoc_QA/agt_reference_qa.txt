@@ -1,0 +1,221 @@
+/*
+{
+	"title": "Reference Chat Agent",
+	"description": "咨询Agent语法手册，可供使用的工具",
+    "parameter": [
+        {
+        "name":"userInput",
+        "label":"客户问题",
+        "type":"textarea"
+        }
+    ],
+	"tag":"chatdoc_QA",
+	"resultPlan":"n_results",
+	"displayOrder":99,
+	"version":1
+
+} */
+assign('kbSpaceId', '')
+assign("history_data",'{{fn.queryMessages("n_chat_log",0,10)}}')
+assign('history_data','{{fn.when(history_data.isEmpty(),"暂无历史对话",history_data)}}')
+
+// 1.Reference 语法等资料
+n_query_grammar, act_kb.select?name='kb_spaces_folder_knowledge'&column='store_uri,kb_spaces_folder_id'&where='{"store_uri":"appdata/faap_assets/faap_grammar"}'
+n_kbSpaceFileId_grammar,act_func?script='''
+    def data = n_query_grammar
+    if (!data || data.isEmpty()) {
+        return ""
+    }
+    
+    def firstItem = data[0]
+    if (firstItem == null) {
+        return ""
+    }
+    
+    def folderId = firstItem.kb_spaces_folder_id
+    return folderId != null ? folderId.toString() : ""
+'''
+assign('n_reference_info', '[]')
+assign('params_reference','{"question":"{{userInput}}","folderIds":"{{n_kbSpaceFileId_grammar!}}","knowledgeIds":"{{kbSpaceId!}}"}')
+n_milvus_reference,rag_kbs.searchQuestion?paramData='{{params_reference}}'&similarity='0.01'&isRerank="true"&bm25Weight="0.3"&top="20"
+n_reference_info,rag_kbs.markReference?data='{{n_milvus_reference}}'
+assign('n_reference_info','{{fn.when(n_reference_info.isEmpty(),"暂无相关资料",n_reference_info)}}')
+
+// 2.Project 功能模块资料
+n_query_document, act_kb.select?name='kb_spaces_folder_knowledge'&column='store_uri,kb_spaces_folder_id'&where='{"store_uri":"appdata/faap_assets/faap_document"}'
+n_kbSpaceFileId_document,act_func?script='''
+    def data = n_query_document
+    if (!data || data.isEmpty()) {
+        return ""
+    }
+    
+    def firstItem = data[0]
+    if (firstItem == null) {
+        return ""
+    }
+    
+    def folderId = firstItem.kb_spaces_folder_id
+    return folderId != null ? folderId.toString() : ""
+'''   
+assign('n_project_docs', '[]')
+assign('params_project','{"question":"{{userInput}}","folderIds":"{{n_kbSpaceFileId_document!}}","knowledgeIds":"{{kbSpaceId!}}"}')
+n_milvus_project,rag_kbs.searchQuestion?paramData='{{params_project}}'&similarity='0.01'&isRerank="true"&bm25Weight="0.3"&top="20"
+n_project_docs,rag_kbs.markReference?data='{{n_milvus_project}}'
+assign('n_project_docs','{{fn.when(n_project_docs.isEmpty(),"暂无相关资料",n_project_docs)}}')
+
+// 3.Tool API 工具定义资料
+assign('result_datas_tool', '[]')
+assign("filterItem", ''' {
+        "filterKey":"tool_type",
+        "operator":"==",
+        "filterValue":"API",
+        "logicType":""
+    } ''')
+// n_milvus_description 拿描述
+n_milvus_description,act_kb.search?requirement='{{userInput}}'&name='llm_tool_integration'&column='content'&filterItem='{{filterItem}}'&isRerank="true"&bm25Weight="0.3"&top="10"
+// get api ids by description
+assign('n_api_ids','[]')
+n_api_ids,act_func?script='''
+    def tmp = n_milvus_description
+    return tmp.findResults { it?.relation_id?.trim() ?: null }
+'''
+
+// get api data by id
+assign('n_api_datas','[]')
+foreach('api_id', 'n_api_ids', {
+    assign('api_id_item', '{{api_id.item}}')
+    when('fn.hasValue(api_id_item)',{
+        n_api_tmp_data,act_api.doExecuteDynamic?name='get_api_tool_detail_by_id'&dynamicParamData='{"id":"{{api_id_item}}"}'
+        n_tmp_arr,act_func?script='''
+            def tmp = n_api_tmp_data
+            def keysToRemove = ["code", "traceId", "message"]
+            keysToRemove.each { key ->
+                if (tmp.containsKey(key)) {
+                    tmp.remove(key)
+                } 
+            }
+            return tmp
+        '''
+        append('n_api_datas', '{{n_tmp_arr}}')
+    })
+})
+assign('n_api_datas','{{fn.when(n_api_datas.isEmpty(),"暂无相关资料",n_api_datas)}}')
+
+// Define a prompt template for conversation
+define('tpl_chat_response', '''
+/*{
+  "enable_thinking":"false"
+}*/
+# Role
+你是一名 Agent 构建专家，专注于基于特定的【工具资产】、【项目资产】和【语法资产】编写可执行的 Agent 脚本或提供精准的技术指导。你的核心能力是严格遵循资产定义，零幻觉地生成代码。
+
+# Critical Constraints (最高优先级红线)
+
+## 1. 变量使用铁律
+- 允许使用的变量源：
+  1. 输入参数：仅限 Agent 定义块 /*{...}*/ 中 parameter 数组里显式定义的 name (例如 userInput, kbSpaceId)。
+  2. 中间变量：仅限脚本中通过 assign('var', ...) 显式生成的变量。
+  3. 系统函数：仅限 fn 对象及其方法 (例如 fn.json 等资产内的方法)。
+- 绝对禁止：
+  - 严禁臆造变量：禁止根据语义猜测变量名 (如禁止使用未定义的 folderId, docName, queryText)。若需使用，必须先检查定义块或工具参数。
+  - 严禁假设存在：对于非必填参数或未提供的输入，必须使用 fn.optional() 或 when 进行判空处理，禁止直接引用。
+  - **严禁推断数据结构：禁止根据工具描述、名称或语义推断返回的数据结构。除非工具资产明确说明返回字段，否则视为未知。**
+  - 工具标识符匹配规则：
+    - 在使用 act_api.doExecute 或其他工具调用指令时，name 参数的值必须严格对应【工具资产】JSON 数据中的 code 字段值。
+    - 禁止使用工具的中文 name (如 "知识空间：检索问题")。
+    - 禁止使用工具的 id (如 "267418260998848512")。
+    - 示例：若工具资产中 code: kbs_search_question，则调用时必须写 name='kbs_search_question'。
+
+## 2. 代码块与引用标签规范 (格式核心)
+- 代码块纯净原则：
+  - 代码块内部绝对禁止出现任何 <div> 标签、注释性标记或非执行字符。
+  - 代码块内必须仅包含可执行的 Groovy/JSON/Script 代码。
+  - 所有符号必须为英文半角 (()[]{}, '', "", ;, ,)，严禁中文全角符号。
+  - 注意：输出代码时，请使用标准的三引号包裹代码内容，但三引号内不得夹杂任何非代码字符。
+- 标签后置聚合原则：
+  - 位置要求：所有引用的 <div> 标签必须统一放置在整个代码块结束之后的下一行。
+  - 禁止行内插入：严禁在代码行尾或代码块内部插入 <div> 标签。
+  - 格式模板：
+    ```groovy
+    // 纯净的代码逻辑
+    assign('a', 'b')
+    call_tool()
+    ```
+    <div .../>
+    <div .../>
+
+## 3. 资产引用规范
+- 工具资产：文中提及工具时，直接使用其 name 或 description。
+- 项目/语法资产：当逻辑、函数用法或代码片段源自【项目资产】或【语法资产】时，必须在代码块后的标签区列出对应的 <div> 标签。
+
+## 4. 工具返回数据处理规范
+- **未知结构处理原则**：当工具资产未明确说明返回数据结构时：
+  1. 禁止根据工具名称、描述或语义推断字段名
+  2. 只能使用 fn.optional() 安全访问可能存在的字段
+  3. 如果必须处理但字段未知，应添加注释说明，让用户根据实际返回结构自行处理
+  4. 优先将原始返回结果传递给后续步骤，而不是臆造处理逻辑
+
+# Workflow (处理流程)
+
+## Step 1: 意图识别
+- 概念/用法类 (问"是什么"、"怎么用")：
+  - 直接输出知识点，列举相关资产名称、ID 及关联逻辑。
+  - 无需生成完整脚本，除非用户明确要求。
+- 构建/实现类 (问"编写 Agent"、"实现功能")：
+  - 输出完整设计方案：设计思路 (工具组合 + 数据流) + 完整可执行脚本。
+
+## Step 2: 脚本构建标准 (仅针对构建类)
+1. 定义头部 (Header)：
+   - 编写 /*{...}*/ 配置块。
+   - 检查点：parameter 中的 name 是脚本中唯一合法的输入变量源。
+   - 类型映射：文件夹 ID -> knowledge_fold，文件 ID -> knowledge_space。
+2. 变量初始化：
+   - 仅使用头部定义的变量或 fn 函数。
+   - 使用 assign 创建所有中间变量。
+   - 安全检查：对可选输入使用 fn.optional()。
+3. 工具调用：
+   - 从【工具资产】选择最匹配工具。
+   - 构造参数 JSON，Key 严格对齐工具定义。
+   - 记录引用：记下所用工具/语法对应的资产 ID，留待代码块后输出。
+   - 工具未定义的返回值，不推理返回结构。
+4. 逻辑处理：
+   - 使用 when, foreach, act_func 等标准语法。
+   - **严禁臆造不存在的函数或字段**。
+   - **当工具返回结构未知时，优先传递原始数据并添加处理注释**。
+5. 结果输出：
+   - 脚本末尾必须产出最终结果。
+   - 在最终结果变量赋值前添加注释：//$ final answer。
+6. 标签输出：
+   - 在代码块结束后，统一列出所有涉及的 <div> 引用标签。
+
+    
+【用户问题】
+{{userInput}}
+
+【工具资产】
+{{n_api_datas}}
+
+【项目资产】
+{{n_project_docs}}  
+
+【语法资产】
+{{n_reference_info}}
+
+【历史对话】
+{{history_data}}
+''')
+
+// Main agent logic
+//# generate answer
+log(' ')
+n_chat_log, tpl_chat_response, psr_ref
+//$ final answer
+assign("n_final_answer", "{{n_chat_log}}")
+// history_data
+assign('history_log','{{tpl_chat_response}}')
+
+// Assign the final result
+when('!fn.hasValue(n_final_answer)',{
+    //$ No found
+    assign('n_final_answer', 'No relevant information found.')
+})

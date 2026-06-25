@@ -1,0 +1,51 @@
+/*
+{
+	"title":"Web Search",
+    "description": "用于检索网页内容",
+	"parameter": [
+    {
+      "name":"userInput",
+      "label":"客户问题",
+      "type":"textarea"
+    }
+  ],
+	"tag":"chatdoc_QA",
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"n_web_search_result",
+	"life":100,
+	"displayOrder":9,
+	"version":2
+}
+*/
+assign('url', 'https://www.baidu.com/s?wd={{userInput}}')
+assign('remove_tag', 'true')
+assign('params', "{{fn.json('url,url,remove_tag,remove_tag')}}")
+// FormData 传参
+n_html_code,act_api.doExecuteDynamic?name='search_web'&dynamicParamData={{fn.str(params)}}
+define('tpl_web_search','''
+/*{
+  "enable_thinking":"false"
+}*/
+你是一位专业的信息提取专家，擅长从HTML代码中解析和提取关键内容。
+# 任务：
+请仔细阅读用户提供的HTML代码，并根据用户的提问，从中提取最相关、最准确的信息。
+
+# 处理步骤：
+- 解析HTML结构：识别标签、属性、文本内容。
+- 理解用户意图：明确用户想要获取什么类型的信息（如：价格、标题、日期、特定描述等）。
+- 精准提取：定位包含目标信息的标签，提取纯文本内容，去除多余的HTML标签和空白字符。
+- 排除干扰：忽略导航栏、页脚、广告、脚本代码等与用户提问无关的噪声信息。
+- 整理输出：将提取到的信息以清晰、简洁的方式呈现。
+
+# 约束条件：
+- 只基于提供的HTML代码回答，不要编造信息。
+- 如果HTML中没有找到相关信息，请直接回答“未在提供的代码中找到相关信息”。
+- 输出结果不要包含HTML标签，只保留纯文本。
+
+# 用户输入:
+{{userInput}}
+
+# HTML代码
+{{n_html_code}}
+''')
+n_web_search_result,tpl_web_search,psr_all

@@ -1,0 +1,173 @@
+/*
+{
+	"title":"verification data expected",
+	"description":"Compare whether the data on the current page meets expectations directly.",
+	"parameter":"current_step=当前测试步骤&steps=完整验证步骤&envinfo=补充信息",
+	"version":1
+}
+*/
+// Init variable for action type
+assign('current_step',"{{current_step}}")
+assign('steps',"{{steps}}")
+assign('envinfo',"{{envinfo}}")
+
+n_collect_page,agt_search_element?test_no={{test_no}}&current_step={{current_step}}&steps={{steps}}
+assign('collect_page','{{n_collect_page}}')
+
+//# generate verify script
+tpl_generate_verify_script,psr_json_python
+assign('python_code','{{sys_last_result}}')
+
+n_isMap,act_func?script='''
+def isMap  // 定义一个变量存储 true/false
+if (python_code instanceof java.util.Map) {
+    isMap = true
+} else {
+    isMap = false
+}
+return isMap'''
+
+when('n_isMap==true',{
+   act_flow.fail
+},{
+    // Write selenium script to the artifact repository
+  assign('result','true')
+  assign('result','{{fn.json("result,result,python_code,python_code")}}')
+})
+
+
+// 生成验证脚本
+define('tpl_generate_verify_script', """
+	/*{
+		 "llmType":"alias.code"
+	 }*/
+- Role: Python自动化测试脚本开发专家
+- Background: 用户需要一个Python函数`run(browser)`，该函数将被主模块以`module.run(browser)`的方式调用，用于实现特定的自动化测试步骤。用户提供验证类型的测试步骤、实际页面元素信息以及来自`autotest`库的可调用函数列表。用户希望对代码进行审查，以确定是否存在需要替换的元素，并根据审查结果返回特定的JSON格式结果，根据分析结果，返回`当前测试步骤`目的，生成`局部测试步骤`的代码。
+- Profile: 你是一位精通Python编程和自动化测试的专家，对Selenium库和自动化测试框架有深入的理解和丰富的实践经验。你熟悉JSON格式的数据处理，能够准确地分析代码逻辑，并根据实际页面元素信息生成符合要求的测试脚本。
+- Skills: 你具备Python编程能力、自动化测试脚本开发能力、JSON数据处理能力以及逻辑分析能力。你能够熟练使用Selenium库进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。
+- Goals: 
+  1. 分析`当前测试步骤`,
+  2. 为了校验当前测试步骤， 请结合页面信息生成python函数.
+
+- Constrains: 
+  1. 分析当前测试步骤的要求：
+   - 只需要验证测试步骤中的关键字段即可
+   - 禁止对测试步骤进行额外推理和关联，不需要考虑测试完整性
+
+  2.优先使用`autotest`库中封装的方法:
+    - writeResult(success, desc), 记录执行结果, success为测试是否成功的true/false标志,desc为结果的说明
+    - getXpathByItem(browser, item), 只能用该方法获取xpath, 
+	  - 使用xpath时, 需要先判断xpath是否为空,，不需要再等待xpath出现
+	  - 如果xpath为空时, 直接使用writeResult记录失败结果，并返回
+    - assert xxxx, 断言语句，用来判断期望结果
+
+  3.生成的Python代码要求:
+    3.1 代码第一行为：# -*- coding: utf-8 -*- ,
+    3.2 代码第二行为：# run function dynamic parameters:`
+    3.3 代码第三行为：'''{"item":{"id": "页面元素id", "name": "元素名称"}, "verify_data": "xxxxxx"}'''
+	  -- 该行为三元组格式
+	  -- 根据需要传入的参数决定(除了必传的browser参数), verify_data为预期结果,如果无需校验结果则使用None
+    3.4 必须包含run(browser)方法
+	3.5 优先使用autotest中封装的方法。
+	3.6 使用xpath时，必须要通过方法getXpathByItem去获取，禁止大模型自己生成xpath信息
+	3.7 测试结果（无论成败）需要调用函数writeResult(sucess, desc)，记录测试结果, success为测试是否成功的true/false标志,desc为结果的说明
+	3.8 代码注释必须要用英文
+	3.9 必须符合测试脚本要求
+	3.10 只能使用实际页面元素中列出的元素，不能假设不存在的元素。
+	3.11 生成的代码应仅包含当前测试步骤，不补充前面步骤或提前实现后面步骤的代码。
+
+  补充说明：
+	1. 其中item为加密后的元素数据,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	2. 需要使用getXpathByItem(browser, item),基于item获取页面元素的xpath
+	3. 参数browser是已经构建好的webdriver.Chrome实例
+	4. 代码中的xpath必须通过方法getXpathByItem获取赋值，请严格执行该要求
+	5. 禁止根据页面信息生成xpath
+	6. 禁止代码拼接xpath
+
+- Workflow:
+  1.分析`当前测试步骤`，提取关键字和验证目的
+  2.严格遵守约束要求‘禁止对测试步骤进行额外推理和关联，不需要考虑测试完整性’,再次过滤分析结果，选择正确的关键字和验证目的
+  3.结合页面信息，获取关键字的相关信息
+  4.通过getXpathByItem方法，获取关键字的xpath
+  5.根据xpath获取，获取元素控件信息
+  6.结合验证目的，参考严格下列Examples,然后生成相应的python代码
+  7.严格遵守约束要求“禁止根据页面信息生成xpath、禁止代码拼接xpath”，审查生成的python代码，是否有生成xpath和拼接xpath
+  8.确认无误后，生成符合要求的python代码
+
+- OutputFormat: 
+  1.分析传入的参数和页面信息
+  2.生成符合当前测试步骤要求的Python代码。
+  3.使用markdown格式返回结果
+	
+- Examples:
+- 例子1：验证登录按钮存在
+
+```python
+# -*- coding: utf-8 -*-
+# run function dynamic parameters:
+'''{"item":{"id": "登录按钮的ID", "name": "xxx"}, "verify_data": None}'''  # 由于是验证按钮存在，不校验按钮的文案，所以不需要校验verify_data期望值，故verify_data为None
+from autotest import getXpathByItem, writeResult
+from selenium.webdriver.common.by import By
+from datetime import datetime
+
+
+def run(browser, item={"id": "登录按钮的ID", "name": "Login"}, verify_data=None):
+    try:
+        # 示例验证逻辑
+        login_xpath = getXpathByItem(browser, item)  # 使用getXpathByItem获取xpath
+        if not login_xpath:
+            writeResult(False, "Login button not found")
+            return
+
+        # Locate element using the obtained xpath
+        login_element = browser.find_element(By.XPATH, login_xpath) # 使用xpath必须来自getXpathByItem获取的，禁止使用这种xpath: "./xxxxx"
+
+        # Verify login element is displayed
+        assert login_element.is_displayed(), "Login button element is not visible"
+        writeResult(True, "Login button verification passed")
+
+    except Exception as e:
+        writeResult(False, f"Element verification failed: {str(e)}")
+
+```
+
+- 例子2：验证用户名输入框的值为admin
+
+```python
+# -*- coding: utf-8 -*-
+# run function dynamic parameters:
+'''{"item":{"id": "输入框的ID", "name": "username"}, "verify_data": "admin"}'''  # 由于校验的期望值为admin，故verify_data为admin
+from autotest import getXpathByItem, writeResult
+from selenium.webdriver.common.by import By
+
+
+def run(browser, item={"id": "输入框的ID", "name": "username"}, verify_data="admin"):
+    try:
+        # 示例验证逻辑
+        username_xpath = getXpathByItem(browser, item) 
+        if not username_xpath:
+            writeResult(False, "username not found")
+            return False
+
+        username_element = browser.find_element(By.XPATH, username_xpath)
+        username_text = username_element.text
+        
+        assert username_text == verify_data, f"username verification failed. Expected: {verify_data}, Actual: {username_text}"
+		writeResult(True, "Element verification passed")
+
+    except Exception as e:
+        writeResult(False, f"Element verification failed: {str(e)}")
+```
+
+
+# 补充信息
+如果有涉及到日期的校验, 当前的时间用datetime模块动态获取, 如：today = datetime.today().strftime("%Y-%m-%d")
+{{envinfo}}
+
+# 测试步骤为：
+{{current_step}}
+
+# 页面元素信息
+{{collect_page}}
+
+""")

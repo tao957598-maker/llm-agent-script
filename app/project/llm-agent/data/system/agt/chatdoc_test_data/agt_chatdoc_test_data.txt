@@ -1,0 +1,51 @@
+/*
+{
+	"title":"Data Generation Parameter Extraction",
+	"description":"Extract target table names or file paths from user input for test data generation",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"客户问题\",\"type\":\"textarea\"}",
+	"life":1000,
+	"version":1
+}
+*/
+// 在知识库test_req中提取data生成测试数据
+// 提取用户参数agent
+n_parameter,agt_generate_parameter?userInput="{{userInput}}"
+
+// 参数判断文件还是表
+assign("is_table", "{{n_parameter.type}}")
+
+when('is_table == "table"', {
+  assign("table", "数据库提取")
+
+  // 查表
+  n_ddl_result,act_kb.selectBy?sql='SHOW CREATE TABLE {{n_parameter.kb_name}}'
+
+  // 提取并保存元数据和数据
+  agt_save_data?testData="{{n_ddl_result}}"&parameter="{{n_parameter}}"
+
+},{
+  assign("file", "文件提取")
+
+  // 读取文件agent
+  n_file_data,agt_read_file?folder_name="{{n_parameter.kb_name}}"&knowledge_name="{{n_parameter.file_name}}"
+
+  // 获取文件内表名agent
+  n_table_list,agt_gen_table_name?test_data="{{n_file_data}}"
+  assign('table_list', '{{n_table_list.data}}')
+
+  // 遍历解析表内数据
+  foreach('n_data', 'table_list', {
+    // 下标对应内容
+    assign('table_item', '{{n_data.item}}')
+
+    n_data_item,act_func?script='''
+      def result = [:]          
+      result.kb_name = table_item
+      result.type = is_table
+      return result
+    '''
+
+    // 提取并保存元数据和数据
+    agt_save_data?testData="{{n_file_data}}"&parameter="{{n_data_item}}"
+  })
+})

@@ -1,0 +1,176 @@
+/*
+{
+	"title":"Find and check element",
+	"description":"Make plan and find element location, check element",
+	"parameter":"test_no=Test Case No&current_step=当前验证步骤&steps=完整验证步骤&envinfo=environment information",
+	"resultPlan":"n_python_file",
+	"version":1
+}
+*/
+// Use selenium
+assign('pythonType', 'selenium', 'subfolder', '{{test_no}}', 'sys_hint_agt', '')
+n_global_variable, act_memory.retrieve?var=global_variable&global=true
+// Populate StepTestInfo structure
+act_func?name=StepTestInfo
+
+
+// Record orignal page information
+assign('last_simplepageinfo', '{{StepTestInfo.simplepageinfo}}')
+assign('all_steps', '{{StepTestInfo.steps}}')
+assign('envinfo', '{{envinfo}}')
+
+//# Call agent to verify decision
+agt_verify_plan
+
+agent('agt_verify_plan', {
+
+	
+
+	// Analyse action type
+	n_action_type,tpl_get_action_type,psr_json_python
+	assign('result', '{{n_action_type}}')
+	// verification_type
+	assign('verification_type', '{{result.action_type}}')
+
+	when('verification_type=="VerifyDataExpected"', {
+		// Gen VerifyDataExpected file code
+		n_result, agt_test_verification_data_expected?current_step={{current_step}}&steps={{all_steps}}&envinfo={{envinfo}}
+		assign('result', '{{n_result}}')
+	})
+	when('verification_type=="VerifyDataAfterSteps"', {
+		// Gen VerifyDataAfterSteps file code
+		n_result, agt_test_verification_data_after_steps?current_step={{current_step}}&steps={{all_steps}}&envinfo={{envinfo}}
+		assign('result', '{{n_result}}')
+	})
+	when('verification_type=="table"', {
+		//Gen table code
+		n_result, agt_test_verification_table?current_step={{current_step}}&steps={{all_steps}}&envinfo={{envinfo}}
+		assign('result', '{{n_result}}')
+	})
+    // python_code
+	assign('python_code', '{{n_result.python_code}}')
+
+	// Write temporary selenium script
+	n_python_file, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{python_code}}
+	assign('python_file', '{{n_python_file.kbspath}}')
+	assign('python_code', '{{n_result.python_code}}')
+
+	//# Run selenium script through RPA client
+	n_python_result, act_rpa.send?name={{n_python_file.kbspath}}&command=RunScript
+
+	// n_python_resultn_python_result
+	assign('python_result', '{{n_python_result}}')
+	// 更新数据库步骤数据
+	act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,python_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+    
+	// 执行结果判断
+	n_data, tpl_parse_python_result, psr_json_python
+
+	// python result status
+	assign('python_result_status', '{{n_data.status}}')
+
+	when('python_result_status=="error"',  {
+		act_flow.fail?result={{fn.json("error_info, n_data.message")}}
+	})
+	when('python_result_status=="success"', {
+
+		// Write python script to new path
+		agt_test_save_file?current_step={{current_step}}&test_no={{test_no}}&sourceCode={{python_code}}
+
+		act_flow.success?result={{fn.json("data, n_data.message")}}
+	})
+})
+
+
+// Collect page information
+agent('agt_collect_page', {
+	// Collect the new page information
+	act_rpa.send?command=CollectPageInfo
+		
+	// Populate StepTestInfo structure
+	act_func?name=StepTestInfo
+})
+
+
+
+// 定义大模型提示词，用于处理Python执行结果
+define('tpl_parse_python_result', '''
+# 步骤目标:
+{{current_step}}
+# 页面数据
+{{python_result}}
+
+要求,根据页面数据确认步骤是否执行成功：
+1. 如果执行成功，返回格式为：
+```json
+{
+  "status": "success",
+  "message": "成功的描述"
+}
+```
+2. 如果执行失败，返回格式为：
+```json
+{
+  "status": "error",
+  "message": "错误描述"
+}
+```
+3. 直接返回JSON格式数据，不要包含任何解释性文字
+5. 错误代码请使用标准的HTTP状态码
+
+示例输入：
+{
+  "exit_code": 0,
+  "output": "执行成功",
+  "error": ""
+}
+
+示例输出：
+```json
+{
+  "status": "success",
+  "message": "执行成功",
+}
+```
+''')
+
+
+
+
+// 测试动作分流
+define('tpl_get_action_type', '''
+- Role: web自动化测试的专家
+- Background: 用户将web测试所涉及的操作动作分,用户需要根据"当前测试步骤"执行的操作,获取相应的操作类型
+- Profile: 你是一位精通Python编程和自动化测试的专家，对Selenium库和自动化测试框架有深入的理解和丰富的实践经验。你熟悉JSON格式的数据处理，能够准确地分析代码逻辑，并根据实际页面元素信息生成符合要求的测试脚本。
+- Skills: 你具备资深web测试能力、JSON数据处理能力以及逻辑分析能力。你能够熟练使用Selenium库进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。
+- Workflow:
+    1. 分析'当前测试步骤'位置及依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤所执行的操作，获取相应的操作类型
+    3. 根据分析结果，直接返回符合要求的JSON格式: 
+```json
+{"action_type": "对应的action_type"}
+``` 
+- 操作类型对照表:
+  以下是整理后的操作类型对照表（基于提供的示例）：  
+
+| **操作描述（current_step）**            | **返回的 action_type**    | **说明**                     |
+|--------------------------------------|-------------------------|----------------------------|
+| 针对表格进行验证、点击、输入、随机选取 等操作、验证         | `"table"`           | 涉及表格操作、验证         |
+| 直接比对当前页某元素的数据是否符合预期、是否存在 | `"VerifyDataExpected"`  | 不涉及跨步骤、跨页面数据比对       |
+| 数据存储或比对历史数据，根据历史步骤判断是否符合预期 | `"VerifyDataAfterSteps"` | 涉及数据存储或跨步骤、跨页面数据比对         |
+ 
+注意: 
+ 1. 只要涉及到表格的操作、验证，则应归类为 table
+ 2. 其他验证逻辑只需要检查当前页面元素（如"成功"状态标志、交易金额显示等），而不需要显式对比前序步骤中的输入数据，则应归类为 VerifyDataExpected
+ 3. 如果步骤描述中有涉及到数据存储、数据记忆 或者 将存储的数据进行比较验证(涉及到表格除外)，则归类为VerifyDataAfterSteps
+
+要求: 1.不要根据关键词匹配
+
+# 当前测试步骤
+{{current_step}}
+
+# 完整的测试步骤为：
+{{StepTestInfo.steps}}
+
+
+''')

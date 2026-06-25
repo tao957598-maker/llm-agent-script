@@ -1,0 +1,27 @@
+/*
+ {
+	 "title": "自动化测试-导出文件",
+	 "description": "导出文件",
+	 "parameter": [
+	 	{
+	 		"name":"system",
+	 		"label":"系统名称"
+	 	},
+	 	{
+	 		"name":"folderPath",
+	 		"label":"文件目录"
+	 	},
+	 	{
+	 		"name":"fileName",
+	 		"label":"文件名"
+	 	}
+	 ],
+	 "llmType": "",
+	 "life": "100"
+ }
+*/
+ //指定map
+ assign('map', '{"content":"89898959","folderPath":{{folderPath}},"fileName":"{{fileName}}"}')
+ //write
+ act_func?name='Jira.writeStringToFile(map)'
+

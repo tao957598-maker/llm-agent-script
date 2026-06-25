@@ -1,0 +1,565 @@
+/*
+ {
+	 "title": "自动化测试-脚本生成",
+	 "description": "Generate seleniumn for test requirement",
+	 "parameter": "test_no=测试编号&current_step=当前验证步骤&steps=完整验证步骤&system=系统名称&envinfo=environment information&taskType=任务类型",
+	 "llm_type":"alias.middelqulity",
+	 "resultPlan": "n_python_file",
+	 "life": "50"
+ }
+*/
+// Check requirement
+when('!fn.hasValue(current_step) || !fn.hasValue(test_no)', {
+	// Load default requirement
+	assign("test_no", "deposit_and_transfer_funds_selenium",
+		"current_step", "2. Type 'peter.li' as Username and 'gientech@123' as Password",
+		"steps", '''
+			["1. Navigate to System AA, URL: AAA","2. Type 'peter.li' as Username and 'gientech@123' as Password",
+			"3. Click the Sign in button","4. Verify that Primary Balance and Savings Balance are displayed to ensure login success",
+			"5. Click Go to Deposit","6. Select 'Primary' Account","7. Enter amount $'2580' for the deposit",
+			"8. Click the deposit button","9. Click the transaction details","10. Check if the transaction of deposit “2580” to primary Account is successful",
+			"11. Click 'Transfer' in the menu","12. Click 'To Someone Else' in the submenu","13. Select 'James Liu' as the recipient",
+			"14. Choose 'Primary' for account of transfer from","15. Enter Amount $'2580'","16. Click the Transfer button",
+			"17. Click on the 'Me' menu","18. Click on 'Logout' to logout from the system"]
+		''',
+		'envinfo','N/A',
+		'system', 'AA')
+	
+	// Prepare RPA client environment, run script folder
+	act_rpa.send?name={{test_no}}&command=RunScriptFolder
+})
+
+// Use selenium
+assign('pythonType', 'selenium', 'subfolder', '{{test_no}}')
+// Load test data information from KB
+n_testdata, act_kb.select?name=kb_testcase_data&column='name,description,data'&where='{"name":"{{system}}"}'
+// Check task type
+when('!fn.hasValue(taskType)', {
+	// Set default task type
+	assign('taskType', 'OPERATION_EXECUTE_TASK')
+})
+
+// Collect page information
+n_collect_page, act_rpa.send?command=CollectPageInfo\
+	act_func?name=StepTestInfo
+	
+// Split test step
+when('taskType=="DYNAMIC_SELECT_TASK"', {
+	// Split test step for dynamic task
+	tpl_dynamic_task_split, act_memory.assign?var=element_info_step&value='{{sys_last_result[0]}}'
+}, {
+	// Prepare the material of element analysis
+	assign('element_info_step', '{{current_step}}')
+})
+
+// 关于vrf_flag规则的解释：为对话框模式或者没有页面元素时，直接pass，否则要求给出具体的元素
+// Analyse page elements and call agent to save it
+tpl_task_element_info, psr_json?filter=id&format='id_\\d+',\
+		vrf_flag?value='fn.when(sys_last_result.hasDialog || StepTestInfo.pageinfo_size==0, true, fn.hasValue(sys_last_result,"prefer,alternative,related"))',\
+		vrf_func?name=CheckElements,\
+		agt_save_explorer?columns='''
+			test_no, test_no, step, StepTestInfo.current_step, task_type, taskType,
+			element_info, StepTestInfo.simplepageinfo, related_element_info, tpl_task_element_info'''\
+		act_memory.canHint?hintCount=3
+
+// Generate temporary selenium script
+tpl_test_script, psr_json_python
+tpl_fix_python_import, psr_json_python
+// delete code selenium script
+tpl_delete_python_code,psr_json_python
+// Write temporary selenium script
+n_python_file, act_python.writeTmp?requirement={{current_step}}&pythonCode={{sys_last_result}}
+
+// Run selenium script through RPA client
+n_rpa_test, act_rpa.send?name={{python_file}}\
+	act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,sys_last_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+	act_flow.wait?second=2
+	
+// Collect page information again
+n_collect_page_again, act_rpa.send?command=CollectPageInfo
+
+// Check and compare the execution result
+n_cmp1, tpl_cmp_pageresult, vrf_flag?value='fn.str(sys_last_result.thought.re_reasoning)=="false" || sys_last_result.hasDialog',\
+	agt_save_explorer?columns='page_change,tpl_cmp_pageresult.thought.change,reasoning,tpl_cmp_pageresult.thought.reasoning'
+
+// Check if page doesnot change
+when('fn.not(n_cmp1.run_success)', {
+	// Proceed to error handling process
+	act_flow.go?plan=n_fail_rpa_coll
+}, {
+	// 无论n_cmp1的新界面还是tpl_task_element_info的原有界面都没有对话框时 <== 对话框的开关，通常不会有基础元素的变化
+	// When the page changes and no dialog appears
+	when('fn.hasValue(n_cmp1.change_element) && n_cmp1.change_behavior=="add" && !fn.bool(n_cmp1.hasDialog) && !fn.bool(tpl_task_element_info.hasDialog)', {
+		// Add page verify element
+		tpl_self_add_wait, psr_python, act_memory.assign?var=python_code
+	})
+})
+
+// Write selenium script to the artifact repository
+n_python_file_2, act_python.write?requirement={{current_step}}
+
+// Handle the error
+on_failure({
+	// Collect page information when failure
+	n_fail_rpa_coll, act_rpa.send?command=CollectPageInfo
+
+	// Analysis page information
+	rag_func?name=StepTestInfo, tpl_task_page_info, agt_save_explorer?columns='page,tpl_task_page_info.pageName,url,tpl_task_page_info.pageUrl,page_type,tpl_task_page_info.pageType,tip_message,tpl_task_page_info.tipMessage!'
+
+	// Check for multiple failures
+	when('sys_run_count>3', {
+		// Multiple failures, announce task failure
+		act_flow.fail?result={{fn.json("failure_count, sys_run_count, error_info, sys_hint_agt")}}
+	})
+	
+	// Try to restore original page
+	when('fn.bool(tpl_task_page_info.hasDialog) && !fn.bool(tpl_task_element_info.hasDialog)', {
+		// Click the cancel button
+		act_rpa.send?command=RunDynamicScript&name='clickElementByItem(browser, "{{tpl_task_page_info.cancelElementId}}")'
+	})
+
+	// Try to fix the script
+	when('fn.hasValue(python_code)', {
+		// Collect page elements
+		tpl_task_element_info
+	
+		// Fix the script
+		tpl_self_fix, psr_json_python, act_flow.go?plan={{fn.optional(plan, 'n_python_file')}}&step=act
+	}, {
+		// No python code, announce task failure 
+		act_flow.fail?result={{fn.json("failure_count, sys_run_count, error_info, sys_hint_agt")}}
+	})
+})
+
+// Return result
+assign('result', '{{fn.json("hasDialog, n_cmp1.hasDialog, python_file, n_python_file_2")}}')
+
+// Save explorer
+agent('agt_save_explorer', {
+	// Save to kb_testcase_step_explorer
+	act_kb.merge?name=kb_testcase_step_explorer&columnValues='''
+			{{fn.json(columns)}}
+		'''&where='''
+			{{fn.json("test_no, test_no, step, StepTestInfo.current_step")}}
+		'''
+})
+
+// 动态选择元素的步骤分解
+define('tpl_dynamic_task_split', '''
+	你是测试专家，结合"完整测试步骤"作为参考，分析“本次局部测试步骤”，它的任务类型是DYNAMIC_SELECT_TASK， 请分析它要做的动作，不要做的动作，提供一个分解的描述：第一步为：选定什么样的元素，第二步为：做什么样的动态选择。直接用JSON返回：["XXX"， "XXX"]
+	
+	# 本次局部测试步骤：
+	{{current_step}}
+	
+	# 完整的测试步骤为：
+	{{steps}}
+''')
+
+// 结合需求分析页面元素
+define('tpl_task_element_info', '''
+	/*{
+		"llmType":""
+	}*/
+	你是测试专家，结合"完整测试步骤"作为参考，分析“本次局部测试步骤”中涉及的文本元素或动作元素，忽视元素的类型，找出可能的匹配的元素，按prefer/alternative/related分类后，直接用JSON格式返回引用的页面元素
+	
+	# 本次局部测试步骤：
+	{{element_info_step}}
+	
+	# 完整的测试步骤为：
+	{{StepTestInfo.steps}}
+
+	# 待测试的页面元素(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, children:[子元素信息]}...])： 
+	{{StepTestInfo.simplepageinfo}}
+	
+	{{sys_hint}}
+	
+	# JSON输出结果的结构为：
+	{
+		"type": "verifyResult_1或verifyResult_2"		// 参见下面的不同场景的介绍
+		"result":{
+			"prefer": [{"id":xxx,"name":"匹配的元素名","tag":"xxx","value":"xxx",remark:"可选的20字以内的备注"}...] 	// 请务必完整列出有效的元素。没有元素时，为空
+			"alternative": [{"id":xxx,"name":"匹配的元素名","tag":"xxx","value":"xxx",remark:"可选的20字以内的备注"}...]		// 有问题的元素
+			"related": [{"id":xxx,"name":"关联的元素","tag":"xxx",remark:"可选的20字以内的备注"}]			// 本次局部测试中涉及的关联元素，比如局部测试步骤："填写托管人的其他身份證"，如果页面有"托管人"元素，那么它可作为关联元素输出
+			"hasDialog": true/false		// 页面是否存在可见的弹窗（注：“可见”意味着弹窗元素不可以存在notInView=true的属性）
+		}
+	}
+	关于remark字段的说明：用于有多个同名的元素时，加上有业务含义的辅助的remark进行区别。用于表格字段时，备注表头和列
+		
+	# JSON结果中的alternative，来自下面文字中提及有问题的元素：
+	{{fn.removeHintFlag(sys_hint_agt)}}
+	
+	# 下面是不同场景的JSON回复参考，请输出最终JSON结果
+    情况1：result为[],回复：{{fn.task().result('无需进行元素定位')}}
+	情况2：result有数据。回复：{{fn.task().result('{"prefer": [有效的元素], "alternative": [有问题的元素]}')}}
+	情况3：“待测试的页面信息”显示服务器错误，说明服务器未能正常启动。回复：{{fn.task(false).thought("服务器页面加载错误")}}
+''')
+
+// 分析页面结构
+define('tpl_task_page_info', '''
+	你是熟悉selenium的大模型，请按照检查方法的引导，检查“页面信息”，请分析出页面名称、弹窗信息，用json回复。
+	
+	# json回复格式：
+	{"pageName":xxx页面，"pageUrl":页面url, "tipMessage":xxx页面提示信息，"pageType": 界面类型(可选为：表格界面，表单界面，其他), "hasDialog":true/fase, "elements":[{"name":xxx, "id":xxx}...], "cancelElementId":xxx, "confirmElementI":xxx}
+
+	# JSON回复内容的要求：
+	1. 数据需要来自页面信息，不可自己假设数据
+	2. tipMessage是查询页面的没有匹配的提示，或者是输入页面的输入错误提示。没有tipMessage时，无需返回tipMessage
+	3. elements为弹窗的页面元素，包括：确认按钮，取消按钮，其中cancelElementId为取消按钮的id, confirmElementId为确认按钮的id。hasDialog为false时，无需返回:elements,cancelElementId,confirmElementId
+	4. elements宁愿返回空值，也不可编造，每个值必须完全来自页面信息
+
+	# 检查方法：
+	1. 页面名称：先分析页面布局，聚焦他的顶部内容进行分析，特别是导航关键词：“主页>xxx”。 同时结合pageUrl所表示的含义，进行确定。依然无法确定时，回复不确定。
+	2. 弹窗元素信息：需要识别出弹窗的框体元素，确认按钮，取消按钮。
+	3. tipMessage：如果有显示，通常其位置是紧随在页面的头部下边。
+	4. pageUrl：来自页面信息中的字段pageUrl
+	
+	# 页面信息(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, rect: 元素坐标，children:[子元素信息]}...])：
+	{{StepTestInfo.pageinfo}}
+''')
+
+// Generate script
+define('tpl_test_script','''
+	/*{
+		"llm_type":""
+	}*/
+	你是熟悉selenium 4的从事银行业务的高级测试，首先，请结合页面信息生成"局部测试步骤"的python函数。接着，请review该python函数并返回最终的JSON格式的review result。
+    # python函数为：run(browser)
+	1. 它将被主模块用module.run(browser)的方式调用，请确保生成的代码符合测试脚本要求。
+	2. 首先导入可调用函数：from autotest import xxx
+
+    # 分析是否有需要替换的元素的情况，review该python函数并用独立的JSON格式返回结果：
+	1. 代码中的元素有些不是来自"实际页面元素"，但可以调整方案实现测试目标。
+	用JSON格式返回：{{fn.task(false).thought('补充思考').suggest('建议修正方法XXXX')}}
+	2. 代码中的元素有些不是来自"实际页面元素"，需要进行二次替换。那么切换plan为n_collect_page。
+	用JSON格式返回：{{fn.task().thought('假设的元素XXX，或者需要替换的元素XXX').suggest('建议修正方法XXXX').plan('n_collect_page')}}
+	3. 代码中的元素都是来自"实际页面元素", 不用替换，可进入下一个流程。
+	用JSON格式返回：{{fn.task().plan('next')}}。
+
+	# 局部测试步骤为（共1步, 如果页面已经准备好，不用再次gotoPage）：
+	{{StepTestInfo.current_step}}
+
+	# 主模块涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+
+	{{sys_hint}}
+	{{sys_hint_agt}}
+		
+	# 实际页面元素：(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, value:表单元素的值, id: 用于定位元素的mapping id, children:[子元素信息]}...])：
+	{{tpl_task_element_info}}
+	
+    # 测试脚本要求：
+	1. selenium的代码请基于版本4，比如：它定位元素用的是browser.find_elements(By.XPATH, 'xxx')
+	2. 优先使用autotest中封装的方法。如果必须使用selenium的原生的find_elements, xxx_element_located等方法时，不可直接使用item中的mapping id，比如：@id="id_XXX"
+		请先调用getXpathByItem获取真实的xpath， 然后才可以使用原生方法
+	3. 测试结果（无论成败）需要调用函数writeResult(sucess, desc)。
+	4. 只可以使用“实际页面元素”中列出的元素，不要自己假设不存在的元素
+    5. 使用autoptest中的可调用函数：xxxByItem，实现对元素的操作
+    6. 仅仅生成“局部测试步骤”的代码，请参考主模块中的前后步骤的边界，不要自主补充前面步骤已经完成过的代码，不要提前实现后面步骤待完成的代码
+	{{fn.when("taskType=='DYNAMIC_SELECT_TASK'", "
+		7. 动态过滤的具体步骤为：对上面的“实际页面元素”中的prefer元素逐个分析，过滤出符合条件的元素列表。比如：perfer_items=[xxx]
+		[item for item in prefer_items if yes/not existElement(browser, item, '进行中') and xxx，表示排除'进行中'这一状态的过滤结果
+		8. 随机选择元素为：import random, 然后：random.choice(filtered_items)
+	", "
+		7. 对于关闭弹窗的测试步骤，应加入元素判断，如果有弹窗按钮，再通过点击按钮去关闭弹窗. if getXpathByItem(browser, close_button_item): success = clickElementByItem(browser, close_button_item)
+		8. 只有“局部测试步骤”明确说明要跳转某个具体的url时，才可引入gotoPage语句，注意gotoPage自带验证，无需二次验证页面是否加载成功
+	")}}
+	
+	# 其中来自autotest库的可调用python函数（通过from autotest import clickElementByItem,sendKeysToElementByItem,selectByItem,getXpathByItem ... 导入下面的函数1-7）：
+	其中参数browser是已经构建好的webdriver.Chrome实例, item来自实际页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位元素的mapping id"}'
+	{{fn.when("taskType=='OPERATION_EXECUTE_TASK'", "
+		1. gotoPage(browser, systemName, url), 用于跳转指定的页面,验证页面并等待页面加载完成,systemName为待测试系统名,url为待测试的页面地址
+	")}}
+	{{fn.when("taskType=='DYNAMIC_SELECT_TASK'", "
+		1. existElement(browser, item, target_text), 基于item获取元素或容器的xpath，并检查该元素或其子元素中是否包含指定的文本（target_text）。这里的target_text代表要查找的状态描述或任意文字内容。如果元素或其内部包含与target_text相匹配的文本，则函数返回True；否则返回False
+	")}}
+	2. getXpathByItem(browser, item),基于item获取页面元素的xpath,元素不存在时返回None.注：如果同时涉及点击动作，建议直接使用clickElementByItem或sendKeysToElementByItem或selectByItem
+	3. loadTestData(category), 用于加载测试数据,返回为List<json>, 为页面的字段的列表数据
+	4. writeResult(success, desc),记录执行结果,success为测试是否成功的true/false标志,desc为结果的说明
+	5. clickElementByItem(browser, item, waitSecond, disableLog), 用于元素点击. 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False.
+	6. sendKeysToElementByItem(browser, item, keys),用于文字输入. 基于item查询对应的xpath,并基于xpath定位元素,输入keys所代表的字符.成功返回True,否则返回False.
+	7. selectByItem(browser, item, condition), 用于下拉框选择. 基于item查询对应的xpath,并基于xpath定位select或mat-select,选择condition指定的过滤条件.成功返回True,否则返回False.
+	8. getBrowser(),用于获得已经初始化的WebDriver（webdriver.Chrome）,返回为browser
+''')
+
+// 结果比较
+define('tpl_cmp_pageresult','''
+	/*{
+		"llm_type":"deepseek-chat,deepseek-chat,deepseek-chat"
+	}*/
+	你是Web测试专家，请分析进行了局部测试前后的页面元素的数据及结构，（json格式：[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, value: 表单元素的值, children:[子元素信息]}...]），请分析前后变化情况，判断局部测试步骤是否执行成功，用JSON给出结果。
+	{
+		"thought": {
+			"change": "前后页面元素的变化情况总结",
+			"reasoning":["结合局部测试步骤在主流程中的位置,结合下一步验证的界面需要,判断是否执行成功.进行3步以上的推理"],
+			"criticism":"推理结果是否符合change的总结",
+			"re_reasoning":"true/false"		// true表示: 推理过程有错误，需要重新推理.  false表示：无需重新推理
+		},
+		"change_element": {"name":xxx, "id":xxx}, // 如果有chang发生, 给出一个变化的元素用于识别标记。否则为{}。
+		"change_behavior": "add/remove/update/other",		// 如果有chang发生, 该变化的元素是发生了什么类型的变化. add表示新出现，remove表示消失，update表示属性或状态有变化，other表示其他类型的变化
+		"run_success":"true/false", 	// 根据推理的结果，判断局部测试步骤是否执行成功.如果页面出现新弹窗，可由下一步继续处理，也认为当前步骤执行成功
+		"vote": "1或者2",					// run_success为true时为1, run_success为false时为2
+		"hasDialog": "true/false",		// 是否存在弹窗
+		"elements"：'[{"name":xxx, "id":xxx}...]		// hasDialog为true时，需要给出弹窗按钮信息。否则为[]
+	}
+	
+	{{sys_hint}}
+	
+	# 局部测试步骤为：
+	{{StepTestInfo.current_step}}
+	
+	# 主流程涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+
+	# 初始页面元素结构为：
+	{{StepTestInfo.simplepageinfo}}
+	
+	# 局部测试执行之后的元素结构为：
+	{{fn.str(fn.func('', 'StepTestInfo', true), 'simplepageinfo')}}
+''')
+
+// 修改代码
+define('tpl_self_fix', '''
+	你是一个熟悉selenium4的大模型，现在有一个局部的测试用例描述，请判断上次任务的结果失败的原因(目前已经修【{{sys_run_count}}】次)，选择合适的应对方案，用指定的JSON格式返回。
+	如有可能修正上次任务的python代码，那么返回2个结果，一个为不含代码的JSON，另一个为python代码标记的代码块(此时，第一个JSON结果的canFix为true)。
+
+	# 局部的测试用例描述：
+	{{StepTestInfo.current_step}}
+	
+	# 主模块涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+		
+	# 上次任务的代码：
+	{{python_code}}
+	
+	# 检查"上次任务的代码"，使之符合下面的3条要求后，再继续接下来的分析：
+	1. 涉及元素定位时，只可使用autotest中的可调用函数
+	2. 移除代码中出现的gotoPage，如果它不属："当前步骤"明确指定需要gotoPage
+	3. selenium的代码请基于版本4
+	
+	{{sys_hint_agt}}
+
+	# 页面元素信息以及与弹窗有关的元素信息：
+	{{tpl_task_page_info}}
+	{{tpl_task_element_info}}
+
+	# 可选择的失败原因及应对方案如下，请仔细的逐一思考，先排除了原因1才需要思考原因2，排除了原因2才需要思考原因3。（其中的plan字段流程标记，不要改动，step_xxx指完整测试步骤的某一步) 
+	原因1. 有弹框存在时，或者有新的弹窗再次弹出时，应该是点击“确认”关闭弹窗，无论成功失败都不用记录日志，直接继续后续的点击元素的操作。
+	应对方案：基于新提示给出修正后的python代码。并同时返回修正成功的JSON标记： {{fn.task().thought('遗漏xxx1步骤，需进行xxx操作').plan('next').put('canFix','true')}}
+
+	原因2. 执行反馈显示有弹窗或遮挡（element click intercepted），但是“弹窗有关的元素信息”中的hasDialog为false
+	应对方案：弹窗已经被关闭，考虑重新执行一次代码。{{fn.task().thought('原因2. xxx').plan('n_python_file','act')}}
+
+	原因3. 采用了原始的selenium函数进行元素定位，而非autotest中的函数：
+	应对方案：调整为优先使用sendKeysToElementByItem或者clickElementByItem这类函数，给出修正后的python代码。并同时返回JSON格式：{{fn.task().thought('xxx调整思路').plan('next').put('canFix','true')}}
+
+	原因4. 脚本错误：unexpected indent
+	应对方案：注意python代码的缩进问题，给出修正后的python代码。并同时返回JSON格式：{{fn.task().thought('xxx调整思路').plan('next').put('canFix','true')}}
+
+	原因5：代码和注释中，存在假设的内容，无足够信息修正
+	应对方案：由后续逻辑重新收集页面信息进行分析。并同时返回JSON格式：{{fn.task().thought('原因5. xxx').plan('n_collect_page')}}
+
+	原因6：代码和注释中，存在与当前局部的测试用例无直接关系的，假设的操作
+	应对方案：移除该假设的步骤，给出修正后的python代码。并同时返回修正成功的JSON标记： {{fn.task().thought('移除不相关的假设逻辑').plan('next').put('canFix','true')}}
+	
+	原因7. 库的内部问题或环境设置问题
+	思考过程中不要质疑autotest中的函数的定义问题，环境和库已经被其他脚本验证过多次，不要考虑增加等待条件，现有autotest的可调用函数已经内置了等待元素可点击，也不要加入假设存在的其他函数。回到应对方案1-6，重新思考
+
+	原因8. [{{sys_run_count}}]次修正错误，无法做出合适判断。
+	跳过本次判断，由后续逻辑思考，返回JSON格式： {{fn.task().thought('原因7. xxx').plan('n_collect_page')}}
+	
+	# 其中来自autotest的可调用函数（通过from autotest import XXX 导入下面的函数）：
+	其中item来自实际的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	{{fn.when("taskType=='VERIFICATION_TASK'", "\
+		1. getXpathByItem(browser, item),基于item获取页面元素的xpath.参数browser是已经构建好的webdriver.Chrome实例,参数item来自实际的页面元素.
+	")}}
+	{{fn.when("taskType=='DYNAMIC_SELECT_TASK'", "
+		1. existElement(browser, item, target_text), 基于item获取元素或容器的xpath，并检查该元素或其子元素中是否包含指定的文本（target_text）。这里的target_text代表要查找的状态描述或任意文字内容。如果元素或其内部包含与target_text相匹配的文本，则函数返回True；否则返回False
+		2. clickElementByItem(browser, item), 用于元素点击. 基于item查询对应的xpath，并基于xpath定位元素，等待元素可点击后，进行点击。点击成功返回True，否则返回False。
+		3. sendKeysToElementByItem(browser, item, keys)，用于文字输入. 基于item查询对应的xpath，并基于xpath定位元素，输入keys所代表的字符。成功返回True，否则返回False。
+		4. writeResult(success, desc)，记录执行结果，success为测试是否成功的true/false标志，desc为结果的说明
+		5. selectByItem(browser, item, condition), 用于下拉框选择. 基于item查询对应的xpath,并基于xpath定位select或mat-select,选择condition指定的过滤条件.成功返回True,否则返回False.
+	")}}
+	{{fn.when("taskType=='OPERATION_EXECUTE_TASK'", "
+		1. clickElementByItem(browser, item), 用于元素点击. 基于item查询对应的xpath，并基于xpath定位元素，等待元素可点击后，进行点击。点击成功返回True，否则返回False。
+		2. sendKeysToElementByItem(browser, item, keys)，用于文字输入. 基于item查询对应的xpath，并基于xpath定位元素，输入keys所代表的字符。成功返回True，否则返回False。
+		3. writeResult(success, desc)，记录执行结果，success为测试是否成功的true/false标志，desc为结果的说明
+		4. selectByItem(browser, item, condition), 用于下拉框选择. 基于item查询对应的xpath,并基于xpath定位select或mat-select,选择condition指定的过滤条件.成功返回True,否则返回False.
+	")}}
+''')
+
+// 修改代码添加检测
+define('tpl_self_add_wait', '''
+	/*{
+		 "llm_type":""
+	 }*/
+	你是熟悉selenium 4的从事银行业务的高级测试，请基于下面的python代码需求，完成run函数。
+    # python函数：run(browser)
+	它将被主模块用run(browser)的方式调用。
+	{{python_code}}
+	
+	# python代码需求
+	在run的结尾，添加：waitElement(browser, item, '{{n_cmp1.change_behavior}}') 等待页面的加载完成，item为下面的待检测元素
+
+	# 待检测的元素：
+	{{n_cmp1.change_element}}
+	
+	# 其中来自autotest的可调用函数（通过from autotest import waitElement 补充导入函数）：
+	参数item是来自弹窗的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	参数browser是已经构建好的webdriver.Chrome实例
+	1. waitElement(browser, item, type),等待item所指向的元素出现/消失/改变,取决于type类型(add/remove/update)
+''')
+
+// 修改代码处理弹窗 - 废弃
+define('tpl_self_add_dialog', '''
+	你是熟悉selenium 4的从事银行业务的高级测试，请基于下面的python代码需求，完成run函数。
+    # python函数：run(browser)
+	它将被主模块用run(browser)的方式调用。
+	{{python_code}}
+	
+	# python代码需求
+	判断弹窗的可点击按钮(item)存在后，用clickElementByItem(browser, item, 2)关闭弹窗。
+
+	# 弹窗的页面元素：
+	{{n_cmp1.elements}}
+	
+	# 其中来自autotest的可调用函数（通过from autotest import gotoPage, clickElementByItem, getBrowser。。。导入下面的函数）：
+	参数item是来自弹窗的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	参数browser是已经构建好的webdriver.Chrome实例
+	1. getXpathByItem(browser, item),基于item获取页面元素的xpath,item不存在返回False.
+	2. clickElementByItem(browser, item, waitSecond, disableLog), 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒.disableLog为可选参数,默认为False,不禁止输出日志. 点击成功返回True,否则返回False.
+''')
+
+// 校验元素
+func('CheckElements', '''
+import com.llm.agentcore.core.agent.FunctionUtil
+import java.util.Map
+public class CheckElements {
+	public static Object execute(Object sys_last_result, Map StepTestInfo, FunctionUtil fn) {
+		// 检查每个check_elements中的元素都是在elements中存在的 （注：check_elements中不是element的元素，无需检查）
+		def elements = fn.list(StepTestInfo.simplepageinfo)
+		def check_elements = fn.map(sys_last_result)
+
+		def allElementsExist = true
+		def resultMessages = ""
+		check_elements.each { entry ->
+			def key = entry.key
+			def list = entry.value
+			if (list instanceof List) {
+				list.each { element ->
+					if (!elementExistsInElements(element, elements)) {
+						resultMessages += "元素 ${element['name']}(ID: ${element['id']})不存在; "
+						allElementsExist = false
+					}
+				}
+			}
+		}
+		return fn.task(allElementsExist).result(resultMessages).build()
+	}
+
+	def static boolean elementExistsInElements(element, elements) {
+		for (item in elements) {
+			if (!item) continue // 跳过空元素
+			if (item['id'] == element['id'] && item['name'] == element['name']) {
+				return true
+			}
+			if (item['children']) {
+				// 递归检查 children
+				if (elementExistsInElements(element, item['children'])) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
+''')
+
+// 页面结果检查 - 测试，未启用
+define('tpl_check_screenshot', '''
+	/*{
+	 "llm_type":""
+ }*/
+	你是一名测试工程师，请观察当前的局部测试步骤执行后的界面截图，判断是否执行成功。然后，请思考下一步应如何处理，并将思考结果用JSON格式返回：
+	JSON格式： {
+		"thought": {
+			"keywords": "界面截图中的关键元素是否符合当前局部测试用例的预期",
+			"current_step": "{{current_step}}",
+			"original_next_step": "原来规划的完整测试步骤中的下一步",
+			"reasoning":[
+				"检查界面截图中的关键元素是否按预期显示（例如，按钮是否可用、文本框是否填充正确等）。",
+            	"验证功能是否按预期工作（例如，点击按钮后是否跳转到正确的页面、是否触发了预期的弹出框等）。",
+            	"如果发现任何问题，思考是否需要调整测试用例或测试步骤。",
+            	"考虑是否有额外的测试步骤需要添加，以确保测试的全面性和准确性。"
+			]
+		},
+		result: {
+			'behavior': 'add/update/nochange',	// add或update下一步的局部测试步骤。nochange表示不调整，继续按original_next_step执行。
+			'next_step': 'xxx'					// hehavior为add/update时，调整后的下一步的局部测试步骤。behavior为nochange时，为空。 
+		}
+	}
+	
+	# 局部测试步骤：
+	{{current_step}}
+
+	# 完整测试步骤：
+	{{steps}}
+	
+	# 错误信息
+	{{sys_hint}}
+	
+	{{fn.imageFlag(sys_last_result)}}
+''')
+
+
+// 修复python 导包
+define('tpl_fix_python_import', '''
+	/*{
+	 "llm_type":""
+ }*/
+你是熟悉selenium 4的从事银行业务的高级测试,要求:
+1.若input code代码中 import 错误, 只修改import相关代码.
+2.请删掉假设的import 代码
+3.其余代码不需要改动,不必解释,重新返回
+
+# python autotest 模块拥有函数
+1. existElement(browser, item, target_text), 基于item获取元素或容器的xpath，并检查该元素或其子元素中是否包含指定的文本（target_text）。这里的target_text代表要查找的状态描述或任意文字内容。如果元素或其内部包含与target_text相匹配的文本，则函数返回True；否则返回False
+2. getXpathByItem(browser, item),基于item获取页面元素的xpath,元素不存在时返回None.注：如果同时涉及点击动作，建议直接使用clickElementByItem或sendKeysToElementByItem或selectByItem
+3. loadTestData(category), 用于加载测试数据,返回为List<json>, 为页面的字段的列表数据
+4. writeResult(success, desc),记录执行结果,success为测试是否成功的true/false标志,desc为结果的说明
+5. clickElementByItem(browser, item, waitSecond, disableLog), 用于元素点击. 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False.
+6. sendKeysToElementByItem(browser, item, keys),用于文字输入. 基于item查询对应的xpath,并基于xpath定位元素,输入keys所代表的字符.成功返回True,否则返回False.
+7. selectByItem(browser, item, condition), 用于下拉框选择. 基于item查询对应的xpath,并基于xpath定位select或mat-select,选择condition指定的过滤条件.成功返回True,否则返回False.
+8. getBrowser(),用于获得已经初始化的WebDriver（webdriver.Chrome）,返回为browser
+
+## browser对象是使用selenium模块初始化好的WebDriver.
+可以直接使用WebDriver对象的方法,例如: browser.get('url') 是打开网址
+
+# input code
+
+```python
+{{sys_last_result}}
+```
+''')
+
+
+// 删除上一步相关代码
+define('tpl_delete_python_code', '''
+	/*{
+	 "llm_type":""
+ }*/
+你是熟悉selenium 4的从事银行业务的高级测试, 
+1.审查python代码,
+2.根据当前测试用例描述,推测出上一步测试用例描述
+3.要求删除run函数中与上一步测试用例描述相关的python代码
+4.run函数必须传入参数,例如 `def run(browser):`
+5.要求代码的中文翻译为英文
+6.重新返回python代码
+# 完整的测试步骤为：
+  {{StepTestInfo.steps}}
+# 当前测试用例描述：
+  {{StepTestInfo.current_step}}
+
+```python
+{{sys_last_result}}
+```
+''')

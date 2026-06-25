@@ -1,0 +1,66 @@
+/*
+{
+	"title":"URL Content Analysis",
+	"description":"Parse and collect data from URLs including web content, metadata, and other structured information",
+	"parameter":[
+		{
+			"name":"url",
+			"label":"URL"
+		}
+	],
+	"tag":"chatdoc",
+	"uiEntrance":"chatDoc",
+	"resultPlan":"n_api_data",
+	"life":1000,
+	"version":2
+}
+*/
+
+assign("method", "GET")
+
+// html
+n_url_html_data,act_api.doExecuteDynamic?name="url_parse_api"&dynamicParamData='{{fn.json("url,url,method,method")}}'
+assign("html_data", "{{n_url_html_data.html}}")
+
+// check
+when('!fn.hasValue(html_data)', {
+  //# Parse Failed
+  act_flow.fail?result='Parse Failed!'
+},{
+  // timestamp
+  n_current_timestamp,act_func?script='''
+    def now = new Date()
+    def timestamp = String.format(
+        "%04d%02d%02d%02d%02d%02d",
+        now.year + 1900,
+        now.month + 1,
+        now.date,
+        now.hours,
+        now.minutes,
+        now.seconds
+    )
+    return timestamp
+  '''
+
+  when('null != knowledgeName', {
+    // file_path
+    assign("file_path", "system/tmp/chatdoc_url_html/{{knowledgeName}}.html")
+  },{
+    // file_path
+    assign("file_path", "system/tmp/chatdoc_url_html/{{n_current_timestamp}}.html")
+  })
+
+  // generate txt
+  act_func.write?filename="{{file_path}}"&data="{{html_data}}"
+
+  when('null != folderId', {
+    // Upload to specified directory
+    n_api_data,act_api.doExecute?name='kbs_upload_file'&fileNames="{{file_path}}"&params='{"kbSpacesFolderId":"{{folderId}}"}'
+  },{
+    // Upload to tmp directory
+    n_api_data,act_api.doExecute?name='kbs_upload_user_file'&fileNames="{{file_path}}"&params='{"folderName":"temp"}'
+  })
+})
+
+// return
+assign('return', '{{n_api_data}}')

@@ -1,0 +1,58 @@
+/*
+{
+	"title": "调用OpenAPI生成器",
+	"description": "调用agt_gen_openapi.txt生成OpenAPI规范",
+	"parameter": [
+		{
+			"name": "kbSpaceFileId",
+			"label": "知识库文件ID",
+			"required": true,
+			"type": "knowledge_space"
+		},
+		{
+			"name": "pages",
+			"label": "页码（用逗号分隔）",
+			"maxLength": 50
+		},
+		{
+			"name": "version",
+			"label": "版本号",
+			"required": true,
+			"maxLength": 50,
+			"default": "1.0.0"
+		}
+	],
+	"resultPlan": "openapi_result",
+	"life": 100,
+	"version": 1
+}
+*/
+
+// Agent状态
+assign("status", "开始调用OpenAPI生成器")
+
+// 调用agt_gen_openapi.txt智能体
+n_openapi_result, agt_gen_openapi?kbSpaceFileId={{kbSpaceFileId}}&pages={{pages}}&version={{version}}
+
+// 处理返回结果
+when('{{fn.hasValue(n_openapi_result)}}', {
+	assign("openapi_result", "OpenAPI规范生成成功")
+	log("OpenAPI规范已生成：{{fn.toString(n_openapi_result)}}")
+}, {
+	assign("openapi_result", "OpenAPI规范生成失败")
+	log("生成OpenAPI规范时出现错误")
+})
+
+// 与GPT对话，显示结果
+define('tpl_chat_bot', '''
+OpenAPI规范生成任务已完成。
+
+输入参数：
+- 知识库文件ID：{{kbSpaceFileId}}
+- 页码：{{fn.when(fn.hasValue(pages), pages, "全部页面")}}
+- 版本号：{{version}}
+
+生成结果：{{openapi_result}}
+
+{{fn.when(fn.hasValue(n_openapi_result), "生成的OpenAPI规范：" + fn.toString(n_openapi_result), "无生成结果")}}
+''')

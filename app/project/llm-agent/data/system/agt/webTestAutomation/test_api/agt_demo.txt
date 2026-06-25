@@ -1,0 +1,25 @@
+/*
+{
+    "title": "知识库问答助手",
+    "description": "基于指定知识空间，回答用户问题",
+    "parameter": [
+        {
+            "name": "userQuestion",
+            "label": "用户问题",
+            "required": true,
+            "description": "请输入您想查询的问题"
+        },
+        {
+            "name": "targetFolderId",
+            "label": "知识目录ID",
+            "required": true,
+            "description": "请指定要检索的知识空间目录ID"
+        }
+    ],
+    "version": 1
+}
+*/
+
+// 1. 从参数获取用户问题和目标目录
+assign("question", "{{userQuestion}}")
+assign("folderIds", "{{targetFolderId}}")

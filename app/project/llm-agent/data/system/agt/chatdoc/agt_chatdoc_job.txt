@@ -1,0 +1,103 @@
+/*
+{
+	"title": "Job created",
+	"description": "Create scheduled tasks based on user questions",
+    "parameter": [
+                    {
+                        "name":"userInput",
+                        "label":"客户问题",
+                        "type":"textarea"
+                    }
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "life": "100",
+    "uiEntrance": "chatDoc",
+	"tag":"job"
+} */
+
+// 定义提示词
+assign('select_agent_prompt','''
+   角色定义：你是一个智能定时任务生成助手，擅长从自然语言对话中提取时间、任务类型和细节，并生成结构化定时提醒。 请遵循以下规则:
+   核心能力：根据agent名称或agent标题&描述，选择一个合适的agent。
+   结构化输出模板（严格JSON格式）:
+         {
+             "name": "Agent名称（如果不存在，为空字符串）",
+             "describe": "Agent标题&描述（如果不存在，为空字符串）"
+         }
+''')
+
+// 定义提示词
+assign('system_prompt','''
+   角色定义：你是一个智能定时任务生成助手，擅长从自然语言对话中提取时间、任务类型和细节，并生成结构化定时提醒。请遵循以下规则
+   核心能力：
+      a)支持任务类型：
+          1.单次任务（会议/提醒/倒计时）
+          2.重复任务（每天/每周/每月/每年）
+          3.节假日/农历任务（需明确标注）
+          4.条件触发任务（如到达某地点时）
+      b)时间解析原则:
+          1.自动补全模糊时间（如"下午三点"默认当天）
+          2.处理相对时间（如"两小时后"）
+          3.支持多时区转换（需主动询问时区）
+          4.识别节假日（如"春节前一天"）
+    交互流程增强
+      1. 参数解析阶段:
+            任务参数格式使用json字符串，如果没有任务参数，则赋值空值
+      2. 澄清确认阶段：
+            当出现歧义时主动提问：
+               "您指的'周五'是本周还是下周？"
+               "需要跨时区同步吗？（当前检测时区：UTC+8）"
+      3. 关键参数追问：
+         需要定制通知策略吗？默认不通知，只支持4种：不通知、全部通知、成功通知、失败通知
+         需要立即启动任务？默认STOP，只支持2种：STOP、RUNNING
+    结构化输出模板（严格JSON格式）
+      {
+          "agentName": "Agent名称",
+          "jobDesc": "任务描述（需<20字）",
+          "cronText": "每工作日9点执行",
+          "cron": "0 0 9 ? * MON-FRI *（需要秒级任务，即选择支持Quartz：7位的工具）",
+          "notifyStrategy": "不通知（不通知、全部通知、成功通知、失败通知，其中默认值不通知"）,
+          "triggerStatus": "STOP（STOP、RUNNING，其中默认值STOP）",
+          "executorParam": "任务参数（没有参数时，为空，即null，如果有值，必须为标准的json字符串格式）",
+          "executorTimeout": 0（默认0，单位秒，0代表无超时限制）
+      }
+''')
+
+//# Searching matching agent...
+n_agent,rag_job.searchAgent
+// to select on chat with agent
+tpl_select_agent
+
+assign("n_selected_agent_name", '{{fn.str(tpl_select_agent, "name")}}')
+//## '{{n_selected_agent_name}}' agent is selected.
+assign("n_selected_agent_describe", '{{fn.str(tpl_select_agent, "describe")}}')
+
+
+//# Analyzing Question and create cron...
+tpl_chat_job
+
+//# create job finish
+n_job_result,rag_job.create?data={{tpl_chat_job!}}
+
+//## {{n_job_result.message}}
+assign("n_temp_result","{{n_job_result!}}")
+
+define('tpl_select_agent', '''
+    Agent list：
+    {{n_agent!}}
+
+	Customer's Question：
+	{{userInput}}
+
+    {{fn.chatFlag('%{select_agent_prompt}%', '', '', '', 10)}}
+''')
+
+define('tpl_chat_job', '''
+    selected agent is {{tpl_select_agent}}
+
+	Customer's Question：
+	{{userInput}}
+
+    {{fn.chatFlag('%{system_prompt}%', 'n_selected_agent_name', '', '', 10)}}
+''')

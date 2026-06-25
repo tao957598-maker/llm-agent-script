@@ -1,0 +1,123 @@
+/*
+{
+	"title": "LHT-ChatDoc Q&A",
+	"description": "LHT-Answer user question",
+    "parameter": [
+					{
+						"name":"userInput",
+						"label":"客户问题",
+						"type":"textarea"
+					},
+					{
+                        "name":"kbSpaceId",
+                        "label":"目录ID（支持多个）",
+                        "type":"textarea"
+                    },
+                    {
+                         "name":"kbSpaceFileId",
+                         "label":"文件ID（支持多个）",
+                         "type":"textarea"
+                     },
+					{
+                        "name":"kbData",
+                        "label":"知识库数据",
+                        "type":"textarea"
+                    }
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "life": "100"
+    "uiEntrance": "chatDoc",
+	"tag":"chatdoc"
+} */
+
+// 定义变量
+assign('params','{"question":"{{userInput}}","folderIds":"{{kbSpaceId!}}","knowledgeIds":"{{kbSpaceFileId!}}"}')
+// TODO 刘俊 chunker_id 重复
+assign('system_promptsystem_prompt','''Contents of the Knowledge Base:
+{
+"min_chunker_id": "252808608753352700"
+"max_chunker_id": "252808608753352702"
+"chunkers":[{
+        "serialNumber": 1,
+        "chunker_id": 252808608753352701,
+        "document_id": "252636466017435648",
+        "content": "# page\n1\n\n# Title / Key Sentence\nNOTES TO THE CONSOLIDATED FINANCIAL STATEMENTS, INTANGIBLE ASSETS\n\n# page keywords\n[\"Intangible Assets\",\"Orbital slot\",\"Amortisation\",\"Impairment\",\"Value-in-use\",\"CGU\",\"Discount rate\"]\n\n# page description\nFinancial stateme\nNOTES TO THE CONSOLIDATED FINANCIAL STATEMENTS\r\rFor the year ended 31 December 2023 (Expressed in Hong Kong dollars)\r\r13.INTANGIBLE ASSETS\r\r20232022Notes$’000$’000\r\rOrbital slot(i)133,585133,585Leased intangible assets – orbital slots(ii)135,583144,319\r\r269,168277,904\r\rNotes:\r\r(i)Intangible asset with indefinite useful lifeDuring 2009, the Group obtained the right to operate a satellite at an orbitalslot. Such intangible asset is considered to have an indefinite life and notsubject to amortisation.\r\rNo impairment of the intangible asset was recorded as at 31 December 2023and 2022.\r\r138138\r\rThe recoverable amount of the intangible asset is estimated based onvalue-in-use calculations. These calculations use cash flow projection basedon budget and business plan approved by management for the year ending 31December 2024. Cash flows beyond 2023 are extrapolated based on revenuefrom committed service agreements for the provision of satellite transpondercapacity and projected at growth rates of 1% which are generally expected forthe industry and achievable by the Group during the forecast period. Thediscount rate used for the cash flow projection is 13.84% (2022: 20.09%),which is pre-tax and reflects specific risks relating to the relevant CGU that theintangible asset belongs to.\r\rAnnual Report 2023\n# Below is 20.0% of the tokens from the next block.：\n13.INTANGIBLE ASSETS (Continued)\r\rNotes: (Continued)\r\r(ii)Leased intangible assets\r\rOrbital slots$’000\r\rCost:At 1 January 2022, 31 December 2022,1 January 2023 and 31 December 2023179,263\r\rAccumulated amortisation"
+    }]}''')
+
+// 定义提示词
+assign('system_prompt','''
+    你是熟悉金融行业的智能助手，按照以下规则进行回答用户问题:
+    1.如果知识库内容（Contents of the Knowledge Base）存在或者能找得到，则:
+    根据当前提供的 chunker 内容进行分析：
+        - 若推测下一个/批 chunker 可能与问题相关，且需要更多信息才能进一步推断，根据`content`推测需要的`chunker_id`往前取还是往后取,则请求获取更多 chunker
+        - 若判断后续 chunker 与问题无关，则不再请求更多 chunker
+        具体响应方式：
+        1.1 当需要更多相关 chunker 时，返回：
+        ```json
+        {"next_chunker_id": "chunker_id1,chunker_id2", "answer": false}
+        ```
+        (`next_chunker_id`: 注`chunker_id`通常是按数字顺序排列的。 取值为逗号分割的字符串,且必须在min_chunker<=next_chunker_id<=max_chunker.
+        `answer`:如果现有的chunker 无法回答`False`).
+        1.2 当判断后续 chunker 与问题无关时，直接根据已有内容回答问题或表示无法回答
+
+      回答必须以```json
+        {"next_chunker_id":"chunker_id1,chunker_id2","answer":False}
+        ```开始
+      然后结合可行度最高的内部资料（为<div style="display:none;" num="n"/>包裹的介绍），回答用户问题，并请及时的在该内容的边上用<div style="display:none;" id="a" num="n"/>标记,其a是id的值,n是num的值。
+      并且使用知识库的文字语言答复，无需翻译。
+    2.如果知识库的内容不存在，则
+      不需要加上<div style="display:none;" num="n"/>标记。
+      请使用英文答复.
+''')
+
+
+when('fn.hasValue(kbData)', {
+
+    // kbDatakbData
+    assign('kbDatakbData','{{kbData}}')
+    // Searching
+    n_result,rag_memory.retrieve?var=kbData
+    //## Generating reply
+    rag_kbs.searchReference?data='{{n_result!}}',tpl_qa_chatdoc,psr_ref
+}, {
+    when('kbSpaceFileId??',{
+        assign('n_isKbSpaceFileId','true')
+        assign('n_kbSpaceIdOrFileId','{{kbSpaceFileId!}}')
+        n_fileId_cnt,act_func?script='''
+                        def length = kbSpaceFileId.split(",").size()
+                        return length
+                    '''
+        assign('n_select_msg','Searching {{n_fileId_cnt}} files were selected for the Knowledge Base')
+    },{
+        assign('n_isKbSpaceFileId','false')
+        assign('n_kbSpaceIdOrFileId','{{kbSpaceId!}}')
+        assign('n_select_msg','Searching the Knowledge Base')
+    })
+
+    // Query knowledge space name
+    n_folder_name,rag_kbs.searchKbSpaceName?kbSpaceIdOrFileId={{n_kbSpaceIdOrFileId!}}&isKbSpaceFileId={{n_isKbSpaceFileId}}&format=': %s'
+
+    //# {{(n_kbSpaceIdOrFileId!''?trim?has_content)?then(n_select_msg+n_folder_name!, 'No knowledge base selected')}}
+    n_ink_result,rag_kbs.searchQuestion?paramData='{{params}}'&similarity='0.5'&combine=true
+    // n_ink_result top 10
+    n_result,rag_kbs.searchReference?data='{{n_ink_result}}'
+    //# result
+    n_tpl_result,tpl_qa_chatdoc,psr_ref
+
+    when('n_tpl_result??',{
+        assign('n_result','{{n_tpl_result}}')
+    })
+
+
+})
+
+define('tpl_qa_chatdoc', '''
+	Contents of the Knowledge Base:
+	{{fn.str(fn.optional(n_result!'', 'No results found ! '))}}
+
+	Customer's Question：
+	{{userInput}}
+
+    {{fn.chatFlag('%{system_prompt}%', '', '', '', 10)}}
+''')

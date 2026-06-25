@@ -1,0 +1,374 @@
+/*
+{
+	"title":"Test Data Table Generation",
+	"description":"矩阵测试数据生成",
+	"parameter":[
+		{
+			"name":"tableName",
+			"label":"表名",
+			"type":"textarea"
+		},
+		{
+			"name":"stepsData",
+			"label":"测试数据",
+			"type":"textarea"
+		},
+    {
+			"name":"is_fast",
+			"label":"Test Data Gen Fast",
+			"args":[
+				{
+					"label":"Yes",
+					"value":"1"
+				},
+				{
+					"label":"No",
+					"value":"0"
+				}
+			],
+			"defaultValue":"1",
+			"type":"select",
+			"required":true
+		},
+	],
+	"resultPlan":"n_kb_data,n_final_data",
+	"life":1000,
+	"version":2
+}
+*/
+// 获取参数
+assign("steps_data", "{{stepsData}}")
+
+// 是否为快速生成
+assign('n_is_fast', '{{is_fast}}')
+
+// 查询元数据语句
+//assign("userInput", "在kb_test_metadata表查询table_name值为{{tableName}}且test_no为{{steps_data.test_no}}且system为{{steps_data.system}}的第一条数据")
+// 取元数据sql
+// agt_auto_sql1.knowledge?userInput='{{userInput}}'
+// n_kb_data,act_kb.selectBy?sql='{{sys_last_result}}'
+
+// 查询元数据语句
+assign("sql_str", "SELECT * FROM kb_test_metadata WHERE table_name = '{{tableName}}' AND test_no = '{{steps_data.test_no}}' AND `application` = '{{steps_data.application}}' order by create_time desc limit 1  ")
+n_kb_data,act_kb.selectBy?sql='{{sql_str}}'
+
+n_system,act_func?script='''
+  def data = n_kb_data
+  def entry = data[0]
+  def result = entry.system ?: entry.application
+  return result
+'''
+
+// 数据拼接
+n_data_item,act_func?script='''
+  def system = n_system
+  def result = [:]          
+  result.metadata_id = n_kb_data[0].id
+  result.system_name = system
+  result.application = system
+  result.test_no = n_kb_data[0].test_no
+  return result
+'''
+
+// 查询案例生成表格数据
+assign("userInput2", "在kb_gen_test_case表查询test_no为{{steps_data.test_no}}的第一条数据")
+agt_auto_sql1.knowledge?userInput='{{userInput2}}'
+n_kb_test_data,act_kb.selectBy?sql='{{sys_last_result}}'
+
+// 案例生成表格数据判断
+n_isEmptyisEmpty,act_func?script='''
+def isEmpty
+    if (n_kb_test_data == null || n_kb_test_data.isEmpty()) {
+        isEmpty = true
+    } else {
+        isEmpty = false
+    }
+return isEmpty
+'''
+when('n_isEmptyisEmpty==false', {
+				// 再次数据拼接
+				n_test_data_item,act_func?script='''
+          def result = [:]          
+          result.metadata_id = n_kb_data[0].id
+          result.system_name = n_system
+          result.application = n_system
+          result.test_no = n_kb_data[0].test_no
+          result.title = n_kb_test_data[0].title
+          result.submodule_name = n_kb_test_data[0].submodule_name
+          result.submodule_description = n_kb_test_data[0].submodule_description
+          result.steps = stepsData.steps
+          result.expected_result = n_kb_test_data[0].expected_result
+          return result
+        '''
+          // 大模型根据有期望结果生成测试矩阵数据
+          n_final_data, tpl_llm_test_data_with_result
+
+			},{
+          """
+          def test_model_list = ["等价类划分法", "边界值分析法", "判定表法", "因果图法", "正交试验法", "状态迁移法", "场景法", "错误推测法", "随机测试法", "组合测试法", "变异测试法", "模糊测试法", "基于模型的测试法", "探索性测试法"]
+          def test_model_list = ["Equivalence Partitioning", "Boundary Value Analysis", "Decision Table Testing", "Cause-Effect Graphing", "Orthogonal Array Testing", "State Transition Testing", "Scenario Testing", "Error Guessing", "Random Testing", "Combinatorial Testing", "Mutation Testing", "Fuzz Testing", "Model-Based Testing", "Exploratory Testing"]
+
+          """
+          // 大模型根据没有期望结果生成测试矩阵数据1
+          // **Log** ✅
+          log('test_model_list')
+          
+          when('n_is_fast == "1"',{
+              // 快速生成
+              n_test_model_list,act_func?script='''
+              def test_model_list = ["Equivalence Partitioning", "Boundary Value Analysis",  "Cause-Effect Graphing"]
+              return test_model_list
+              '''
+          },
+          {   //完整测试案例生成
+              n_test_model_list,act_func?script='''
+              def test_model_list = ["Equivalence Partitioning", "Boundary Value Analysis", "Decision Table Testing", "Cause-Effect Graphing", "Orthogonal Array Testing", "State Transition Testing", "Scenario Testing", "Error Guessing", "Random Testing", "Combinatorial Testing", "Mutation Testing", "Fuzz Testing", "Model-Based Testing", "Exploratory Testing"]
+              return test_model_list
+              '''
+          })
+
+          // **Log** ✅
+          log('Starting async')
+          // 异步处理设计数据
+          assign('async_test_content_list', '[]')
+          // 异步处理每页数据
+          foreach('n_test_model', 'n_test_model_list', {
+              // 获取当前模块名称
+              assign('test_model', '{{n_test_model.item}}')
+              // 计算数据
+              n_design,agt_test_data_table_async?test_model='{{test_model}}'&steps='{{steps_data.steps}}'&test_no='{{n_data_item.test_no}}'&n_system='{{n_system}}'&metadata_id='{{n_data_item.metadata_id}}'&async=true
+              act_func?script="async_test_content_list.add(n_design)"
+          })
+          // **Log** ✅
+          log(' async value')
+          // 收集结果 async_test_content_list.validSummary
+          assign('test_design_list', '[]')
+          foreach('n_test_design', 'async_test_content_list', {
+              assign('test_design', '{{n_test_design.item}}')
+              // test_point_valuetest_point_value map
+              assign('test_design_value', '{{test_design.value}}')
+              act_func?script='''
+                          test_design_list.add(test_design_value)
+                      '''
+          })
+          // **Log** ✅
+          log('Stop async')
+          // 异步执行结果
+          assign('n_final_data', '{{test_design_list}}')
+			})
+
+
+
+
+
+// 保存数据库
+act_kb.defineAndImportData?tableName='kb_test_steps_data'&data='{{n_final_data}}'
+
+// 判断每步是否为输入项，并生成测试数据矩阵
+define("tpl_llm_test_data_no_result", '''
+你是一位资深测试专家，为以下按编号列出的操作步骤内容，生成标准化的测试数据，输出测试数据矩阵：
+
+角色定义：
+- 测试数据生成专家
+- 熟悉14种测试方法, 如：等价类划分法, 边界值分析法, 判定表法, 因果图法, 正交试验法, 状态迁移法, 场景法, 错误推测法, 随机测试法, 组合测试法, 变异测试法, 模糊测试法, 基于模型的测试法, 探索性测试法
+  对应英文："Equivalence Partitioning", "Boundary Value Analysis", "Decision Table Testing", "Cause-Effect Graphing", "Orthogonal Array Testing", "State Transition Testing", "Scenario Testing", "Error Guessing", "Random Testing", "Combinatorial Testing", "Mutation Testing", "Fuzz Testing", "Model-Based Testing", "Exploratory Testing"
+- 严格遵循测试规范
+- 根据给出的测试方法规则，给出对应的json数据
+
+基于数据生成规则：
+  - 每种方法独立生成一组数据
+  - 禁止生成带HTML/XML标签的数据（包括但不限于<script>、<div>、<script>alert(...)</script>等）
+  - 禁止生成可能引发安全问题的特殊字符组合
+  - 字符串长度控制在合理范围内
+  - 输出结果必须为 "{" 开头 "}"结尾，是一个完整的dict， test_method输出为英文
+
+数据生成：
+1. 解析操作步骤,提取明确为"输入"类的操作步骤：
+  - 输入类：测试方法清单，生成测试数据
+  - 非输入类操作：用 `null` 占位，不能省略
+  - 保持每组数据维度一致
+
+2. 直接输出json结构数据,不必解释：
+  示例1：
+  输入测试方法：等价类划分法
+  输出：
+  {
+    "test_no": "1.0",
+    "metadata_id": "元数据ID",
+    "system_name": "系统名称",
+    "test_method": "等价类划分法",
+    "data": "[{"1":null, "2":"admin", "3":"123456"}]"
+  }
+  示例2：
+  输入测试方法：边界值分析法
+  输出：
+  {
+    "test_no": "1.0",
+    "metadata_id": "元数据ID",
+    "system_name": "系统名称",
+    "test_method": "边界值分析法",
+    "data": "[{"1":null, "2":"admin", "3":"123456"}]"
+  }
+
+传参规范：
+操作步骤：1.打开浏览器，访问URL: http://189.1.224.215:8888/index。
+2.在弹出的登录框中输入用户名：peter.li。
+3.在弹出的登录框中输入密码：gientech@123。
+4.点击登录框中的“登录”按钮。
+
+测试方法：{{test_model}}
+操作步骤：{{steps_data.steps}}
+测试编号：{{n_data_item.test_no}}
+系统名称：{{n_system}}
+元数据ID：{{n_data_item.metadata_id}}
+
+''')
+
+
+
+define("tpl_test_data", '''
+你是一位测试专家，请根据以下按编号列出的操作步骤内容，为每一步生成标准化的测试数据。
+
+请遵循以下规则：
+
+1. 每步操作如果是“输入”类操作（如“输入xxx到yyy字段”、“Type xxx into yyy”等），请提取字段含义，生成测试数据矩阵；
+2. 测试数据除测试XSS漏洞外(也就是不生成标签类测试值)，包括但不限于：正常值、空值、边界值、特殊字符等，确保全面覆盖测试场景；
+3. 如果所有操作均为“非输入类”（如“点击按钮”、“跳转页面”、“选择项”等），请将 `data` 字段直接返回为空数组 `[]`；
+4. 同时包含“输入类”和“非输入类”的操作，“非输入类”请填入标准 JSON 中的 `null` 值占位（注意是小写 null，且不要省略），确保每组测试数据中字段位置不变、维度固定；
+5. 即使是连续多个非输入操作，也必须保留对应位置的 `null`，不要自动删除或合并，确保每组数据数组长度与操作步骤数量完全一致；
+5. 返回格式为标准 JSON 对象，字段包括：
+   - `test_no`: 取测试编号test_no，不需要自动生成
+   - `data`: 字符串形式的 JSON 数组数组（注意是 JSON 字符串）
+
+最终输出json结构数据,示例如下：
+
+{
+  "test_no": "1.0",
+  "data": "[{"1":null, "2":\"admin\", "3":\"123456\"}, {"1":null, "2":\"\", "3":\"abc!@#\"}, {"1":null, "2":\"测试\", "3":\"特殊字符\"}]"
+}
+
+以下是操作步骤内容：
+{{steps_data.steps}}
+
+以下是测试编号test_no：
+{{steps_data.test_no}}
+''')
+
+
+
+// 判断每步是否为输入项，并生成测试数据矩阵
+define("tpl_llm_test_data_with_result", '''
+- Role: 测试数据生成专家
+- Background: 基于测试用例和指定的测试方法生成多样化的测试数据
+- Profile: 你是一位专业的测试工程师，精通各种测试方法
+- Skills: 能够根据测试用例和测试方法生成有效的测试数据
+- Goals: 生成符合测试用例要求的测试数据
+- Constrains: 
+  1. 确保生成的测试数据符合测试方法的原理
+  2. 使用的测试方法（必须全部包含）：[等价类划分法, 边界值分析法, 判定表法, 因果图法, 正交试验法, 状态迁移法, 场景法, 错误推测法, 随机测试法, 组合测试法, 变异测试法, 模糊测试法, 基于模型的测试法, 探索性测试法]
+  3. 每个步骤都需要生成测试数据，
+  4. 非输入类的操作用'null'占位，不能省略，
+  5. 每个测试步骤都必须有对应的数据项，包括非输入操作用'null'占位,
+    5.1: data字段中的JSON数组必须包含与测试步骤数量完全一致的元素,
+    5.2: 每个数据项对应一个测试步骤，按步骤顺序排列,
+  6. 禁止生成带HTML/XML标签的数据（包括但不限于<script>、<div>、<script>alert(...)</script>等）
+  7. 禁止生成可能引发安全问题的特殊字符组合
+  8. 字符串长度控制在合理范围内
+  
+- OutputFormat: JSON格式的测试数据
+
+# 测试用例信息
+测试编号：{{n_test_data_item.test_no}}
+测试标题：{{n_test_data_item.title}}
+子模块名称：{{n_test_data_item.submodule_name}}
+子模块描述：{{n_test_data_item.submodule_description}}
+操作步骤：{{steps_data.steps}}
+期望结果：{{n_test_data_item.expected_result}}
+系统名称：{{n_system}}
+元数据ID：{{n_test_data_item.metadata_id}}
+
+# 生成要求
+1. 为每种测试方法生成至少一组测试数据
+2. 每组数据包含输入值和预期结果
+3. expected_result字段使用布尔值：如果预期结果与测试用例中expected_result意思一致，则输出true，否则输出false
+4. 输出格式为标准合法的JSON，不要解释
+
+- Examples:
+  - 例子1：
+      ```test_case：
+      [ 
+        1.open url xxx
+        2.input user name `admin`
+        3.input password `123456`
+      ]
+      ```
+
+      ``` 
+      输出json结构数据:
+      [
+        {
+          "test_no": "test_record_xxx", # 用例编号
+          "metadata_id": "元数据ID",
+          "system_name": "系统名称",
+          "test_method": "等价类划分法", # 生成该数据所有使用的测试用例设计方法
+          "title":"1.用户名和密码均正确时可以正常登录"  # 用来简单描述生成的数据的测试内容，由index作为序号开头
+        "data": "[{"1":null, "2":\"admin\", "3":\"123456\"}]" # 生成的测试数据,
+          "expected_result": true, # 布尔值：true表示与测试用例预期结果一致，false表示不一致
+          "index": 1 # 生成数据的序号
+        },
+        {
+          "test_no": "test_record_xxx",
+          "metadata_id": "元数据ID",
+          "system_name": "系统名称",
+          "test_method": "边界值分析法",
+          "title":"用户名短一位为OKPT02，密码正确时登录失败"
+        "data": "[{"1":null, "2":\"admin\", "3":\"123456\"}]"
+          "expected_result":"false",
+          "index": 2
+        }
+        ...... # 此处省略其他测试方法生成的测试数据
+      ]
+      ```
+
+  - 例子2：
+      ```test_case：
+      [
+        1.在浏览器中访问登录页面：http://189.1.224.215:8888/index。
+        2.在登录页面的用户名输入框中输入有效的用户名：peter.li。
+        3.在登录页面的密码输入框中输入有效的密码：gientech@123。
+        4.在登录页面定位并点击“Sign-in”按钮。
+      
+      ]
+      ```
+
+      ``` 
+      输出json结构数据:
+      [
+        ......
+        {
+          "test_no": "NAV_001",
+          "metadata_id": "253435702366666752",
+          "system_name": "sys",
+          "test_method": "正交试验法",
+          "title": "5.用户名正确密码错误组合",
+          "data": "[{\"1\": \"http://189.1.224.215:8888/index\", \"2\": \"peter.li\", \"3\": \"incorrect@123\", \"4\": null}]",
+          "expected_result": false,
+          "index": 5
+        },
+        {
+            "test_no": "NAV_001",
+            "metadata_id": "253435702366666752",
+            "system_name": "sys",
+            "test_method": "状态迁移法",
+            "title": "6.从初始状态到登录成功状态迁移",
+            "data": "[{\"1\": \"http://189.1.224.215:8888/index\", \"2\": \"peter.li\", \"3\": \"gientech@123\", \"4\": null}]",
+            "expected_result": true,
+            "index": 6
+        },
+        ......
+      ]
+
+
+
+ 
+''')

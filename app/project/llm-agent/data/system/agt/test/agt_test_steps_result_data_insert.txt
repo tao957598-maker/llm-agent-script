@@ -1,0 +1,54 @@
+/*{
+  "title": "写入测试步骤结果数据",
+  "description": "将测试步骤执行结果写入 kb_test_steps_result_data 表",
+  "parameter": [
+    {"name":"system_name","label":"系统名称","required":true},
+    {"name":"test_no","label":"测试编号","required":false},
+    {"name":"steps","label":"步骤内容","required":false},
+    {"name":"start_uri","label":"开始页面URI","required":false},
+    {"name":"end_uri","label":"结束页面URI","required":false},
+    {"name":"python_code","label":"Python代码","required":false},
+    {"name":"collect_data","label":"采集数据","required":false},
+    {"name":"add_status","label":"写入状态","required":false}
+  ],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+// 读取并标准化必填参数 system_name
+assign('system_name_value', '{{system_name}}')
+// 读取并标准化可选参数 test_no，未传时置空字符串
+assign('test_no_value', '{{fn.optional(test_no, "")}}')
+// 读取并标准化可选参数 steps，未传时置空字符串
+assign('steps_value', '{{fn.optional(steps, "")}}')
+// 读取并标准化可选参数 start_uri，未传时置空字符串
+assign('start_uri_value', '{{fn.optional(start_uri, "")}}')
+// 读取并标准化可选参数 end_uri，未传时置空字符串
+assign('end_uri_value', '{{fn.optional(end_uri, "")}}')
+// 读取并标准化可选参数 python_code，未传时置空字符串
+assign('python_code_value', '{{fn.optional(python_code, "")}}')
+// 读取并标准化可选参数 collect_data，强制转为纯字符串避免对象序列化入库
+assign('collect_data_value', '{{fn.optional(collect_data, "")}}')
+// 读取并标准化可选参数 add_status，未传时置空字符串
+assign('add_status_value', '{{fn.optional(add_status, "")}}')
+
+// 基于关键字段构建 where 条件，避免同一记录重复写入
+assign('where_json', '{{fn.json("system_name,system_name_value,test_no,test_no_value,steps,steps_value")}}')
+// 构建待写入的列值 JSON
+assign('column_values_json', '{{fn.json("system_name,system_name_value,test_no,test_no_value,steps,steps_value,start_uri,start_uri_value,end_uri,end_uri_value,python_code,python_code_value,collect_data,collect_data_value,add_status,add_status_value")}}')
+
+// 将数据合并写入 kb_test_steps_result_data
+n_save_result, act_kb.merge?name=kb_test_steps_result_data&columnValues={{column_values_json}}&where={{where_json}}
+// 生成最终返回结果，包含写入状态与回显信息
+n_result, act_func?script='''
+def saveResult = n_save_result
+def output = [
+    success: true,
+    table: "kb_test_steps_result_data",
+    data: column_values_json,
+    where: where_json,
+    merge_result: saveResult
+]
+return output
+'''
+

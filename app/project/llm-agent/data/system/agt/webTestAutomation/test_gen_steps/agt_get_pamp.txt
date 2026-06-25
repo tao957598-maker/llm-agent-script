@@ -1,0 +1,92 @@
+/*
+{
+	"title":"获取页面动作前置条件",
+	"parameter":[
+		{
+			"name":"application",
+			"label":"应用名称",
+			"required":true
+			
+		},
+		{
+			"name": "page_url",
+			"label": "页面URL",
+			"required": true
+		},
+        {
+			"name":"userInput",
+			"label":"用户输入",
+			"required":true
+			
+		},
+		{
+			"name": "data",
+			"label": "Json数据",
+			"required": true
+		}
+	],
+	"version":1
+	"dependency":"ac",
+}
+*/
+// Set parameter
+assign('params','{"application":"{{application}}","page_url":"{{page_url}}","data":{{data}}}')
+
+// Query MySQL table
+assign('query', "SELECT * FROM auto_test.kb_page_action_min_preconditions WHERE application = '{{application}}' AND page_url = '{{page_url}}'");
+n_kb_content, act_kb.selectBy?sql='{{query}}'
+when('fn.hasValue(n_kb_content)',{
+    n_get_reuslt,tpl_verify,psr_json
+
+},
+{
+    assign('n_get_reuslt','{"result":"infeasible"}')
+}
+)
+
+
+assign('get_reuslt', '{{n_get_reuslt.result}}')
+// When it is feasible to improperly obtain results, it is feasible to include PAMP data in the results
+n_result,act_func.run?script='''
+def data_result = data
+
+if (get_reuslt == "feasible") {
+   data_result.put("PAMP", n_kb_content)
+} else {
+    data_result.put("PAMP", false)
+}
+return data_result
+'''
+assign('result2','{{n_result}}')
+
+
+define('tpl_verify', '''
+# 页面动作条件模型（PAMP）说明
+PAMP（Page Action Minimum Preconditions）模型为页面动作提供了结构化的前置条件定义，通过静态分析和运行时补充相结合的方式，确保动作执行的可靠性和准确性。该模型不仅可以用于自动化测试，还可以为用户交互提供智能引导，提升整体用户体验。借助 PAMP 的结构化前置条件，确保从登录到目标页面的第一步操作能够可靠执行，为后续访问基础账户页面建立坚实的基础。
+
+
+PAMP数据：{{n_kb_content}}
+# 图谱查询结果
+{{data}}
+
+# 用户目标
+{{userInput}}
+
+# 任务:
+1.根据用户目标 通过图谱查询 得到一个必定经过的图谱结果
+2.根据数据和查询结果数据,简短解释PAMP是否可行(100字以内).
+
+3.可行返回
+```json
+{'result':feasible,'action_name':'PAMP数据中的action_name'}
+```
+不可行:
+```json
+{'result':infeasible}
+```
+
+''')
+
+
+
+

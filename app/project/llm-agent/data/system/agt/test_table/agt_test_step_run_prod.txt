@@ -1,0 +1,55 @@
+/*
+{
+	"title":"自动化测试-单步执行",
+	"description":"生产模式执行指定的测试用例",
+	"parameter":"test_no=Test case no&current_step=Current test step&system=System name",
+	"resultPlan":"n_python_file",
+	"life":100,
+	"version":1
+}
+*/
+/
+
+// Use selenium
+assign('pythonType', 'selenium', 'explore_mode', '0', 'subfolder', '{{test_no}}')
+ 
+//# Prepare to run test step: {{current_step}}
+n_python_file, act_python.read?pythonType={{pythonType}}selenium&requirement={{current_step}}&subfolder={{test_no}}
+
+// Check script type
+when("python_code=='jsonl'", {
+	// sub_test_no comes from jsonl
+	// Call new Agent to run subtasks
+	agt_test_steps_run?test_no={{sub_test_no}}&system={{system}}&explore_mode=1
+}, {
+	// Check if script is generated
+	when("!n_python_file.hasFilename()", {
+		// End with failure because of no test script
+		act_memory.assign?var=test_result&value='Failure, step={{current_step}}, no test case'\
+			act_kb.merge?name=kb_testcase&columnValues={{fn.json('test_result,test_result')}}&where='{"test_no":"{{test_no}}"}'\
+			act_flow.fail?result='No test script found, test step is: {{current_step}}'
+	}, {
+		//# Run test step: {{python_file}}
+		n_python_result, act_rpa.send?name={{python_file}}&command=RunScript
+		
+		// Handle error
+		on_failure({
+			// Waiting 5 seconds
+			act_flow.wait?second=5
+
+			// Run test step again
+			n_python_result2, act_rpa.send?name={{python_file}}&command=RunScript
+		})
+		
+		// Save execution result to KB
+		act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,n_python_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+
+		// Handle error
+		on_failure({
+			// End with failure because of test issue
+			act_memory.assign?var=test_result&value='Failure, step={{current_step}}, {{n_python_result}}'\
+				act_kb.merge?name=kb_testcase&columnValues={{fn.json('test_result,test_result')}}&where='{"test_no":"{{test_no}}"}'\
+				act_flow.fail?result='{{sys_failure_task.result}}'
+		})
+	})
+})

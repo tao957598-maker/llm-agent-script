@@ -1,0 +1,413 @@
+/*
+{
+	"title":"Customer Risk & Recommendation Agent",
+	"description":"Use seven JSON inputs plus knowledge-base search results to determine final risk assessment and recommendation output",
+	"parameter":[
+		{
+			"name":"caseId",
+			"label":"Case Id",
+			"required":true
+		},
+		{
+			"name":"customerData",
+			"label":"Customer JSON",
+			"required":true
+		},
+		{
+			"name":"kycData",
+			"label":"KYC JSON",
+			"required":true
+		},
+		{
+			"name":"companySearchData",
+			"label":"Company Search JSON",
+			"required":false
+		},
+		{
+			"name":"transactionReportData",
+			"label":"Transaction Report JSON",
+			"required":true
+		},
+		{
+			"name":"nameScreeningReportData",
+			"label":"Name Screening Report JSON",
+			"required":true
+		},
+		{
+			"name":"gapAnalysisReportData",
+			"label":"Gap Analysis Report JSON",
+			"required":true
+		},
+		{
+			"name":"eddFormJson",
+			"label":"EDD Form JSON",
+			"required":false
+		}
+	],
+	"displayOrder":0,
+	"version":1
+}
+*/
+// =====================================================
+// Customer Risk & Recommendation Agent
+//
+// Purpose:
+// 1. Receive seven JSON inputs from upstream agents
+// 2. Query knowledge base API for policy / framework / internal rules
+// 3. Combine KB result + seven inputs
+// 4. Generate structured riskAssessmentData and recommendationData
+//
+// IMPORTANT:
+// Replace the KB API name below if needed:
+//   okp_agent_tool_knowledge_search
+// =====================================================
+
+assign('n_agent_name', 'agt_customer_risk_recommendation')
+assign('n_case_id', '{{caseId}}')
+assign('n_kb_query', '{{kbQuery}}')
+assign('n_final_result', '{}')
+
+log('Start {{n_agent_name}}, caseId={{n_case_id}}')
+
+// ---------- Step 1: normalize seven inputs ----------
+n_customer,act_func?script=''' return fn.map(customerData) ?: [:] '''
+n_kyc,act_func?script=''' return fn.map(kycData) ?: [:] '''
+n_company,act_func?script=''' return fn.map(companySearchData) ?: [:] '''
+n_txn,act_func?script=''' return fn.map(transactionReportData) ?: [:] '''
+n_screen,act_func?script=''' return fn.map(nameScreeningReportData) ?: [:] '''
+n_gap,act_func?script=''' return fn.map(gapAnalysisReportData) ?: [:] '''
+n_edd,act_func?script=''' return fn.map(eddFormJson) ?: [:] '''
+
+log('Inputs normalized')
+
+// ---------- Step 2: build KB query ----------
+n_kb_query_final,act_func?script='''
+    def provided = fn.optional(n_kb_query, "")
+    if(provided != null && String.valueOf(provided).trim() != ""){
+        return String.valueOf(provided).trim()
+    }
+
+    def customerType = fn.optional(n_customer.customerType, fn.optional(n_customer.partyType, "Unknown"))
+    def lineOfBusiness = fn.optional(n_customer.lineOfBusiness, "Unknown")
+    def kycRisk = fn.optional(n_kyc.riskLevel, "Unknown")
+
+    def screeningSummary = ""
+    if(n_screen instanceof Map){
+        screeningSummary = fn.optional(n_screen.recommendation, fn.optional(n_screen.screeningScope, ""))
+    }
+
+    def gapSummary = ""
+    if(n_gap instanceof Map){
+        gapSummary = fn.optional(n_gap.recommendation, fn.optional(n_gap.summary, ""))
+    }
+
+    def txnSummary = ""
+    if(n_txn instanceof Map){
+        txnSummary = fn.optional(n_txn.rationale, fn.optional(n_txn.summary, ""))
+    }
+
+    return "AML / KYC / customer risk rating rules, review frequency, recommendation action matrix, enhanced due diligence requirements, STR escalation criteria. " +
+           "CustomerType=" + customerType +
+           ", LineOfBusiness=" + lineOfBusiness +
+           ", KycRisk=" + kycRisk +
+           ", Screening=" + screeningSummary +
+           ", Gap=" + gapSummary +
+           ", Transaction=" + txnSummary
+'''
+log('n_kb_query_final={{n_kb_query_final}}')
+
+// ---------- Step 3: query knowledge base by agt_test_kb_argus.chatdoc_QA agent begin----------
+n_test_kb_argus_result,agt_test_kb_argus.chatdoc_QA?userInput="The Hong Kong Association of Banks Frequently Asked Questions in relation to Anti-Money Laundering and Counter-Financing of Terrorism"&kbSpaceId="273100032240091136"&kbSpaceFileId="273100032245334016,273100120520753152,273100121353322496,273100121980370944"
+
+// ---------- Step 3: query knowledge base by agt_test_kb_argus.chatdoc_QA agent end----------
+
+log('n_kb_api_result={{n_test_kb_argus_result}}')
+
+// ---------- Step 4: normalize KB result ----------
+n_kb_result,act_func?script='''
+    def api = [:]
+    def data = [:]
+
+    try{
+        api = fn.map(n_kb_api_result)
+    }catch(Exception e){
+        api = [:]
+    }
+
+    try{
+        data = fn.map(api.data)
+    }catch(Exception e){
+        data = [:]
+    }
+
+    def items = []
+    if(data.results instanceof List){
+        items = data.results
+    }else if(data.items instanceof List){
+        items = data.items
+    }else if(data.records instanceof List){
+        items = data.records
+    }else if(api.results instanceof List){
+        items = api.results
+    }else{
+        items = []
+    }
+
+    def normalized = []
+    items.each{ it ->
+        def row = it instanceof Map ? it : [:]
+        normalized.add([
+            title      : fn.optional(row.title, fn.optional(row.name, "")),
+            content    : fn.optional(row.content, fn.optional(row.text, fn.optional(row.snippet, ""))),
+            source     : fn.optional(row.source, fn.optional(row.documentName, fn.optional(row.fileName, ""))),
+            kbName     : fn.optional(row.knowledgeBase, fn.optional(row.kbName, "")),
+            score      : fn.optional(row.score, ""),
+            referenceId: fn.optional(row.referenceId, fn.optional(row.id, ""))
+        ])
+    }
+
+    return normalized.take(10)
+'''
+log('n_kb_result={{n_kb_result}}')
+
+// ---------- Step 5: risk assessment prompt ----------
+define('tpl_risk_assessment_json', '''
+    You are a professional AML / KYC risk assessment analyst.
+
+    Your task is to determine the final customer risk rating based on:
+    1. seven structured input datasets
+    2. knowledge-base search results containing policy / framework / internal rules
+
+    # IMPORTANT
+    Return JSON only.
+    All fields must exist.
+    Do not change key names.
+
+    # FIELD DEFINITIONS
+    For each structured field:
+    - value = final output value
+    - aiRationale = concise reasoning explaining why the value was chosen
+    - knowledgeBaseUsed = policies / internal rules / KB documents actually used
+    - dataSource = upstream input source(s) used, such as Customer Data, KYC Data, Company Search, Transaction Report, Name Screening Report, Gap Analysis Report, EDD Form, Knowledge Search Result
+
+    # GLOBAL RULES
+    1. Do not hallucinate policy names.
+    2. If no KB content is actually useful, set knowledgeBaseUsed to "".
+    3. If multiple sources are used, separate them with comma.
+    4. riskRating.value must be one of: Normal, Medium, High
+    5. priority.value must be one of: LOW, MEDIUM, HIGH
+    6. nextReviewFrequency.value should be practical and aligned with the risk rating.
+
+    # INPUT
+    ## Customer Data
+    {{n_customer}}
+
+    ## KYC Data
+    {{n_kyc}}
+
+    ## Company Search Data
+    {{n_company}}
+
+    ## Transaction Report Data
+    {{n_txn}}
+
+    ## Name Screening Report Data
+    {{n_screen}}
+
+    ## Gap Analysis Report Data
+    {{n_gap}}
+
+    ## EDD Form JSON
+    {{n_edd}}
+
+    ## Knowledge Search Result
+    {{n_kb_result}}
+
+
+    # OUTPUT
+    {
+    "riskAssessmentData": {
+        "caseId": "{{n_case_id}}",
+        "riskRating": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        },
+        "riskSummary": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        },
+        "keyRiskDrivers": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        },
+        "nextReviewFrequency": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        },
+        "priority": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        }
+    }
+    }
+''')
+
+// ---------- Step 6: run risk assessment ----------
+n_risk_result,tpl_risk_assessment_json,psr_json
+log('n_risk_result={{n_risk_result}}')
+
+// ---------- Step 7: recommendation prompt ----------
+define('tpl_recommendation_json', '''
+    You are a professional AML / KYC recommendation decision engine.
+
+    Your task is to generate a structured recommendation output based on:
+    1. the final risk assessment
+    2. seven structured input datasets
+    3. knowledge-base search results
+
+    # IMPORTANT
+    Return JSON only.
+    All keys are fixed.
+    All fields must contain:
+    - value
+    - aiRationale
+    - knowledgeBaseUsed
+    - dataSource
+
+    # FIELD DEFINITIONS
+    1. value
+    - The final recommendation content.
+
+    2. aiRationale
+    - Explain why this value is chosen.
+    - Do not mention "AI" or "model".
+
+    3. knowledgeBaseUsed
+    - List only policy / framework / knowledge-base references actually used.
+    - If no KB or policy is used, return "".
+
+    4. dataSource
+    - Describe which upstream input(s) support this value.
+    - Allowed examples:
+    Customer Data
+    KYC Data
+    Company Search Data
+    Transaction Report
+    Name Screening Report
+    Gap Analysis Report
+    EDD Form
+    Risk Assessment Output
+    Knowledge Search Result
+
+    # GLOBAL RULES
+    1. recommendationType.value must be one of:
+    - MAINTAIN
+    - UPGRADE
+    - DOWNGRADE
+    - EXIT
+    2. priority.value must be one of:
+    - LOW
+    - MEDIUM
+    - HIGH
+    3. nextReviewDate.value must be a concrete date or a concrete review-cycle statement.
+    4. actionRequired.value must be actionable and formatted clearly.
+    5. Do not hallucinate policies.
+    6. Keep aiRationale concise but specific.
+
+    # INPUT
+    ## Risk Assessment Output
+    {{n_risk_result}}
+
+    ## Customer Data
+    {{n_customer}}
+
+    ## KYC Data
+    {{n_kyc}}
+
+    ## Company Search Data
+    {{n_company}}
+
+    ## Transaction Report Data
+    {{n_txn}}
+
+    ## Name Screening Report Data
+    {{n_screen}}
+
+    ## Gap Analysis Report Data
+    {{n_gap}}
+
+    ## EDD Form JSON
+    {{n_edd}}
+
+    ## Knowledge Search Result
+    {{n_kb_result}}
+
+    # OUTPUT
+    {
+    "recommendationData": {
+        "caseId": "{{n_case_id}}",
+        "recommendationType": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        },
+        "recommendationDetail": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        },
+        "actionRequired": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        },
+        "nextReviewDate": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        },
+        "priority": {
+        "value": "",
+        "aiRationale": "",
+        "knowledgeBaseUsed": "",
+        "dataSource": ""
+        }
+    }
+    }
+''')
+
+// ---------- Step 8: run recommendation ----------
+n_recommendation_result,tpl_recommendation_json,psr_json
+log('n_recommendation_result={{n_recommendation_result}}')
+
+// ---------- Step 9: compose final output ----------
+n_final_result,act_func?script='''
+    def result = [:]
+    result.data = [:]
+    result.data.riskAssessmentData = n_risk_result.riskAssessmentData
+    result.data.recommendationData = n_recommendation_result.recommendationData
+    return result
+'''
+append('n_combined_result',"{{n_final_result}}")
+log('n_final_result={{n_final_result}}')
+
+// ---------- Failure Handling ----------
+on_failure({
+    assign('n_final_result','{"data":{"riskAssessmentData":{"caseId":"{{n_case_id}}","riskRating":{"value":"","aiRationale":"","knowledgeBaseUsed":"","dataSource":""},"riskSummary":{"value":"","aiRationale":"","knowledgeBaseUsed":"","dataSource":""},"keyRiskDrivers":{"value":"","aiRationale":"","knowledgeBaseUsed":"","dataSource":""},"nextReviewFrequency":{"value":"","aiRationale":"","knowledgeBaseUsed":"","dataSource":""},"priority":{"value":"","aiRationale":"","knowledgeBaseUsed":"","dataSource":""}},"recommendationData":{"caseId":"{{n_case_id}}","recommendationType":{"value":"","aiRationale":"","knowledgeBaseUsed":"","dataSource":""},"recommendationDetail":{"value":"","aiRationale":"","knowledgeBaseUsed":"","dataSource":""},"actionRequired":{"value":"","aiRationale":"","knowledgeBaseUsed":"","dataSource":""},"nextReviewDate":{"value":"","aiRationale":"","knowledgeBaseUsed":"","dataSource":""},"priority":{"value":"","aiRationale":"","knowledgeBaseUsed":"","dataSource":""}}},"status":"fail","message":"risk recommendation failed"}')
+    log('agt_customer_risk_recommendation execution failed')
+    act_flow.go?plan=end
+})

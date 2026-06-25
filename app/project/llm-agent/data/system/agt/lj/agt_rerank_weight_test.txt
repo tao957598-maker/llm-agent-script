@@ -1,0 +1,24 @@
+/*
+{
+	"title":"agt_rerank_weight_test",
+	"description":"测试rerank-weight-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_result",
+	"version":5
+}
+*/
+// 定义变量
+assign('params','{"question":"{{userInput}}","folderIds":"{{kbSpaceId!}}","knowledgeIds":"{{kbSpaceFileId!}}"}')
+
+//# search 
+n_result,rag_kbs.searchQuestion?paramData='{{params}}'&similarity='0.5'&isRerank=0&bm25Weight='0'&&combine=true 
+
+log('---------n_result----------{{n_result}}')
+
+assign('n_temp_result',"{{n_result}}")
+//## Generating reply
+n_reference_result,rag_kbs.searchReference?data='{{n_temp_result}}',psr_ref
+
+log('---------n_reference_result----------{{n_reference_result}}')

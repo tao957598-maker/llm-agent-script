@@ -1,0 +1,258 @@
+/*
+{
+	"title":"Python Code Generation",
+	"description":"Read user-uploaded files and generate Python code for creating tables",
+	"parameter":[
+		{
+			"name":"count",
+			"label":"Generation Amount"
+		},
+		{
+			"name":"table_name",
+			"label":"The table name which Faker data will be generated and stored."
+		}
+	],
+	"resultPlan":"generated_python_code",
+	"life":10000,
+	"version":1
+}
+*/
+n_mysql_config,act_kb.readCfg?type='mysql.config'&key='1'
+
+assign("result", 'Agent is running')
+assign("mysqlConfig", '{{n_mysql_config}}')
+
+assign("table_name", "{{table_name}}")
+when('!fn.hasValue(count)', {
+	assign("count", "10")
+})
+
+assign("sql_cmd", "查询{{table_name}}表格的元数据")
+// Get sql
+n_sql, tpl_get_sql
+assign("run_sql", "{{n_sql.sql}}")
+// Run sql
+n_run_sql_res, act_api.doExecute?name="mysql_run_sql"&params='{"mysql_config":{{mysqlConfig}},"sql":"{{run_sql}}"}'
+// n_run_sql_resn_run_sql_res
+assign("run_sql_res", "{{n_run_sql_res.data}}")
+// Get Mysql Create Table
+assign("mysql_create_table", "{{run_sql_res.data[0][1]}}")
+
+assign("result", 'Generating python code')
+// Call the large model to generate Python code, assigning the result to the variable generated_python_code
+n_python_code, tpl_generate_table_code, psr_json_python
+
+assign("generated_python_code", "{{tpl_generate_table_code}}")
+assign("task_name", "{{sys_task_name}}")
+
+assign("instance_name", "aaaaaaaa")
+assign("python_folder", "faker_python_code")
+// Write to the backend file library YAML application root directory data\selenium
+n_python_file, act_python.write?requirement='{{instance_name}}'&pythonType='py'&pythonCode='{{generated_python_code}}'&subfolder='{{python_folder}}'
+
+assign("python_file_name", "python/{{n_python_file.filename}}")
+// Run python file return file
+n_res_file_list, act_api.doExecute?name="run_py_return_file"&params='{"instance_name": "{{instance_name}}"}'&fileNames='["{{python_file_name}}"]'
+
+// foreach csv file list
+assign("res_file_list", "{{n_res_file_list.file_list}}")
+foreach('this_file', 'res_file_list', {
+  assign("this_file_item", "{{this_file.item}}")
+  assign("file_name", "{{this_file_item.file_name}}")
+  assign("file_content", "{{this_file_item.file_content}}")
+
+  assign("file_path", "python/{{python_folder}}/{{file_name}}")
+  // write to csv
+  act_func.write?filename="{{file_path}}"&data="{{file_content}}"
+
+  // save to mysql
+  n_save_csv_res, act_api.doExecute?name="mysql_save_csv"&params='{"mysql_config": {{mysqlConfig}}, "table_name": "{{table_name}}"}'&fileNames='["{{file_path}}"]'
+})
+
+
+assign("result", 'Agent task ended')
+
+define('tpl_get_sql', '''
+	/*{
+	 "llm_type":""
+ }*/
+- Role: Mysql专家
+- Background: 用户需要根据指令生成可执行的sql语句。
+- Profile: 你是一位精通MYSQL语句编写的专业工程师，能够根据指令生成可执行的sql语句，并生成符合Markdown格式的JSON信息。
+- OutputFormat: Markdown格式的JSON信息
+- Workflow:
+  1. 输入指令，根据指令生成可执行的sql语句。
+  2. 将生成的结果使用Markdown格式返回。
+  - 例子1：
+    输入指令：
+    ```
+    查询 login_user 表的元数据
+    ```
+    输出数据：
+    ```json
+    {"sql": "SHOW CREATE TABLE `login_user`;"}
+    ```
+  - 例子2：
+    获取login_user表中全部数据
+    ```
+    {"sql": "SELECT * FROM `login_user`;"}
+    ```
+
+# Input
+需要执行的指令: {{sql_cmd}}
+''')
+
+
+// Define a large model prompt template to generate Python code for creating tables using the Faker library
+define('tpl_generate_table_code', '''
+Generate Python code based on the metadata of the following file, requiring the use of the Faker library to generate fake table data:
+File content:
+{{mysql_create_table}}
+
+Output Python code example:
+```python
+# -*- coding: utf-8 -*-
+from faker import Faker
+import pandas as pd
+
+fake = Faker()
+
+data = {
+    "Column 1": [fake.name() for _ in range(10)],
+    "Column 2": [fake.address() for _ in range(10)],
+    "Column 3": [fake.email() for _ in range(10)]
+}
+df = pd.DataFrame(data)
+df.to_csv("output_file.csv", index=False)
+Only return the complete Python code, without explanation.
+''')
+
+/*
+{
+  "title": "Python Code Generation",
+  "description": "Read user-uploaded files and generate Python code for creating tables",
+  "parameter": [
+    {
+      "name": "count",
+      "label": "Generation Amount"
+    },
+    {
+      "name": "table_name",
+      "label": "The table name which Faker data will be generated and stored."
+    }
+  ],
+  "llm_type": "alias.middelqulity",
+  "resultPlan": "generated_python_code",
+  "life": "10000"
+}
+*/
+
+n_mysql_config,act_kb.readCfg?type='mysql.config'&key='1'
+
+assign("result", 'Agent is running')
+assign("mysqlConfig", '{{n_mysql_config}}')
+
+assign("table_name", "{{table_name}}")
+when('!fn.hasValue(count)', {
+	assign("count", "10")
+})
+
+assign("sql_cmd", "查询{{table_name}}表格的元数据")
+// Get sql
+n_sql, tpl_get_sql
+assign("run_sql", "{{n_sql.sql}}")
+// Run sql
+n_run_sql_res, act_api.doExecute?name="mysql_run_sql"&params='{"mysql_config":{{mysqlConfig}},"sql":"{{run_sql}}"}'
+// n_run_sql_resn_run_sql_res
+assign("run_sql_res", "{{n_run_sql_res.data}}")
+// Get Mysql Create Table
+assign("mysql_create_table", "{{run_sql_res.data[0][1]}}")
+
+assign("result", 'Generating python code')
+// Call the large model to generate Python code, assigning the result to the variable generated_python_code
+n_python_code, tpl_generate_table_code, psr_json_python
+
+assign("generated_python_code", "{{tpl_generate_table_code}}")
+assign("task_name", "{{sys_task_name}}")
+
+assign("instance_name", "aaaaaaaa")
+assign("python_folder", "faker_python_code")
+// Write to the backend file library YAML application root directory data\selenium
+n_python_file, act_python.write?requirement='{{instance_name}}'&pythonType='py'&pythonCode='{{generated_python_code}}'&subfolder='{{python_folder}}'
+
+assign("python_file_name", "python/{{n_python_file.filename}}")
+// Run python file return file
+n_res_file_list, act_api.doExecute?name="run_py_return_file"&params='{"instance_name": "{{instance_name}}"}'&fileNames='["{{python_file_name}}"]'
+
+// foreach csv file list
+assign("res_file_list", "{{n_res_file_list.file_list}}")
+foreach('this_file', 'res_file_list', {
+  assign("this_file_item", "{{this_file.item}}")
+  assign("file_name", "{{this_file_item.file_name}}")
+  assign("file_content", "{{this_file_item.file_content}}")
+
+  assign("file_path", "python/{{python_folder}}/{{file_name}}")
+  // write to csv
+  act_func.write?filename="{{file_path}}"&data="{{file_content}}"
+
+  // save to mysql
+  n_save_csv_res, act_api.doExecute?name="mysql_save_csv"&params='{"mysql_config": {{mysqlConfig}}, "table_name": "{{table_name}}"}'&fileNames='["{{file_path}}"]'
+})
+
+
+assign("result", 'Agent task ended')
+
+define('tpl_get_sql', '''
+	/*{
+	 "llm_type":""
+ }*/
+- Role: Mysql专家
+- Background: 用户需要根据指令生成可执行的sql语句。
+- Profile: 你是一位精通MYSQL语句编写的专业工程师，能够根据指令生成可执行的sql语句，并生成符合Markdown格式的JSON信息。
+- OutputFormat: Markdown格式的JSON信息
+- Workflow:
+  1. 输入指令，根据指令生成可执行的sql语句。
+  2. 将生成的结果使用Markdown格式返回。
+  - 例子1：
+    输入指令：
+    ```
+    查询 login_user 表的元数据
+    ```
+    输出数据：
+    ```json
+    {"sql": "SHOW CREATE TABLE `login_user`;"}
+    ```
+  - 例子2：
+    获取login_user表中全部数据
+    ```
+    {"sql": "SELECT * FROM `login_user`;"}
+    ```
+
+# Input
+需要执行的指令: {{sql_cmd}}
+''')
+
+
+// Define a large model prompt template to generate Python code for creating tables using the Faker library
+define('tpl_generate_table_code', '''
+Generate Python code based on the metadata of the following file, requiring the use of the Faker library to generate fake table data:
+File content:
+{{mysql_create_table}}
+
+Output Python code example:
+```python
+# -*- coding: utf-8 -*-
+from faker import Faker
+import pandas as pd
+
+fake = Faker()
+
+data = {
+    "Column 1": [fake.name() for _ in range(10)],
+    "Column 2": [fake.address() for _ in range(10)],
+    "Column 3": [fake.email() for _ in range(10)]
+}
+df = pd.DataFrame(data)
+df.to_csv("output_file.csv", index=False)
+Only return the complete Python code, without explanation.
+''')

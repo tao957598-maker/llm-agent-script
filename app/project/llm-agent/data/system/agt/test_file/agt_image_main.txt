@@ -1,0 +1,46 @@
+/*
+{
+	"title":"Image Content Recognition",
+	"description":"识别图片的内容",
+	"parameter":[
+		{
+			"name":"fileName",
+			"label":"文件名"
+		},
+		{
+			"name":"userInput",
+			"label":"图片页码"
+		}
+	],
+	"resultPlan":"userInput,image_path,ocr_content",
+	"life":1000,
+	"version":1
+}
+*/
+// 文件
+when('!fn.hasValue(fileName)', {
+	assign("fileName", "13page_20250623150705.pdf")
+})
+
+// 页码
+when('!fn.hasValue(userInput)', {
+	assign("userInput", "1")
+})
+
+// kbs_doc_page_parse取数据
+assign("input_sql", "在kbs_doc_page_parse表查询fileName值为{{fileName}}且page为{{userInput}}的第一条数据")
+agt_auto_sql1.knowledge?userInput='{{input_sql}}'
+n_kb_data,act_kb.selectBy?sql='{{sys_last_result}}'
+
+// 获取图片路径及内容 /kbs/pdf_ocr/13page1234/13page1234_9.png
+assign("image_path", "/kbs/pdf_ocr/13page1234/13page1234_{{userInput}}.png")
+assign("ocr_content", "{{n_kb_data[0].content}}")
+
+// 读取文件包含格式agent
+n_image_type,agt_image_format?imagePath="{{image_path}}"
+
+// 输出内容
+n_final_data,agt_read_image?imagePath="{{image_path}}"&ocrContent="{{ocr_content}}"&dataType="{{n_image_type}}"
+
+// 插入新数据
+act_kb.update?name=kbs_doc_page_parse&columnValues={{fn.json('analysis_content, n_final_data')}}&where='{"fileName":"{{fileName}}","page":"{{userInput}}"}'

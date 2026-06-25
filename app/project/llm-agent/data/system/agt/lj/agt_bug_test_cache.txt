@@ -1,0 +1,37 @@
+/*
+{
+	"title":"agt_bug_test_cache",
+	"description":"lj测试json解析报错但缓存还是存了错误结果的问题",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"displayOrder":0,
+	"version":1
+}
+*/
+assign("output_string",'''
+1. Navigate to the URL: http://189.1.224.215:8888/index .
+2. Enter "peter.li" in the username field.
+3. Enter "gientech@123" in the password field.
+4. Click the sign-in button.
+5. Click the "Go to Deposit" button.
+6. Select "Savings" for accountType.
+7. Enter "2580" in the deposit amount field.
+8. Click the "Deposit" button.
+9. Click the "View Details" of "Savings Balance".
+10. Click on the "Transfer" menu.
+11. Click on the "To Someone Else" menu item.
+12. Select "Mr. James" in the recipientName field.
+13. Select "Primary" from the accountType dropdown.
+14. Input "2580" into the amount field.
+15. Click the "Transfer" button to transfer the funds.
+16. Click on the "Me" menu.
+17. Click "Logout" to log out of the system."
+''')
+
+// 数学加减乘除计算
+tpl_do_json
+
+define('tpl_do_json', '''
+	麻烦返回 {{output_string}}字符串格式 
+{{output_string}}  
+''')

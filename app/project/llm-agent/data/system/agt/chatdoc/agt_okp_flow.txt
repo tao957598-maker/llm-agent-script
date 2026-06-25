@@ -1,0 +1,46 @@
+/*
+{
+	"title":"Initiate OKP Approval Flow",
+	"description":"Initiate a workflow in OKP system.",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"用户输入\"}",
+	"tag":"chatdoc",
+	"resultPlan":"n_event_id",
+	"life":100,
+	"version":1
+}
+*/
+/
+
+//## 编写会议邮件
+tpl_write_meeting, psr_json
+
+//# 邮件内容确认
+n_param_confirm, act_flow.page?name=sys_tool_param_confirm&params={{tpl_write_meeting}}
+
+// 判断是否非确认按钮
+when('n_param_confirm.apiCode!="agent_manual_confirm"', {
+	// 执行UI点击API
+	act_plan.run?toolType=API&code={{n_param_confirm.apiCode}}&parameters={{n_param_confirm}}
+})
+
+//# 发送会议
+n_event_id, act_flow.message?params={{n_param_confirm.confirmedParams}}
+
+//# 邮件已发送
+assign('resultTip', '邮件已发送，点击<a title="email" href="#">{{n_event_id}}</a>可查看邮件')
+
+define('tpl_write_meeting', '''
+你是商务邮件专家，请根据用户输入帮我写一份会议邮件，并以JSON格式返回。
+
+返回示例：
+{
+	"subject": "你的会议主题",
+	"recipients": "Anny, Leo",
+	"content": "你的邮件内容<待确认参数Key>"
+}
+其中如果有待确认的参数，在内容中使用尖括号<key>引用；
+
+# 用户输入：
+{{userInput}}
+
+''')

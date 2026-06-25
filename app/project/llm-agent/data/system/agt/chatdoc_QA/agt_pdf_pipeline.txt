@@ -1,0 +1,144 @@
+/*
+{
+	"title":"视觉问答-PDF文件Pipeline",
+	"description":"通过视觉大模型获取图片/PDF中指定信息",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求",
+			"required":true
+		},
+    {
+			"name":"kbSpaceFileIds",
+			"label":"多文件ID",
+			"required":true
+		},
+    {
+      "name":"pages",
+      "label":"页码",
+      "required":false,
+      "defaultValue":"[]"
+    }
+	],
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"n_final_answer",
+	"life":100,
+	"displayOrder":0,
+	"version":2
+}
+*/
+
+assign('n_pdf_result', '[]')
+
+// 查询状态
+foreach('currentId','kbSpaceFileIds',{
+  assign('n_result', '-1')
+
+  assign('n_current_file_status', '[]')
+  // 当前PDF的运行状态
+  n_current_file_status,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,store_uri,workflow'&where='{"id":{{currentId.item}}}'
+  n_run_status,act_func?script='''
+    return n_current_file_status[0].workflow
+  '''
+  
+  n_result,act_func?script='''
+    def list = n_run_status
+    if (n_run_status instanceof List && n_run_status) {
+      for (int i = 0; i < list.size(); i++) {
+        if(list[i].containsKey("nodeName") && list[0].nodeName=="parse" && list[i].containsKey("result")){
+          return list[i].result
+        }
+      }
+    }
+    return -1
+  '''
+  log('状态检查   {{n_result}}')
+  // 如果是-1，需要睡眠2秒，再次判断
+  // 如果是0，说明失败，结束该轮流程
+  // 如果是2，说明成功，ming，继续
+  
+  // 获取PDF的所有图片，执行 image pipeline
+  n_image_pipeline,act_kb.select?name='kbs_doc_page_parse'&column='documentId,imagePath,page'&where='{"documentId":{{currentId.item}}}'
+  // 文件或者图片对应的所有路径
+  n_image_paths,act_func?script='''
+    def tmp_data = n_image_pipeline
+    def pages_tmp = pages
+    tmp_data = pages_tmp.isEmpty() ? tmp_data : tmp_data.findAll { it.page in pages_tmp }
+    tmp_data.findAll { it?.imagePath }.collect { it.imagePath }
+    return tmp_data
+  '''
+  
+  agent('agt_async_vl',{
+    assign('async_list_vl', '[]')
+    assign('answer_summay_list_vl', '[]')
+    assign('answer_summay_vl', '[]')
+    assign('n_image_result', '[]')
+
+    foreach('image_item','n_image_paths',{
+      // 图片路径
+      assign('image_url', '{{image_item.item.imagePath}}')
+      // 异步启动 image pipeline
+      n_vl_result,agt_image_pipeline?userInput={{userInput}}&image_url={{image_url}}&async=true
+      n_vl_result_temp,act_func?script='''
+        def expert = n_vl_result
+        async_list_vl.add([n_vl_result:expert])
+        return expert
+      '''
+    })
+
+    foreach('n_item', 'async_list_vl', {
+      assign('async_map', '{{n_item.item}}')
+      assign('answer_summay_vl', '[]')
+      n_key,act_func?script='''
+        def data = async_map
+        def entry = data.entrySet().first()  
+        def key = entry.key
+        return key
+      '''
+
+      n_value,act_func?script='''
+        def data = async_map
+        def entry = data.entrySet().first()  
+        def value = entry.value
+        return value
+      '''
+      // answer_summay_vl answer_summay_vl 1
+      assign('answer_summay_vl', '{{fn.hasValue(n_value,"value") ? n_value.value : "[]"}}')
+
+      // n_tmp_answern_tmp_answer 1
+      n_image_result,act_func?script='''
+        def newList = answer_summay_vl
+        answer_summay_list_vl.addAll([
+          key: n_key,
+          value: newList
+        ])
+        return newList
+      '''
+    })
+
+    act_memory.assign?var=agt_async_vl_answer&value={{answer_summay_list_vl}}&global=true
+
+  })
+
+  agt_async_vl?userInput={{userInput}}
+  //# 获取异步结果
+  n_vl_tmp_result,act_memory.retrieve?var=agt_async_vl_answer&global=true
+  append('n_pdf_result', '{{n_vl_tmp_result}}')
+})
+//# 整理数据
+n_vl_result, act_func?script='''
+  def data = n_pdf_result
+  def cleanAndParseJson(str) {
+    if (!(str instanceof String)) return str
+    
+    // 先清理包裹符
+    def cleaned = str.replaceAll('(?s)^```(?:json)?\s*', '')
+                    .replaceAll('\s*```$', '')
+    
+    // 尝试解析为 JSON
+    return cleaned
+  }
+  return data.collect { it.collect { cleanAndParseJson(it.value ?: it) } }
+'''
+//$ final_answer
+assign('n_final_answer', '{{n_vl_result}}')

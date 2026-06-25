@@ -1,0 +1,293 @@
+/*
+{
+	"title":"Personal EDD Content Analysis Prompt Agent v2",
+	"parameter":[
+		{
+			"name":"caseId",
+			"label":"Case ID",
+			"required":false,
+			"maxLength":100,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"customerProfile",
+			"label":"Customer Profile JSON",
+			"required":false,
+			"maxLength":20000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"kycProfile",
+			"label":"KYC Profile JSON",
+			"required":false,
+			"maxLength":20000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"transactionReport",
+			"label":"Transaction Analysis Report JSON",
+			"required":false,
+			"maxLength":40000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"nameScreeningReport",
+			"label":"Name Screening Report JSON",
+			"required":false,
+			"maxLength":30000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"gapAnalysisReport",
+			"label":"Gap Analysis Report JSON",
+			"required":false,
+			"maxLength":30000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"prOrTe",
+			"label":"Review Trigger Type",
+			"required":false,
+			"maxLength":10,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"teReason",
+			"label":"Trigger Event Reason",
+			"required":false,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		}
+	],
+	"tag":"all",
+	"displayOrder":0,
+	"version":9
+}
+*/
+// ---------- 初始化 ----------
+assign('n_agent_name', 'agt_personal_edd_content_analysis_prompt')
+assign('n_scene_name', 'Personal EDD Content Analysis Prompt')
+assign('personal_edd_prompt', '')
+
+// ---------- 默认值 ----------
+when('{{!fn.hasValue(caseId)}}', {
+    assign('caseId', '')
+})
+when('{{!fn.hasValue(customerProfile)}}', {
+    assign('customerProfile', '{}')
+})
+when('{{!fn.hasValue(kycProfile)}}', {
+    assign('kycProfile', '{}')
+})
+when('{{!fn.hasValue(transactionReport)}}', {
+    assign('transactionReport', '{}')
+})
+when('{{!fn.hasValue(nameScreeningReport)}}', {
+    assign('nameScreeningReport', '{}')
+})
+when('{{!fn.hasValue(gapAnalysisReport)}}', {
+    assign('gapAnalysisReport', '{}')
+})
+when('{{!fn.hasValue(prOrTe)}}', {
+    assign('prOrTe', '')
+})
+when('{{!fn.hasValue(teReason)}}', {
+    assign('teReason', '')
+})
+
+assign('prOrTe', '{{String.valueOf(prOrTe).trim().toUpperCase()}}')
+
+log('开始执行 {{n_agent_name}}')
+log('caseId={{caseId}}')
+log('customerProfile={{customerProfile}}')
+log('kycProfile={{kycProfile}}')
+log('transactionReport={{transactionReport}}')
+log('nameScreeningReport={{nameScreeningReport}}')
+log('gapAnalysisReport={{gapAnalysisReport}}')
+log('prOrTe={{prOrTe}}')
+log('teReason={{teReason}}')
+
+// ---------- 输入标准化 ----------
+n_input_normalized, act_func.run?script='''
+    def parseObj = { obj ->
+        try{
+            if(obj instanceof Map){
+                return obj
+            }
+            if(obj instanceof List){
+                return obj
+            }
+            if(obj instanceof String){
+                def s = String.valueOf(obj).trim()
+                if(!s){
+                    return [:]
+                }
+                if(s.startsWith("[")){
+                    return fn.list(s)
+                }
+                if(s.startsWith("{")){
+                    return fn.map(s)
+                }
+            }
+        }catch(Exception e){}
+        return [:]
+    }
+
+    def cp  = parseObj(customerProfile)
+    def kp  = parseObj(kycProfile)
+    def tr  = parseObj(transactionReport)
+    def nsr = parseObj(nameScreeningReport)
+    def gar = parseObj(gapAnalysisReport)
+
+    return [
+        caseId             : caseId,
+        customerProfile    : cp,
+        kycProfile         : kp,
+        transactionReport  : tr,
+        nameScreeningReport: nsr,
+        gapAnalysisReport  : gar,
+        prOrTe             : prOrTe,
+        teReason           : teReason
+    ]
+'''
+log('n_input_normalized={{n_input_normalized}}')
+
+// ---------- 可选知识检索 ----------
+n_kb_code, act_kbs.searchQuestion?paramData={{fn.json('question, "Personal EDD Content Analysis", folderPath, "Agent user"')}}&similarity='0.5'
+log('n_kb_code={{n_kb_code}}')
+
+// ---------- 生成提示词 ----------
+define('tpl_personal_edd_analysis_prompt', '''
+You are a banking AML / KYC / EDD form content analysis assistant.
+
+Your task:
+Based on the provided structured upstream review results, analyze the content for a Personal EDD Form and generate a valid JSON strictly matching the required output structure.
+
+Upstream inputs represent different stages of the review workflow:
+- customerProfile: customer base information and profile
+- kycProfile: KYC / CDD information
+- transactionReport: analyzed transaction report or summarized transaction findings
+- nameScreeningReport: name screening / adverse media / sanctions / PEP related findings
+- gapAnalysisReport: customer information gap analysis and action items
+- prOrTe / teReason: review trigger type and trigger event reason
+
+Core Rules:
+1. Use only facts explicitly present in the input.
+2. You may normalize wording, but must not fabricate facts.
+3. If a field cannot be clearly supported by input, fill it as null.
+4. Output JSON only. No markdown. No explanation outside JSON.
+5. All boolean fields must be only true, false, or null.
+6. All text/date/amount fields must be null when unsupported.
+7. All analytical narrative fields must be concise factual summaries based only on explicit evidence.
+8. Do not invent internal form completion statuses such as ACO003, ACO005, CA144, CA169, blacklist completed, FATCA completed, CRS completed, unless explicitly supported by input.
+9. Do not invent adverse media, sanctions, PEP, RCA, dormant account, risk rating change, or transaction anomaly if not explicitly supported.
+10. If review trigger is PR, do not infer TE details.
+11. If review trigger is TE, only populate trigger-event-related fields when teReason or supporting reports clearly support them.
+12. If different upstream sources conflict, keep the field null unless one source explicitly and clearly prevails; you may reflect factual inconsistency only in analytical text fields.
+13. Do not output approval opinion, final approval decision, signature, or reviewer conclusion.
+
+Field Mapping Guidance:
+1. basicInfo
+   - Prefer customerProfile / kycProfile
+2. sectionAApplicationReview
+   - Prefer prOrTe, teReason, gapAnalysisReport, nameScreeningReport, transactionReport
+3. sectionB1DormantAccountReactivationAnalysis
+   - Fill only if dormant/reactivation facts explicitly exist
+4. sectionB2CustomerDocumentTransactionAnalysis
+   - Prefer kycProfile, transactionReport, nameScreeningReport, gapAnalysisReport
+5. sectionCRiskFactorAnalysis
+   - Fill only when explicit facts support it
+6. sectionD1ConsolidatedAnalysis
+   - Summarize supported facts from all upstream inputs, especially:
+     - review trigger
+     - customer background
+     - screening findings
+     - transaction summary
+     - supporting/other approval information if explicitly present
+
+Input JSON:
+{{n_input_normalized}}
+
+Please output exactly this JSON root structure:
+{
+  "data": {
+    "caseId": "{{caseId}}",
+    "individualFormData": {
+      "formName": {
+        "value": null,
+        "aiRationale": null,
+        "knowledgeBaseUsed": null,
+        "dataSource": null
+      },
+      "formCode": {
+        "value": null,
+        "aiRationale": null,
+        "knowledgeBaseUsed": null,
+        "dataSource": null
+      },
+      "basicInfo": {},
+      "sectionAApplicationReview": {},
+      "sectionB1DormantAccountReactivationAnalysis": {},
+      "sectionB2CustomerDocumentTransactionAnalysis": {},
+      "sectionCRiskFactorAnalysis": {},
+      "sectionD1ConsolidatedAnalysis": {}
+    },
+    "reportUrl": null,
+    "reportUrlWithRationale": null
+  }
+}
+
+The full nested structure inside individualFormData must follow the Personal EDD output schema already defined by the caller.
+For every leaf field, keep the style:
+{
+  "value": ...,
+  "aiRationale": ...,
+  "knowledgeBaseUsed": ...,
+  "dataSource": ...
+}
+
+For yes/no paired checkbox fields, use:
+{
+  "yes": {
+    "value": ...,
+    "aiRationale": ...,
+    "knowledgeBaseUsed": ...,
+    "dataSource": ...
+  },
+  "no": {
+    "value": ...,
+    "aiRationale": ...,
+    "knowledgeBaseUsed": ...,
+    "dataSource": ...
+  }
+}
+''')
+
+// 将提示词保存到输出变量
+tpl_personal_edd_analysis_prompt, psr_json
+act_memory.assign?var=personal_edd_prompt&value={{tpl_personal_edd_analysis_prompt}}
+
+log('personal_edd_prompt={{personal_edd_prompt}}')
+
+// ---------- 异常处理 ----------
+on_failure({
+    assign('personal_edd_prompt', 'You are a bank AML/KYC/EDD personal form analysis assistant. Use only explicit facts from customerProfile, kycProfile, transactionReport, nameScreeningReport, gapAnalysisReport, prOrTe, and teReason. Output valid JSON only. Any unsupported field must be null.')
+    log('agt_personal_edd_content_analysis_prompt 执行失败')
+    act_flow.go?plan=end
+})

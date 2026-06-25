@@ -1,0 +1,69 @@
+/*
+{
+	"title":"Vector Database Retrieval Demo",
+	"description":"Create scheduled tasks based on user questions",
+	"parameter":[
+		{
+			"name":"query",
+			"label":"Search Query",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"kb_name",
+			"label":"Knowledge Base Name",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"可视化",
+	"uiEntrance":"7",
+	"displayOrder":0,
+	"version":199
+}
+*/
+// Simple vector database retrieval process
+// Step 1: Perform vector similarity search
+n_search_results, act_kb.search?requirement="{{query}}"&name="{{kb_name}}"&maxSize=10
+
+// Step 2: Process and display results
+when('{{fn.hasValue(n_search_results)}}', {
+	assign('result_count', '{{n_search_results.size}}')
+	log('Found {{result_count}} relevant results for query: {{query}}')
+	
+	// Display first result as example
+	when('{{result_count > 0}}', {
+		assign('first_result', '{{n_search_results[0]}}')
+		log('Most relevant result: {{first_result.content}}')
+		
+		// Store the results for further processing
+		act_memory.assign?var=search_results&value={{n_search_results}}&type=json
+	})
+}, {
+	log('No results found for query: {{query}}')
+	assign('search_results', '[]')
+})
+
+// Alternative: Using knowledge space search (if you have knowledge spaces)
+// n_kb_results, act_kbs.searchQuestion?paramData={{fn.json('question,query,folderPath,/KnowledgeBase')}}&similarity='0.6'
+
+// Define a prompt template for processing search results
+define('tpl_process_results', '''
+Based on the following search results for query "{{query}}", provide a summary:
+
+Search Results:
+{{search_results}}
+
+Please summarize the key information relevant to the query.
+Avoid repeating the same information.
+''')
+
+// Optional: Use LLM to process and summarize results
+when('{{fn.hasValue(search_results) && search_results.size > 0}}', {
+	tpl_process_results, psr_text
+	assign('summary', '{{tpl_process_results}}')
+	log('Summary: {{summary}}')
+})

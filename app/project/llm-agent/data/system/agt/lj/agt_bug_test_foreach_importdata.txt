@@ -1,0 +1,31 @@
+/*
+{
+	"title":"agt_bug_test_foreach_importdata",
+	"description":"测试API动态参数特殊参数freemark解析-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"version":1
+}
+*/
+assign('name','kb_ocr_data')
+assign('where','')
+assign('fileName','1.png') 
+assign('imagePath','/kbs/Cheque_Image/1_20251114152427/1_20251114152427.png') 
+assign('llm','Qwen/Qwen2.5-VL-32B-Instruct')   
+assign('json_dt','''
+{
+        "title": "银行名称",
+        "content": "東亞銀行", 
+        "isPrinted": "是",
+        "isModify": "否",
+        "modify_score": 0,
+        "credibility": "高",
+        "credibility_score": 95,
+        "remarks": "印刷体，清晰无误"
+    }
+''')
+// kb.importData
+act_kb.importData?name='kb_ocr_data'&&data={{fn.json('fileName,"AAA.txt",imagePath,"/tmp/AAA.txt",llm,"",field,"W",text,json_dt.text,isPrinted,json_dt.isPrinted,isModify,json_dt.isModify,modify_score,json_dt.modify_score,credibility,json_dt.credibility,credibility_score,json_dt.credibility_score,remarks,json_dt.remarks')}}&addColumnsMilvus=true
+// kb.merge
+act_kb.merge?name='kb_ocr_data'&columnValues={{fn.json('fileName,file_name,imagePath,image_path,llm,llm,title,json_dt.title,content,json_dt.content,isPrinted,json_dt.isPrinted,isModify,json_dt.isModify,modify_score,json_dt.modify_score,credibility,json_dt.credibility,credibility_score,json_dt.credibility_score,remarks,json_dt.remarks')}}

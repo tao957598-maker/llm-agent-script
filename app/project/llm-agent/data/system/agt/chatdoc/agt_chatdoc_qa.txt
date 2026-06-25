@@ -1,0 +1,99 @@
+/*
+{
+	"title": "ChatDoc Q&A",
+	"description": "Answer user question",
+    "parameter": [
+					{
+						"name":"userInput",
+						"label":"客户问题",
+						"type":"textarea"
+					},
+					{
+                        "name":"kbSpaceId",
+                        "label":"目录ID（支持多个）",
+                        "type":"textarea"
+                    },
+                    {
+                         "name":"kbSpaceFileId",
+                         "label":"文件ID（支持多个）",
+                         "type":"textarea"
+                     },
+					{
+                        "name":"kbData",
+                        "label":"知识库数据",
+                        "type":"textarea"
+                    }
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "life": "100"
+    "uiEntrance": "chatDoc",
+	"tag":"chatdoc"
+} */
+
+// 定义变量
+assign('params','{"question":"{{userInput}}","folderIds":"{{kbSpaceId!}}","knowledgeIds":"{{kbSpaceFileId!}}"}')
+
+// 定义提示词
+assign('system_prompt','''
+    你是熟悉金融行业的智能助手，按照以下规则进行回答用户问题:
+    1.如果知识库内容（Contents of the Knowledge Base）存在或者能找得到，则
+      1.1 请结合可行度最高的内部资料（为<div id="a" type="t" num="n"/>包裹的介绍），回答用户问题，并请及时的在该内容的边上用<div id="a" type="t" num="n"/>标记,其a是id的值,t是type值(type代表来源类型(1:切片信息 2:专家知识 3:原始文件)),n是num的值。
+      1.2 并且使用知识库的文字语言答复，无需翻译。
+    2.如果知识库的内容不存在，则
+      2.1 根据原始文件的内容（Contents of the file）进行回答用户问题，且不需要加上<div id="a" type="t" num="n"/>标记。
+      2.1 请使用英文答复.
+''')
+
+//^ I perform accurate analysis and knowledge retrieval based on your input.
+when('kbData??', {
+    //$ Generating reply ...
+    rag_kbs.markReference?data='{{kbData!}}'
+    tpl_qa_chatdoc,psr_ref
+}, {
+    when('kbSpaceFileId??',{
+        assign('n_isKbSpaceFileId','true')
+        assign('n_kbSpaceIdOrFileId','{{kbSpaceFileId!}}')
+        n_fileId_cnt,act_func?script='''
+                        def length = kbSpaceFileId.split(",").size()
+                        return length
+                    '''
+        assign('n_select_msg','Searching {{n_fileId_cnt}} files were selected for the Knowledge Base')
+    },{
+        assign('n_isKbSpaceFileId','false')
+        assign('n_kbSpaceIdOrFileId','{{kbSpaceId!}}')
+        assign('n_select_msg','Searching the Knowledge Base')
+    })
+    //# Query knowledge space name
+    assign("n_no_show_result_temp",'')
+    n_folder_name,rag_kbs.searchKbSpaceName?kbSpaceIdOrFileId={{n_kbSpaceIdOrFileId!}}&isKbSpaceFileId={{n_isKbSpaceFileId}}&format=': %s'
+    //# {{(n_kbSpaceIdOrFileId!''?trim?has_content)?then(n_select_msg+n_folder_name!, 'No knowledge base selected')}}
+    assign("n_no_show_result_temp",'')
+    n_milvus_result,rag_kbs.searchQuestion?paramData='{{params}}'&similarity='0.1'&combine=true
+
+    // set n_milvus_result_exist_flag
+    assign('n_milvus_result_exist_flag',"{{(n_milvus_result?has_content)?then('true', 'false')}}")
+
+    when('n_milvus_result_exist_flag',{
+        //# Milvus search
+        assign("n_no_show_result_temp",'')
+        n_result,rag_kbs.markReference?data='{{n_milvus_result}}',
+    },{
+        //# Read original document content
+        assign("n_no_show_result_temp",'')
+        n_result,rag_kbs.searchFileContent?paramData='{{params}}'
+    })
+
+    //$ Generating reply ...
+    tpl_qa_chatdoc,psr_ref
+})
+
+define('tpl_qa_chatdoc', '''
+	{{fn.when(n_milvus_result_exist_flag!, 'Contents of the Knowledge Base: ','Contents of the file: ')}}
+	{{fn.str(fn.optional(n_result!'', 'No results found ! '))}}
+
+	Customer's Question：
+	{{userInput}}
+
+    {{fn.chatFlag('%{system_prompt}%', 'userInput', 'n_result', '', 10)}}
+''')

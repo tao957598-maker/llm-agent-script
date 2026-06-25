@@ -1,0 +1,55 @@
+
+/*
+{
+	"title":"OA Expense application and approval",
+	"parameter":[],
+	"tag":"OA",
+	"uiEntrance":"daily_fee_apply_form",
+	"displayOrder":0,
+	"version":1
+}
+*/
+
+// 展示费用申请表单
+n_expense_form, act_flow.page?name='daily_fee_apply_form'
+
+// 项目经理审批
+approve('n_project_manager', '''
+{
+  "assigneeConfig": {
+    "type": "ROLE",
+    "strategy": "ALL",
+    "fallbackAssignee": 1001,
+    "targets": [
+      {
+        "targetType": "ROLE_NAME",
+        "value": "项目经理",
+        "condition": "true"
+      }
+    ]
+  },
+  "formKey": "n_expense_form"
+}
+''')
+
+// 财务主管审批
+approve('n_financial_executive', '''
+{
+  "assigneeConfig": {
+    "type": "ROLE",
+    "strategy": "ALL",
+    "fallbackAssignee": 2001,
+    "targets": [
+      {
+        "targetType": "ROLE_NAME",
+        "value": "财务主管",
+        "condition": "true"
+      }
+    ]
+  },
+  "formKey": "n_expense_form"
+}
+''')
+
+// 流程结束
+assign("result", "审批流程已完成")

@@ -1,0 +1,50 @@
+/*
+{
+	"title": "OpsClaw END",
+	"description": "OpsClaw END - 最终结果整理器：在未明确 FINISH 或需要兜底时收口最终回答。",
+	"parameter": [
+		{"name":"userInput", "label":"用户输入", "required":true},
+		{"name":"n_plan_tasks_summary", "label":"计划摘要"},
+		{"name":"n_load_memory_result", "label":"记忆加载结果"},
+		{"name":"react_last_observation", "label":"最近一次 Observation"}
+	],
+	"resultPlan": "n_final_answer",
+	"discoverable": false,
+	"tag": "opsclaw"
+}
+*/
+
+define('tpl_finalize_result', '''
+你是 opsclaw_assistant 的最终结果整理器。
+
+请基于用户问题、计划摘要、最后一次 Observation 与记忆信息，给出最终回答。
+
+要求：
+1. 如果工具执行失败，要明确说明失败点与建议的下一步。
+2. 如果因安全原因暂停执行，要明确说明需要人工确认。
+3. 回答优先简洁、可执行、面向最终用户。
+
+# 用户输入
+{{userInput}}
+
+# 计划摘要
+{{n_plan_tasks_summary!}}
+
+# opsclaw 记忆检索结果
+{{n_load_memory_result.context!}}
+
+# opsclaw 人格配置（profile.md）
+{{n_load_memory_result.profile!}}
+
+# opsclaw 关键记忆（key-memories.md）
+{{n_load_memory_result.keyMemories!}}
+
+# 最近一次 Observation
+{{react_last_observation!}}
+
+# 已沉淀经验
+{{sys_hint_agt!}}
+''')
+
+tpl_finalize_result, psr_all
+assign('n_final_answer', '{{sys_last_result}}')

@@ -1,0 +1,70 @@
+/*
+{
+	"title":"Data Report",
+	"description":"The portal for data report.",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"maxLength":50,
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceId",
+			"label":"目录ID（支持多个）",
+			"maxLength":50,
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID（支持多个）",
+			"maxLength":50,
+			"type":"textarea"
+		}
+	],
+	"tag":"report",
+	"uiEntrance":"chatdoc",
+	"version":1
+}
+*/
+//## Acquire templates based-on the selected KBS
+n_template_list, act_api.doExecuteDynamic?name=ListKbsTemplates&dynamicParamData={{fn.json('kbsId, kbSpaceId!, kbsFileId, kbSpaceFileId!')}}
+
+//## Template list
+assign('template_list', '{{n_template_list.data}}')
+
+//## Choose template
+tpl_choose_template, psr_json
+
+//## User confirm
+n_template_confirm, act_flow.pageConfirm?params={{tpl_choose_template}}
+
+when('n_template_confirm.confirmed.kbTemplateName?has_content && n_template_confirm.confirmed.reportName?has_content', {
+	//## Call agent generate report
+	n_generate_report, agt_indicator_report_generation?userInput="{{userInput}}"&kbTemplateName="{{n_template_confirm.confirmed.kbTemplateName}}"&reportName="{{n_template_confirm.confirmed.reportName}}"
+}, {
+	//# Please input templateName and reportName
+	assign('result', 'Please input template name and report name')
+})
+
+define('tpl_choose_template', '''
+你是业务分析师，请根据用户输入和模板列表，分析出符合用户输入的模板名和报告名。
+
+# 要求：
+1. 如果模板列表没有符合的模板请给""
+2. 报告名可以给建议名字
+3. 以```json ```格式返回
+
+# 返回样例
+{
+	"kbTemplateName": "<templates_name>",
+	"reportName": "<Suggested report name>"
+}
+
+# 用户输入
+{{userInput}}
+
+# Template list
+{{template_list}}
+
+''')

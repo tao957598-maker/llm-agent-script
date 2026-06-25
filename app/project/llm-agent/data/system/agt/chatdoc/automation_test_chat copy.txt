@@ -1,0 +1,168 @@
+/*
+{
+	"title":"copy-Automation-Test intelligent chat",
+	"description":"copy-Automation-Test AI chat agent.",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"用户输入"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space_id"
+		}
+	],
+	"tag":"chatdoc",
+	"uiEntrance":"chatDoc",
+	"life":100,
+	"version":1
+}
+*/
+when('!fn.hasValue(kbSpaceFileId)', {
+	assign("kbSpaceFileId", "No documentId")
+})
+
+
+//## 正在分析用户输入选择工具
+tpl_choose_tool, psr_json
+
+// 判断选择的工具是否需要参数确认
+n_if_need_confirm, act_func?script='''
+	import com.alibaba.fastjson2.JSON
+	import com.alibaba.fastjson2.JSONObject
+
+	def paramJson = fn.tool(tpl_choose_tool.type, tpl_choose_tool.name)
+
+	// 使用 Fastjson 解析 JSON
+	try {
+		JSONObject parsedJson = JSON.parseObject(paramJson);
+		JSONObject properties = parsedJson.getJSONObject("inputSchema").getJSONObject("properties");
+		properties.containsKey("userInput");
+		boolean hasOnlyUserInput = properties.size() == 1 && properties.containsKey("userInput");
+		return hasOnlyUserInput;
+	} catch (Exception e) {
+		return false;
+	}
+'''
+
+// 判断是否需要参数确认
+when('tpl_choose_tool.type == "AGENT" && n_if_need_confirm', {
+	// 执行agent
+	n_tool_exec, act_plan.run?executor={{tpl_choose_tool.name}}&parameters='userInput={{userInput}}'
+
+	// 执行结果
+	assign('resultTip', '')
+}, {
+	assign('sys_prompt_parameter_extract', '''
+		你是智能化系统专家，请根据工具参数信息，结合用户输入和补充信息，完善工具参数以Json格式返回。
+		1. 工具参数规则按照properties描述填充；
+		2. 必填项需要有值，默认值一般为缺省的值；
+		3. 遇到日期业务的字段，格式一般都为yyyy-MM-dd或者yyyy-MM-dd HH:mm:ss
+		4. 遇到测试编号可以按照业务生成一个测试编号+序号，如测试登录案例，则测试编号为test_logincase_001;
+
+
+		# 返回示例：
+		{
+			"type": "AGENT",
+			"name": "agt_test_xxx.test",
+			"params": {
+				"envinfo": "系统地址：http://xxx.com",
+				"test_no": "XXX_Test1024",
+				"steps": "1. 登录系统\n2. 输入用户名aaa\n3. 输入密码1111"
+			}
+		}
+
+		# 工具描述：
+		{{fn.tool(tpl_choose_tool.type, tpl_choose_tool.name)}}
+	''')
+	
+	//# 正在提取参数
+	n_tool_param, tpl_parameter_extract, psr_json
+
+	//# 进行人工确认运行参数
+	n_param_confirm, act_flow.page?name=sys_tool_param_confirm&toolType={{tpl_choose_tool.type}}&toolName={{tpl_choose_tool.name}}&params={{n_tool_param.params}}
+
+	// 判断是否非确认按钮
+	when('n_param_confirm.apiCode!="agent_manual_confirm"', {
+		// 执行UI点击API
+		act_plan.run?toolType=API&code={{n_param_confirm.apiCode}}&parameters={{n_param_confirm}}
+	})
+
+	// 根据人工确认后的参数运行工具
+	when('n_param_confirm.type == "AGENT" && n_param_confirm.name == "agt_test_steps.test"', {
+		// 构建JOB参数
+		assign('jobData','{"agentName":"{{n_param_confirm.name}}","jobDesc":"ChatDocJob","notifyStrategy":"全部通知","executorParam":{{n_param_confirm.confirmedParams}}}')
+
+		// 创建自动化测试agent JOB
+		n_tool_exec, act_job.createAndTrigger?data={{jobData}}&isOneOffTask=true&isOnlyAdd=true
+
+		//# Result Tip
+		assign('resultTip', '任务已创建，任务名： {{n_tool_exec.jobDesc}}，点击<a href="/TaskManagement?id={{n_tool_exec.id}}" target="_blank">{{n_tool_exec.id}}</a>可查看任务')
+	}, {
+		//# 工具执行处理
+		n_tool_exec, act_plan.run?toolType={{n_param_confirm.type}}&code={{n_param_confirm.name}}&parameters={{n_param_confirm.confirmedParams}}
+
+		//# 执行结果
+		assign('resultTip', '{{n_tool_exec}}')
+	})	
+})
+
+
+define('tpl_choose_tool', '''
+- Role: 熟悉智能办公系统的管家
+- Background: 需要根据用户的输入，精确的定位使用哪种工具，符合用户的需求。
+- Requirements: 
+1. 分析用户输入目标
+2. 根据工具集列表description语义匹配符合的工具
+3. 若description语义匹配不符合,按照工具参数和用户输入,匹配符合的工具
+4. 解释并返回Json格式返回选择的工具名和工具所属分类；
+5. json需要包含score分值，范围0-10，值越高则代表匹配度越高；
+6. 如果工具列表都不符合用户的需求，则name为空，score的值为0；
+
+# 返回示例：
+{
+	"type": "AGENT",
+	"name": "agt_test_xxx.test",
+	"score": 5
+}
+
+# 用户输入：
+{{userInput}}
+## 指定知识文件id
+{{kbSpaceFileId}}
+
+# 工具集列表：
+{{fn.toolset('API_Tool')}}
+
+''')
+
+
+define('tpl_parameter_extract', '''
+你是智能化系统专家，请根据工具参数信息，结合用户输入和补充信息，完善工具参数以Json格式返回。
+1. 工具参数规则按照properties描述填充；
+2. 必填项需要有值，默认值一般为缺省的值；
+3. 遇到日期业务的字段，格式一般都为yyyy-MM-dd或者yyyy-MM-dd HH:mm:ss
+4. 遇到测试编号可以按照业务生成一个测试编号+序号，如测试登录案例，则测试编号为test_logincase_001;
+
+
+# 返回示例：
+{
+	"type": "AGENT",
+	"name": "agt_test_xxx.test",
+	"params": {
+		"envinfo": "系统地址：http://xxx.com",
+		"test_no": "XXX_Test1024",
+		"steps": "1. 登录系统\n2. 输入用户名aaa\n3. 输入密码1111"
+	}
+}
+
+# 用户输入：
+{{userInput}}
+## 指定知识文件id
+{{kbSpaceFileId}}
+
+# 工具描述：
+{{fn.tool(tpl_choose_tool.type, tpl_choose_tool.name)}}
+{{fn.chatFlag('sys_prompt_parameter_extract', 'userInput', 'resultTip', '', 6)}}
+''')

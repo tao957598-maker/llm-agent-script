@@ -1,0 +1,1021 @@
+/*
+{
+	"title":"Generation API Test Data",
+	"description":"Generation API Test Data",
+	"parameter":[
+		{
+			"name":"file_name",
+			"label":"file_name",
+			"type":"textarea"
+		},
+		{
+			"name":"openapi_data",
+			"label":"openapi_data",
+			"type":"textarea"
+		},
+		{
+			"name":"application",
+			"label":"System Name",
+			"required":true
+		},
+		{
+			"name":"test_no",
+			"label":"test_no",
+			"required":true
+		},
+		{
+			"name":"is_need_performance",
+			"label":"Generate Performance Test Data",
+			"args":[
+				{
+					"label":"Yes",
+					"value":"1"
+				},
+				{
+					"label":"No",
+					"value":"0"
+				}
+			],
+			"defaultValue":"1",
+			"type":"select",
+			"required":true
+		},
+		{
+			"name":"version",
+			"label":"version",
+			"required":true,
+			"defaultValue":"V1.0"
+		}
+	],
+	"resultPlan":"n_data_item",
+	"tag":"Automated Testing",
+	"life":1000,
+	"version":1
+}
+*/ 
+
+// 传入的file name
+assign('n_file_name', '{{file_name}}')
+
+// 传入的api data
+assign('openapi_json', '{{openapi_data}}')
+
+// 传入的version
+assign('n_version', '{{version}}')
+
+// 传入的application
+assign('n_application', '{{application}}')
+
+assign('n_test_no', '{{test_no}}')
+
+
+// 传入的是否生成performance数据开关
+assign('n_is_performance', '{{is_need_performance}}')
+assign('n_api_performance_test_data', '[]')
+n_api_identity,act_func?js='''
+(function() {
+	let openApiDoc = {{openapi_json}};
+
+	if (Array.isArray(openApiDoc) && openApiDoc.length > 0) {
+		openApiDoc = typeof openApiDoc[0] === 'string' ? JSON.parse(openApiDoc[0]) : openApiDoc[0];
+	}
+	if (typeof openApiDoc === 'string') {
+		openApiDoc = JSON.parse(openApiDoc);
+	}
+
+	if (!openApiDoc || typeof openApiDoc !== 'object') {
+		return JSON.stringify({ path: '', method: '' });
+	}
+
+	for (const [path, methods] of Object.entries(openApiDoc.paths || {})) {
+		for (const [method, operation] of Object.entries(methods || {})) {
+			return JSON.stringify({
+				path: path,
+				method: method.toUpperCase()
+			});
+		}
+	}
+
+	return JSON.stringify({ path: '', method: '' });
+})();
+'''
+n_kb_case_rows,act_kb.select?name='kb_api_testcase'&column='content,test_no,file_name,application,method,api_name'&where='{"file_name":"{{n_file_name}}","application":"{{n_application}}","method":"{{n_api_identity.method}}","api_name":"{{n_api_identity.path}}"}'
+n_kb_data,act_func?js='''
+(function() {
+	let kbCaseRows = {{n_kb_case_rows}};
+	let openApiDoc = {{openapi_json}};
+	let result = [];
+	const currentTestNo = "{{n_test_no}}";
+	const currentApiPath = "{{n_api_identity.path}}";
+	const currentApiMethod = String("{{n_api_identity.method}}" || '').toLowerCase();
+
+	function parseOpenApiDoc(source) {
+		let doc = source;
+		if (Array.isArray(doc) && doc.length > 0) {
+			doc = typeof doc[0] === 'string' ? JSON.parse(doc[0]) : doc[0];
+		}
+		if (typeof doc === 'string') {
+			doc = JSON.parse(doc);
+		}
+		return doc && typeof doc === 'object' ? doc : null;
+	}
+
+	function getOperation(doc) {
+		if (!doc || !doc.paths || !currentApiPath || !currentApiMethod) {
+			return null;
+		}
+		const methods = doc.paths[currentApiPath] || {};
+		return methods[currentApiMethod] || null;
+	}
+
+	function pickOpenApiDoc(primaryDoc, kbRows) {
+		const parsedPrimary = parseOpenApiDoc(primaryDoc);
+		if (getOperation(parsedPrimary)) {
+			return parsedPrimary;
+		}
+
+		const orderedRows = []
+			.concat((kbRows || []).filter(row => String((row || {}).test_no || '') === String(currentTestNo || '')))
+			.concat((kbRows || []).filter(row => String((row || {}).test_no || '') !== String(currentTestNo || '')));
+
+		for (const row of orderedRows) {
+			if (!row || !row.content) {
+				continue;
+			}
+			try {
+				const parsedDoc = parseOpenApiDoc(row.content);
+				if (getOperation(parsedDoc)) {
+					return parsedDoc;
+				}
+			} catch (error) {
+			}
+		}
+
+		return parsedPrimary;
+	}
+
+	openApiDoc = pickOpenApiDoc(openApiDoc, kbCaseRows);
+
+	if (!openApiDoc || typeof openApiDoc !== 'object') {
+		return JSON.stringify(result);
+	}
+
+	const globalSecurity = Array.isArray(openApiDoc.security) ? openApiDoc.security : [];
+	const securitySchemes = (((openApiDoc || {}).components || {}).securitySchemes) || {};
+
+	function collectHeaderNames(operation) {
+		const names = [];
+		(operation.parameters || []).forEach(parameter => {
+			if (String((parameter || {}).in || '').toLowerCase() === 'header' && parameter.name) {
+				names.push(String(parameter.name));
+			}
+		});
+		return Array.from(new Set(names));
+	}
+
+	function extractParameterExamples(parameters) {
+		const result = [];
+		(parameters || []).forEach(parameter => {
+			if (!parameter || !parameter.name) {
+				return;
+			}
+			if (parameter.example !== undefined) {
+				result.push({
+					name: String(parameter.name),
+					in: String(parameter.in || ''),
+					value: parameter.example
+				});
+			}
+			const examples = parameter.examples || {};
+			Object.entries(examples).forEach(([exampleName, exampleObj]) => {
+				if (exampleObj && Object.prototype.hasOwnProperty.call(exampleObj, 'value')) {
+					result.push({
+						name: String(parameter.name),
+						in: String(parameter.in || ''),
+						example_name: String(exampleName),
+						value: exampleObj.value
+					});
+				}
+			});
+		});
+		return result;
+	}
+
+	function extractRequestExamples(operation) {
+		const result = [];
+		const requestBody = (operation || {}).requestBody || {};
+		const content = requestBody.content || {};
+		Object.entries(content).forEach(([mediaType, media]) => {
+			if ((media || {}).example !== undefined) {
+				result.push({
+					media_type: String(mediaType),
+					example_name: 'example',
+					value: media.example
+				});
+			}
+			const examples = (media || {}).examples || {};
+			Object.entries(examples).forEach(([exampleName, exampleObj]) => {
+				if (exampleObj && Object.prototype.hasOwnProperty.call(exampleObj, 'value')) {
+					result.push({
+						media_type: String(mediaType),
+						example_name: String(exampleName),
+						value: exampleObj.value
+					});
+				}
+			});
+			const schemaExample = ((media || {}).schema || {}).example;
+			if (schemaExample !== undefined) {
+				result.push({
+					media_type: String(mediaType),
+					example_name: 'schema_example',
+					value: schemaExample
+				});
+			}
+		});
+		return result;
+	}
+
+	function extractRequestFieldExamples(operation) {
+		const result = [];
+		const requestBody = (operation || {}).requestBody || {};
+		const content = requestBody.content || {};
+		Object.entries(content).forEach(([mediaType, media]) => {
+			const schema = (media || {}).schema || {};
+			const properties = schema.properties || {};
+			Object.entries(properties).forEach(([fieldName, fieldSchema]) => {
+				if (fieldSchema && Object.prototype.hasOwnProperty.call(fieldSchema, 'example')) {
+					result.push({
+						media_type: String(mediaType),
+						name: String(fieldName),
+						value: fieldSchema.example
+					});
+				}
+			});
+		});
+		return result;
+	}
+
+	function extractRequiredRequestFields(operation) {
+		const result = [];
+		(operation.parameters || []).forEach(parameter => {
+			if (parameter && parameter.required && parameter.name) {
+				result.push(String(parameter.name));
+			}
+		});
+		const requestBody = (operation || {}).requestBody || {};
+		const content = requestBody.content || {};
+		Object.values(content).forEach(media => {
+			const schema = (media || {}).schema || {};
+			(schema.required || []).forEach(name => result.push(String(name)));
+		});
+		return Array.from(new Set(result));
+	}
+
+	function hasSecurityRequirement(operation) {
+		const security = Array.isArray(operation.security) ? operation.security : globalSecurity;
+		return Array.isArray(security) && security.some(item => item && Object.keys(item).length > 0);
+	}
+
+	function requiresAuth(operation) {
+		const headerNames = collectHeaderNames(operation).map(name => name.toLowerCase());
+		const authHeaderKeywords = ['authorization', 'token', 'x-access-token', 'access-token', 'api-key', 'x-api-key'];
+		if (headerNames.some(name => authHeaderKeywords.includes(name))) {
+			return true;
+		}
+		const security = Array.isArray(operation.security) ? operation.security : globalSecurity;
+		return Array.isArray(security) && security.some(item =>
+			Object.keys(item || {}).some(name => {
+				const scheme = securitySchemes[name] || {};
+				return (
+					String(scheme.type || '').toLowerCase() === 'http' ||
+					String(scheme.type || '').toLowerCase() === 'apikey' ||
+					String(scheme.in || '').toLowerCase() === 'header'
+				);
+			})
+		);
+	}
+
+	function extractResponseExamples(responses) {
+		const result = [];
+		Object.entries(responses || {}).forEach(([statusCode, response]) => {
+			const content = (response || {}).content || {};
+			Object.entries(content).forEach(([mediaType, media]) => {
+				const examples = (media || {}).examples || {};
+				Object.entries(examples).forEach(([exampleName, exampleObj]) => {
+					if (exampleObj && Object.prototype.hasOwnProperty.call(exampleObj, 'value')) {
+						result.push({
+							status_code: String(statusCode),
+							media_type: String(mediaType),
+							example_name: String(exampleName),
+							value: exampleObj.value
+						});
+					}
+				});
+				if ((media || {}).example !== undefined) {
+					result.push({
+						status_code: String(statusCode),
+						media_type: String(mediaType),
+						example_name: 'example',
+						value: media.example
+					});
+				}
+			});
+			if (response && Object.prototype.hasOwnProperty.call(response, 'example')) {
+				result.push({
+					status_code: String(statusCode),
+					media_type: '',
+					example_name: 'example',
+					value: response.example
+				});
+			}
+		});
+		return result;
+	}
+
+	for (const [path, methods] of Object.entries(openApiDoc.paths || {})) {
+		for (const [method, operation] of Object.entries(methods || {})) {
+			const responses = operation.responses || {};
+			const documentedStatusCodes = Object.keys(responses).map(code => String(code));
+			const explicitStatusCodes = documentedStatusCodes.filter(code =>
+				String(code).length === 3 &&
+				String(code).split('').every(ch => ch >= '0' && ch <= '9')
+			);
+			result.push({
+				path: path,
+				method: method.toUpperCase(),
+				documented_status_codes: documentedStatusCodes,
+				explicit_status_codes: explicitStatusCodes,
+				responses: responses,
+				response_examples: extractResponseExamples(responses),
+				request_examples: extractRequestExamples(operation),
+				request_field_examples: extractRequestFieldExamples(operation),
+				parameter_examples: extractParameterExamples(operation.parameters || []),
+				required_request_fields: extractRequiredRequestFields(operation),
+				header_names: collectHeaderNames(operation),
+				requires_auth: requiresAuth(operation),
+				has_security_requirement: hasSecurityRequirement(operation)
+			});
+		}
+	}
+
+	return JSON.stringify(result);
+})();
+'''
+// Generate single api functional test data
+n_api_test_data_tmp,tpl_fastapi_test_data,psr_json
+"""
+由于经常出json报错(大模型返回："```json xxxxxxx ```"'),此处用处理一次
+"""
+// 替换注释数据
+n_api_test_data,act_func?script='''
+	def content = n_api_test_data_tmp
+
+// 检查 content 是否为字符串，如果不是则转换为字符串
+if (content instanceof String) {
+    if (!content.startsWith("```json")) {
+        return content
+    }
+    def start = "```json".length()
+    def end = content.lastIndexOf("```")
+    return content.substring(start, end).trim()
+} else if (content instanceof List || content instanceof ArrayList) {
+    // 如果是列表，将其转换为字符串进行处理
+    def contentStr = content.toString()
+    if (!contentStr.startsWith("```json")) {
+        return content
+    }
+    def start = "```json".length()
+    def end = contentStr.lastIndexOf("```")
+    return contentStr.substring(start, end).trim()
+} else {
+    // 其他类型直接返回
+    return content
+}
+
+'''
+
+// 生成单个api性能测试数据
+n_api_test_data_filtered,act_func?js='''
+(function() {
+	let apiTestData = {{n_api_test_data}};
+	let responseMeta = {{n_kb_data}};
+
+	if (typeof apiTestData === 'string') {
+		apiTestData = JSON.parse(apiTestData);
+	}
+	if (typeof responseMeta === 'string') {
+		responseMeta = JSON.parse(responseMeta);
+	}
+
+	function deepClone(value) {
+		return JSON.parse(JSON.stringify(value));
+	}
+
+	function findMeta(api) {
+		const apiName = String(api.name || '');
+		const apiMethod = String(api.method || '').toUpperCase();
+		return (responseMeta || []).find(item =>
+			String(item.path || '') === apiName &&
+			String(item.method || '').toUpperCase() === apiMethod
+		) || {};
+	}
+
+	function getAllowedCodes(api) {
+		const meta = findMeta(api);
+		const explicitCodes = (meta.explicit_status_codes || []).map(code => String(code)).filter(code => code);
+		if (explicitCodes.length > 0) {
+			return explicitCodes;
+		}
+
+		const documentedCodes = (meta.documented_status_codes || []).map(code => String(code)).filter(code => code);
+		return documentedCodes;
+	}
+
+	function hasDocumentedResponseBody(meta, code) {
+		const response = ((meta || {}).responses || {})[String(code)];
+		if (!response || typeof response !== 'object') {
+			return false;
+		}
+		const description = String(response.description || '');
+		if (description === `Documented HTTP ${code} response` && Number(code) >= 300) {
+			return false;
+		}
+		if (response.content && typeof response.content === 'object' && Object.keys(response.content).length > 0) {
+			return true;
+		}
+		if (response.schema || response.examples || response.example) {
+			return true;
+		}
+		return false;
+	}
+
+	function getPrimaryStatusCode(meta, allowedCodes) {
+		const codes = Array.isArray(allowedCodes) ? allowedCodes : [];
+		const codeWithBody = codes.find(code => hasDocumentedResponseBody(meta, code));
+		return codeWithBody || codes[0] || '';
+	}
+
+	function hasAuthEvidence(item, meta) {
+		if (Boolean((meta || {}).requires_auth) || Boolean((meta || {}).has_security_requirement)) {
+			return true;
+		}
+		const parameter = (item || {}).parameter || {};
+		const headers = parameter.headers || {};
+		const headerNames = Object.keys(headers).map(name => String(name).toLowerCase());
+		const documentedHeaders = ((meta || {}).header_names || []).map(name => String(name).toLowerCase());
+		const allHeaderNames = headerNames.concat(documentedHeaders);
+		const authHeaderKeywords = ['authorization', 'token', 'x-access-token', 'access-token', 'api-key', 'x-api-key'];
+		return allHeaderNames.some(name => authHeaderKeywords.includes(name));
+	}
+
+	function isDigit(ch) {
+		return ch >= '0' && ch <= '9';
+	}
+
+	function extractStatusCodes(text) {
+		const value = String(text || '');
+		const codes = [];
+		for (let index = 0; index <= value.length - 3; index++) {
+			const previous = index > 0 ? value[index - 1] : '';
+			const code = value.substring(index, index + 3);
+			const next = index + 3 < value.length ? value[index + 3] : '';
+			if (
+				code[0] >= '1' && code[0] <= '5' &&
+				isDigit(code[1]) && isDigit(code[2]) &&
+				!isDigit(previous) && !isDigit(next)
+			) {
+				codes.push(code);
+			}
+		}
+		return codes.filter((code, index, array) => array.indexOf(code) === index);
+	}
+
+	function extractVerifyStatusCodes(verify) {
+		return String(verify || '')
+			.split(String.fromCharCode(10))
+			.filter(line => line.indexOf('response.status_code') >= 0)
+			.flatMap(line => extractStatusCodes(line))
+			.filter((code, index, array) => array.indexOf(code) === index);
+	}
+
+	function normalizeVerifyStatusAssertions(verify, allowedCodes, fallbackCode) {
+		return String(verify || '')
+			.split(String.fromCharCode(10))
+			.map(line => {
+				if (line.indexOf('response.status_code') < 0) {
+					return line;
+				}
+				let indentEnd = 0;
+				while (indentEnd < line.length && (line[indentEnd] === ' ' || line[indentEnd] === String.fromCharCode(9))) {
+					indentEnd += 1;
+				}
+				const indent = line.substring(0, indentEnd);
+				const nextCodes = extractStatusCodes(line)
+					.map(code => allowedCodes.includes(code) ? code : fallbackCode)
+					.filter((code, index, array) => code && array.indexOf(code) === index);
+				if (nextCodes.length <= 1) {
+					return `${indent}assert response.status_code == ${nextCodes[0] || fallbackCode}`;
+				}
+				return `${indent}assert response.status_code in [${nextCodes.join(', ')}]`;
+			})
+			.join(String.fromCharCode(10));
+	}
+
+	function normalizeVerifyByDocument(item, meta, allowedCodes) {
+		const nextItem = deepClone(item);
+		if (!nextItem.verify) {
+			return nextItem;
+		}
+		const primaryStatus = getPrimaryStatusCode(meta, allowedCodes);
+		if (!primaryStatus) {
+			return nextItem;
+		}
+		nextItem.verify = normalizeVerifyStatusAssertions(nextItem.verify, allowedCodes, primaryStatus);
+		const statusCodes = extractVerifyStatusCodes(nextItem.verify).filter(code => allowedCodes.includes(code));
+		if (statusCodes.length === 0) {
+			return nextItem;
+		}
+		if (statusCodes.length === 1 && statusCodes[0] === '401' && !hasAuthEvidence(nextItem, meta) && primaryStatus) {
+			nextItem.verify = `def verify_response(response):\n    assert response.status_code == ${primaryStatus}`;
+			return nextItem;
+		}
+		const shouldUseStatusOnly = statusCodes.every(code => !hasDocumentedResponseBody(meta, code));
+		if (!shouldUseStatusOnly) {
+			return nextItem;
+		}
+		nextItem.verify = statusCodes.length === 1
+			? `def verify_response(response):\n    assert response.status_code == ${statusCodes[0]}`
+			: `def verify_response(response):\n    assert response.status_code in [${statusCodes.join(', ')}]`;
+		return nextItem;
+	}
+
+	function buildVerify(allowedCodes) {
+		if (allowedCodes.length === 1) {
+			return `def verify_response(response):\n    assert response.status_code == ${allowedCodes[0]}`;
+		}
+		return `def verify_response(response):\n    assert response.status_code in [${allowedCodes.join(', ')}]`;
+	}
+
+	const filteredData = (apiTestData || []).map(api => {
+		const nextApi = deepClone(api);
+		const meta = findMeta(nextApi);
+		const allowedCodes = getAllowedCodes(nextApi);
+		if (allowedCodes.length === 0) {
+			return nextApi;
+		}
+
+		const testData = Array.isArray(nextApi.testdata) ? nextApi.testdata : [];
+		const normalizedTestData = testData.map(item => normalizeVerifyByDocument(item, meta, allowedCodes));
+
+		if (normalizedTestData.length > 0) {
+			nextApi.testdata = normalizedTestData;
+			return nextApi;
+		}
+
+		if (testData.length > 0) {
+			const fallback = deepClone(testData[0]);
+			fallback.title = `Use documented response codes only: ${allowedCodes.join('/')}`;
+			fallback.verify = buildVerify(allowedCodes);
+			nextApi.testdata = [fallback];
+		}
+		return nextApi;
+	});
+
+	return JSON.stringify(filteredData);
+})();
+'''
+
+when('n_is_performance == "1"',{
+	n_api_performance_test_data,tpl_fastapi_performance,psr_json
+},
+{
+	assign('n_api_performance_test_data', '[]')
+})
+
+
+// 增加version
+n_test_data,act_func?script='''
+	def test_file = n_file_name
+	def test_version = n_version
+	def test_application = n_application
+	def test_no = n_test_no
+	def performance_data =  n_api_performance_test_data
+	def api_test_data =  fn.list(n_api_test_data_filtered)
+	if (!api_test_data || api_test_data.isEmpty()) {
+		return []
+	}
+	def result = api_test_data[0]
+	result["file"] = test_file
+	result["version"] = test_version
+	result["test_no"] = test_no
+	result["application"] = test_application
+	result["performance"] = performance_data ? performance_data[0] : [:]
+	return [result]
+'''
+
+on_failure({
+	// Prepare to repair
+	assign("input_data", "{{n_api_test_data}}")
+	// Fix json
+	n_n_api_test_data_second,tpl_check_is_json,psr_json
+	assign('n_api_test_data_filtered', '{{n_n_api_test_data_second}}')
+
+	// Fix-增加version
+	n_test_data,act_func?script='''
+		def test_file = n_file_name
+		def test_version = n_version
+		def test_application = n_application
+		def test_no = n_test_no
+		def performance_data =  n_api_performance_test_data
+		def api_test_data =  fn.list(n_api_test_data_filtered)
+		if (!api_test_data || api_test_data.isEmpty()) {
+			return []
+		}
+		def result = api_test_data[0]
+		result["file"] = test_file
+		result["version"] = test_version
+		result["application"] = test_application
+		result["test_no"] = test_no
+		result["performance"] = performance_data ? performance_data[0] : [:]
+		return [result]
+	'''
+})
+
+
+// 重组api测试数据
+n_data_item, act_func?js='''
+(function() {
+	let originalData = {{n_test_data}};
+	let responseMeta = {{n_kb_data}};
+
+	if (typeof responseMeta === 'string') {
+		responseMeta = JSON.parse(responseMeta);
+	}
+
+	function deepClone(value) {
+		return JSON.parse(JSON.stringify(value));
+	}
+
+	function findMeta(api) {
+		return (responseMeta || []).find(item =>
+			String(item.path || '') === String(api.name || '') &&
+			String(item.method || '').toUpperCase() === String(api.method || '').toUpperCase()
+		) || {};
+	}
+
+	function hasDocumentedResponseBody(meta, code) {
+		const response = ((meta || {}).responses || {})[String(code)];
+		if (!response || typeof response !== 'object') {
+			return false;
+		}
+		const description = String(response.description || '');
+		if (description === 'Documented HTTP ' + code + ' response' && Number(code) >= 300) {
+			return false;
+		}
+		if (response.content && typeof response.content === 'object' && Object.keys(response.content).length > 0) {
+			return true;
+		}
+		if (response.schema || response.examples || response.example) {
+			return true;
+		}
+		return false;
+	}
+
+	function getPrimaryStatusCode(meta) {
+		const responses = (meta || {}).responses || {};
+		const codes = (meta.explicit_status_codes || meta.documented_status_codes || []).map(code => String(code)).filter(code => code);
+		const codeWithBody = codes.find(code => hasDocumentedResponseBody(meta, code));
+		return codeWithBody || codes[0] || Object.keys(responses)[0] || '';
+	}
+
+	function hasAuthEvidence(item, meta) {
+		if (Boolean((meta || {}).requires_auth) || Boolean((meta || {}).has_security_requirement)) {
+			return true;
+		}
+		const parameter = (item || {}).parameter || {};
+		const headers = parameter.headers || {};
+		const headerNames = Object.keys(headers).map(name => String(name).toLowerCase());
+		const documentedHeaders = ((meta || {}).header_names || []).map(name => String(name).toLowerCase());
+		const allHeaderNames = headerNames.concat(documentedHeaders);
+		const authHeaderKeywords = ['authorization', 'token', 'x-access-token', 'access-token', 'api-key', 'x-api-key'];
+		return allHeaderNames.some(name => authHeaderKeywords.includes(name));
+	}
+
+	function isDigit(ch) {
+		return ch >= '0' && ch <= '9';
+	}
+
+	function collectStatusCodes(text) {
+		const value = String(text || '');
+		const codes = [];
+		for (let index = 0; index <= value.length - 3; index++) {
+			const prev = index > 0 ? value[index - 1] : '';
+			const code = value.substring(index, index + 3);
+			const next = index + 3 < value.length ? value[index + 3] : '';
+			if (
+				code[0] >= '1' && code[0] <= '5' &&
+				isDigit(code[1]) && isDigit(code[2]) &&
+				!isDigit(prev) && !isDigit(next)
+			) {
+				codes.push(code);
+			}
+		}
+		return codes;
+	}
+
+	function extractVerifyStatusCodes(verify) {
+		const text = String(verify || '');
+		const codes = [];
+		const newline = String.fromCharCode(10);
+		let index = 0;
+		while ((index = text.indexOf('response.status_code', index)) >= 0) {
+			const lineEnd = text.indexOf(newline, index);
+			const line = text.substring(index, lineEnd >= 0 ? lineEnd : text.length);
+			collectStatusCodes(line).forEach(code => codes.push(code));
+			index = index + 'response.status_code'.length;
+		}
+		return Array.from(new Set(codes));
+	}
+
+	function alignVerifyWithDocumentedResponseBody(item, meta) {
+		const nextItem = deepClone(item);
+		if (!nextItem.verify) {
+			return nextItem;
+		}
+		const statusCodes = extractVerifyStatusCodes(nextItem.verify);
+		if (statusCodes.length === 0) {
+			return nextItem;
+		}
+		const primaryStatus = getPrimaryStatusCode(meta);
+		if (statusCodes.length === 1 && statusCodes[0] === '401' && !hasAuthEvidence(nextItem, meta) && primaryStatus) {
+			nextItem.verify = `def verify_response(response):\n    assert response.status_code == ${primaryStatus}`;
+			return nextItem;
+		}
+		const shouldUseStatusOnly = statusCodes.every(code => !hasDocumentedResponseBody(meta, code));
+		if (!shouldUseStatusOnly) {
+			return nextItem;
+		}
+		nextItem.verify = statusCodes.length === 1
+			? `def verify_response(response):\n    assert response.status_code == ${statusCodes[0]}`
+			: `def verify_response(response):\n    assert response.status_code in [${statusCodes.join(', ')}]`;
+		return nextItem;
+	}
+
+	function transformData(originalData) {
+		return originalData.map(api => {
+			const meta = findMeta(api);
+			const transformedApi = {
+				file: api.file,
+				name: api.name,
+				application: api.application,
+				test_no: api.test_no,
+				method: api.method,
+				description: api.description,
+				version: api.version,
+				performance_data: api.performance,
+				function_data: (Array.isArray(api.testdata) ? api.testdata : []).map(item =>
+					alignVerifyWithDocumentedResponseBody(item, meta)
+				)
+			};
+			return transformedApi;
+		});
+	}
+	// 调用函数
+	return JSON.stringify(transformData(originalData));
+})();
+'''
+// Send single api test data to kb
+act_kb.defineAndImportData?tableName='kb_api_test_data'&data='{{n_data_item}}'
+assign('result', 'n_data_item')
+
+// 根据FastAPI接口文档生成接口测试测试数据
+// Generate interface testing data based on FastAPI interface documentation
+define('tpl_fastapi_test_data', '''
+# 角色与目标
+你是一个专门生成 FastAPI 接口测试场景的 AI 助手，严格遵守 JSON 输出格式要求。
+
+# 核心要求
+1. 输出格式：必须返回一个合法的 JSON 数组，严格遵循指定的 Schema。
+2. 内容完整性：为每个接口生成正常流、参数异常、业务异常三类测试场景。
+3. 格式纯净性：输出的 JSON 必须可以直接被 Python 的 json.loads() 解析，不能有任何格式错误。
+4. 先说明本次接口数据的路由是什么,然后再返回完整的json数据
+# 严格格式约束
+
+## JSON 格式约束
+1. **禁止使用运算符**：JSON 字符串值中绝对不能包含 `+`, `*`, `/` 等运算符，也不能使用重复字符表达长度。
+2. **禁止转义内部引号**：在 JSON 对象内部的字符串值中，直接使用双引号，不要添加反斜杠。
+   - ❌ 错误： `"json": "invalid_config_data"`
+   - ✅ 正确： `"json": "invalid_config_data"`
+3. **verify 字段**：
+    verify 字段的内容是 Python 代码字符串，可以使用单引号或正确转义的双引号，其他字段不得出现代码语法。
+    verify 校验时，每一个接口都有各自的 状态码、响应格式，状态码与响应数据的检测必须基于各自的API说明，不允许通过推测生成
+    优先读取“当前接口响应定义”中的 explicit_status_codes；如果 explicit_status_codes 有值，优先级最高，生成结果只能使用这些响应码，不能输出任何其他响应码
+    如果 explicit_status_codes 为空，再使用 documented_status_codes；此时也只能使用文档里已有的响应码
+    仅允许使用“当前接口响应定义”中已声明的状态码；禁止生成文档中不存在的状态码断言
+    不仅 verify 字段需要遵守该规则，function_data/testdata 内所有涉及响应码的字段都必须遵守该规则
+    若只识别到 1 个响应码，则当前场景只能断言这个响应码；若识别到多个响应码，则每个场景只断言其对应的已声明响应码
+    响应体断言必须与该状态码自己的响应定义绑定：如果某个状态码只有 description 或状态码含义，没有 content/schema/examples/字段说明，则 verify 只能断言 response.status_code，不能复制其他状态码（尤其 200 成功响应）的 json_data、code、data、message、traceId 等响应体断言
+    如果 401/500/403/404 等错误响应没有明确响应体结构或示例，不要因为 200 响应存在 schema/example 就为这些错误响应生成相同的响应体断言
+    必须结合当前接口的请求头参数与安全要求判断状态码是否适用：如果接口没有认证头、没有 token/api-key/Header 鉴权要求、也没有显式 security 要求，就不能把 401 当作参数缺失、空值、普通业务异常的默认结果
+    必须优先读取“当前接口响应定义”里的 header_names、requires_auth、has_security_requirement 字段：requires_auth=false 且 has_security_requirement=false 时，401 只能用于文档明确写明的认证失败场景，不能用于普通请求参数场景
+    不允许只因为 responses 里存在 401/500 就为参数异常或业务异常分配这些状态码；必须存在接口文档对该场景触发条件的明确说明
+    必须优先读取“当前接口响应定义”里的 response_examples：如果文档已经给出成功/失败 JSON 示例，verify 必须优先基于这些示例生成断言，尤其要保留文档中的业务字段 code、message、data 是否为 null 等信息
+    如果失败示例没有显式绑定到不同 HTTP 状态码，而是作为主响应码下的多个 response_examples 出现，那么参数异常/业务异常场景应使用该主响应码，并校验示例中的业务 code/message/data，而不是凭空改成 401/500
+    必须优先读取“当前接口响应定义”里的 request_examples、request_field_examples、parameter_examples、required_request_fields：如果文档已经给出请求参数样例值，生成 parameter.data/json/params 时必须优先复用这些真实样例值；未变更的字段不要自造 validPassword123、test_password、validToken 这类文档里没有的占位值
+    如果文档样例明确写了 username=test1126、password=123456，则正常场景以及其他只改单个字段的负向场景中，未被修改的字段应继续沿用这些值
+    对必填字段缺失场景，优先依据 required_request_fields 生成“缺哪个字段就删哪个字段”的 case；未缺失的其他字段继续使用文档请求样例中的值
+    只有在文档没有明确给出某个请求字段的实际示例值时，才允许补充合理测试值；一旦文档给出真实值，就必须优先复用，不要再自行编造别的具体内容
+    失败示例必须按字段/原因精确绑定：如果 response_examples 的 example_name、summary、message 或上下文明确指向 password（如 password_null_error、message 提到 password），则该示例只能用于 password 相关场景，不能拿去验证 missing username、empty username 等无关场景
+    如果某个字段场景在文档里没有明确失败示例，就不要借用别的字段失败 message；此时只断言文档明确支持的状态码、业务 code 或通用字段，避免输出“标题是 missing username，但 verify 却断言 password message”这类错配
+    如果文档明确给出了错误 message / code / data 结构，则 verify 应按文档精确断言；如果文档没有明确给出错误返回内容，只描述了“参数错误”“校验失败”“业务异常”等概念，则可以构造合理入参场景，但 verify 不要伪造精确 message 文本，应改为断言文档已明确的信息（如 HTTP 状态码、业务 code、字段存在性、message 包含的明确关键词）
+    负向场景尽量保持“单一变量变更”：每条 case 优先只修改、缺失或置空一个可独立控制的输入项；除非文档明确说明需要组合触发，否则不要把多个独立错误原因合并到同一个 case 里
+    如果错误用户名、错误密码、缺失用户名、缺失密码都可能独立触发失败，则应拆成多个独立 case，分别生成 title、parameter、verify，不能合并成一个“username or password”笼统场景
+    For negative scenarios, prefer single-variable mutations: each case should change or omit only one independently controllable input field unless the document explicitly describes a combined multi-field failure.
+    Do not merge different invalid input causes into one test case. If multiple request fields can independently trigger the same documented failure outcome, generate separate cases with separate titles, parameters, and verify logic.
+    只有文档明确把某个非主响应码绑定到具体触发条件时，参数异常/业务异常场景才能使用该状态码；否则这些场景应优先使用当前接口中有明确响应体定义的主响应码进行校验
+    只有在文档没有说明响应码时，才允许不输出具体状态码断言；绝不允许补充常见但文档未声明的 201、400、403、404、422 等响应码
+4. **长字符串处理**：除 verify 外，所有需要极长文本的字段必须使用自然语言描述：
+   - `"description": "Text intentionally crafted to exceed maximum allowed length for validation testing"`
+   - 禁止任何数值或重复字符形式表达长度。
+5. **文件或 base64 字段**：使用占位符 `[字段名]`，例如：
+   - `"pdf_base64": "pdf_base64"`
+   - `"image_file": "image_file"`
+   - `"document": "document"`
+   - `"file_name": "too_long_file_name"`
+
+## 字段生成规则
+1. 方法对应字段：
+   - `parameter` 是相对于 `fixed_parameter` 的增量覆盖，不是完整请求参数快照
+   - GET/DELETE：只在确实需要覆盖时输出 `path`、`headers`、`params`
+   - POST/PUT：只在确实需要覆盖时输出 `path`、`headers`、`params`、`data`、`json`
+   - 如果某字段与 `fixed_parameter` 的默认值相同，则不要在 `parameter` 中重复输出
+   - 空的 `headers`、`params`、`data`、`json`、`path` 不要输出
+2. 路径参数规则：
+   - `fixed_parameter` 中的 `path`、`headers` 等值已经是默认请求参数；正常场景若直接复用默认值，不要在 `parameter` 中重复输出
+   - 只有当场景需要覆盖动态路由参数时，才显式输出 `parameter.path`
+   - 对缺失必填路径参数的场景，在 JSON 中将该路径参数值写为 `null`，表示请求层的 `None`
+3. 测试数据要求：
+   - 使用有意义的测试数据
+   - 包含边界值测试
+   - 符合字段类型约束
+4. verify 字段是唯一允许使用 Python 语法的字段，其内容不得影响其他字段生成风格。
+
+# 测试场景要求
+结合接口数据和状态码数据参数生成
+先读取当前接口响应定义中的 explicit_status_codes；若存在则只允许使用 explicit_status_codes
+若 explicit_status_codes 为空，再读取 documented_status_codes；每个场景所有响应码相关字段必须与其对应状态码一一匹配
+每个场景的响应体校验只能来自该场景状态码自己的 responses 定义；状态码只有 description 时，该场景 verify 只能校验 HTTP 状态码
+如果当前接口没有认证头或 security 要求，不要把 401 分配给“缺少必填参数”“空字符串”“普通业务错误”等场景
+生成每个场景前，先写出内部判断：该场景的状态码依据来自请求头鉴权、参数规则、业务规则、服务端错误说明，还是仅来自全局响应码表；仅来自全局响应码表时不得绑定到具体参数异常
+如果当前接口响应定义里存在 response_examples，优先让每个测试场景对齐到最接近的文档示例：成功场景对齐成功示例，参数异常/业务异常对齐失败示例；对齐后 verify 必须断言示例里的业务 code/message/data，而不是只断言 HTTP 状态码
+如果当前接口响应定义里存在 request_examples、request_field_examples 或 parameter_examples，优先用这些示例构造请求参数；只有文档没给值时，才允许补充合理测试值
+`fixed_parameter` 已经是默认请求参数来源。默认值不要重复写入 `parameter`；只有需要覆盖时才显式输出 `path`、`headers`、`params`、`data`、`json`
+对动态路由参数的异常或业务场景，必须显式输出 `parameter.path` 覆盖值；缺失必填路径参数时使用 `null` 表示请求层的 `None`
+当只修改一个字段时，其余未修改字段必须尽量继承文档请求样例中的原始值，不要擅自替换成新的占位值
+如果某个失败示例明显属于 password 字段，就不要复用到 username 场景；字段级失败示例要严格按字段归属使用
+如果文档没有明确给出错误返回内容，可以生成合理的错误参数场景，但 verify 只能断言文档明确说明的部分，不能编造完整 message 内容
+负向场景需要原子化拆分：优先每个 case 只验证一个独立错误原因，不要把错误用户名+错误密码、缺失字段+格式错误等多个独立原因合并成一个场景，除非文档明确要求组合条件
+Negative cases should be atomic. Prefer one invalid input per case, and avoid combining wrong username + wrong password, missing field + invalid format, or other independent causes into the same scenario unless the document explicitly requires the combination.
+
+# 输出结构模板
+`parameter` 是相对于 `fixed_parameter` 的增量覆盖：
+1. `fixed_parameter` 中已经提供且当前场景继续沿用的值，不要在 `parameter` 中重复输出
+2. 没有实际值的字段不要输出；空的 `headers`、`params`、`data`、`json`、`path` 都不要出现
+3. 若当前场景完全复用 `fixed_parameter`，则输出 `"parameter": {}`
+4. 只有当需要覆盖动态路由参数时，才输出 `parameter.path`
+5. 缺失必填路径参数时，在 JSON 中写 `null`，其含义等同于请求层的 `None`
+[
+  {
+    "name": "/api/path",
+    "method": "http_method",
+    "description": "API功能描述",
+    "testdata": [
+      {
+        "title": "场景描述（英文）",
+        "parameter": {},
+        "verify": "def verify_response(response):
+    # assertions must use only documented status codes for this API
+    pass"
+      }
+    ]
+  }
+]
+
+# 关键注意事项
+1. 所有输出必须是合法 JSON，可直接解析。
+2. verify 字段使用 Python 字符串，其他字段绝对不能出现 Python 语法或运算符。
+3. 方法对应的字段正确。
+4. 特殊字段使用占位符。
+5. 三类测试场景齐全。
+6. 无注释符号或运算符。
+7. 长文本字段用自然语言描述，不使用重复字符或运算符。
+8. verify 字段不得污染 JSON 数据字段风格。
+9. function_data/testdata 中所有响应码相关字段引用的状态码必须全部出自当前接口响应定义，不得新增文档未声明的状态码
+10. 若 explicit_status_codes 有值，输出中不得出现 explicit_status_codes 之外的任何状态码
+11. `parameter` 只输出相对于 `fixed_parameter` 的覆盖项，不要重复输出默认值
+12. 空的 `headers`、`params`、`data`、`json`、`path` 不要出现在输出中；缺失必填路径参数时使用 `null` 例如: {"id": null}
+
+# 验证检查清单（生成前）
+- [ ] JSON格式有效，无语法错误
+- [ ] 所有字符串引号正确，无多余转义
+- [ ] verify字段使用Python代码字符串
+- [ ] 方法对应字段正确
+- [ ] 特殊字段使用占位符
+- [ ] 三类测试场景齐全
+- [ ] 无注释符号和运算符
+- [ ] `parameter` 只包含覆盖字段，不重复输出 `fixed_parameter` 默认值
+- [ ] 空的 `headers`、`params`、`data`、`json`、`path` 未输出；缺失必填路径参数时使用 `null` 例如: {"id": null}
+
+
+
+# 接口数据
+{{openapi_json}}
+
+# 当前接口响应定义
+{{n_kb_data}}
+
+# 系统环境信息数据
+ "fixed_parameter": {
+            "path": {
+              "id": "274913576803860480"
+            },
+            "headers": {
+              "Authorization": "Bearer sk-1s2dsa31saffd2v1dwee"
+            }
+      }
+
+''')
+
+
+// Generate performance test data for interface
+define('tpl_fastapi_performance', '''
+- Role: FastAPI接口测试场景生成专家
+- Background: 根据OpenAPI 3.1.0规范文档自动生成结构化测试场景
+- Skills:OpenAPI规范解析、测试场景设计、JSON数据处理能力、JSON Schema验证
+- Goals: 为所有接口只生成正常流一个测试场景即可
+- OutputFormat:  必须返回合法的JSON格式，其中顶级键为接口路径，值为测试场景列表:
+[
+	{
+		"name":	"/path1",
+		"protocol": "HTTP",
+		"headers": {}, // 请求头,// 所有方法必填
+		"params": {},  // 查询参数, 仅仅get请求时才使用
+		// POST/PUT方法包含以下字段
+		"data": {},     // 表单数据
+		"json": {}		// JSON请求体
+	},
+	{
+		"name":"/path2",
+		......
+	}		
+]	
+
+
+【**生成要求**】
+1. 生成的数据必须是合法的JSO格式，不能含有运算符号，如“+”、“*”
+2. 必须遍历所有paths和HTTP方法(GET/POST/PUT/DELETE等)
+3. HTTP方法与参数字段严格对应: 
+   - GET/DELETE: 仅生成headers和params字段
+   - POST/PUT: 生成headers、data和json字段(根据接口定义选择合适的请求体类型)
+4. 每个接口只需要正常请求1类场景即可
+5. parameter字段需根据接口定义自动生成:
+   - headers: 包含认证信息和Content-Type
+   - params: 查询参数(仅GET方法)
+   - data: 请求体(POST/PUT方法)
+   - json: 请求体(POST,根据需要判断是否需要)
+6. 特殊字段处理规则
+   - 当参数描述中提到需要"base64格式"、"文件上传"、"二进制数据"等文件相关字段时：
+   - 不提供实际的base64字符串或文件内容
+   - 使用[字段名]标签作为占位符
+   - 例如：
+      "pdf_base64": "[pdf_base64]",
+      "image_file": "[image_file]",
+      "document": "[document]"
+
+【接口输入:】
+{{openapi_json}}
+
+
+''')
+
+
+
+define('tpl_check_is_json','''
+请检查以下数据是否为合法且可解析的 JSON 格式。
+
+- 如果数据是合法的 JSON，请原样输出，不做任何修改。
+- 如果数据不是合法的 JSON，请在不改变任何数据内容、字段含义、值本身的前提下，仅对格式进行必要的修正，使其成为完全合法、标准的 JSON。
+- 仅允许进行以下类型的修改：
+  - 补全或修正缺失/错误的引号
+  - 修正多余或缺失的逗号
+  - 修正括号 {}、[] 不匹配问题
+  - 修正非法的转义字符
+- 禁止新增、删除、重命名字段或修改字段值
+- 禁止添加任何解释、注释或额外文本
+
+请只输出最终的 JSON 结果。
+
+
+【输入的数据】
+{{input_data}}
+''')

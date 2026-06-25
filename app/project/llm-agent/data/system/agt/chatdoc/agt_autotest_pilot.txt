@@ -1,0 +1,112 @@
+/*
+{
+	"title":"AI 全流程自动化测试",
+	"description":"从用户输入 useInput 与上传文件 uploadFile 自动提取「确认执行信息」并执行自动化测试。",
+	"parameter":[
+		{
+			"name":"useInput",
+			"label":"用户需求",
+			"required":true,
+			"type":"textarea",
+			"description":"自然语言描述测试意图、范围、环境等；与上传文件共同作为提取依据。"
+		},
+		{
+			"name":"kbSpaceId",
+			"label":"知识空间目录ID（支持多个）",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"知识空间文件ID（支持多个）",
+			"type":"textarea"
+		},
+	],
+	"tag":"chatdoc",
+	"uiEntrance":"chatDoc",
+	"resultPlan":"n_autotest_params",
+	"version":1
+}
+*/
+
+// Set search parameters
+// assign('params','{"question": "{{userInput}}", "folderIds": "{{kbSpaceId!}}", "knowledgeIds": "{{kbSpaceFileId!}}"}')
+
+assign('params','{"question": "{{userInput}}", "folderIds": "{{kbSpaceId!}}", "knowledgeIds": "273764152924340224"}')
+
+//## Searching user file content text
+n_file_context, rag_kbs.searchFileContent?paramData='{{params}}'
+
+when('fn.hasValue(n_file_context)', {
+	n_file_context_str, act_func?script='''
+		return n_file_context.join("\\r\\n\\r\\n")
+	'''
+})
+
+//## Parameters auto extraction (JSON format，For job use)
+n_tpl_params_res, tpl_autotest_param_extract, psr_json
+
+// 添加kbSpaceFileId 参数
+n_autotest_params, act_func?script='''
+        def data_map = fn.map(n_tpl_params_res)
+        data_map.put("kbSpaceFileId", params.knowledgeIds)
+        return data_map
+'''
+
+//# 正在打开 AUTO_TEST_VIEW 页面…
+n_auto_test_view, act_flow.page?pageCode='native.AUTO_TEST_VIEW'&params={{n_autotest_params}}&isNative=true
+
+
+
+
+
+
+define('tpl_autotest_param_extract', '''
+你是测试与需求分析专家。请**仅**根据下列「用户输入」与「上传文件内容」推断并补全「AI 全流程自动化测试 - 确认执行信息」所需字段，输出**一个 JSON 对象**，不要 Markdown、不要解释。
+
+## 字段说明与允许取值（字符串必须与下列英文选项完全一致）
+
+1. test_name：测试名称。若有上传文件名，建议 `{文件名去扩展名}_{用户意图摘要}_{yyyyMMdd-HHmmss}` 形式；时间用当前时间 {{fn.now()}} 推导日期时间戳。
+2. test_type：单选，`WEB` 或 `API`。默认倾向 WEB，除非文档明确为纯接口。
+3. test_scope：多选数组，项只能来自：`FULL_TEST`、`CORE_PATH_TEST`、`SMOKE_TEST`。
+4. test_environment：单选，`TEST_ENV` 或 `PRE_RELEASE_ENV`。
+5. case_generation_strategy：多选数组，项只能来自：`FUNCTIONAL_TEST`、`BOUNDARY_VALUE_TEST`、`EXCEPTION_TEST`、`WEB_COMPATIBILITY_TEST`（Web 专项时可选最后一项）。
+6. case_generation_scope：固定说明文案，无特殊要求时用：`FULL_GENERATION_FROM_REQUIREMENTS_OR_API_DOCS`。
+7. case_execution_method：单选，`AUTO_GENERATE_FULL_DATA` 或 `MANUAL_SELECTION`。
+8. data_execution_method：单选，`AUTO_GENERATE_FULL_DATA`, `MANUAL_SELECTION` 或 `NON_DATA_DRIVEN`。
+9. execution_method：单选，`PARALLEL_EXECUTION` 或 `SEQUENTIAL_EXECUTION`。
+10. failure_strategy：单选，`IGNORE_FAILURE_CONTINUE` 或 `STOP_ON_FIRST_FAILURE`。
+11. retry_strategy：单选，`NO_RETRY`、`RETRY_ONCE`、`RETRY_TWICE`。
+12. report_granularity：单选，`FULL_REPORT` 或 `SUMMARY_REPORT`。
+13. include_failure_analysis：单选，`YES` 或 `NO`。
+
+## 用户输入（useInput）
+
+{{useInput}}
+
+## 上传文件解析内容（若无上传则为空）
+
+{{n_file_context_str!}}
+
+## 输出示例（结构必须一致）
+
+```json
+{
+	"test_name": "example_autotest_20260403-103201",
+	"test_type": "WEB",
+	"test_scope": ["FULL_TEST"],
+	"test_environment": "TEST_ENV",
+	"case_generation_strategy": ["FUNCTIONAL_TEST", "BOUNDARY_VALUE_TEST", "EXCEPTION_TEST"],
+	"case_generation_scope": "FULL_GENERATION_FROM_REQUIREMENTS_OR_API_DOCS",
+	"case_execution_method": "AUTO_GENERATE_FULL_DATA",
+	"data_execution_method": "AUTO_GENERATE_FULL_DATA",
+	"data_size": "SMALL",
+	"execution_method": "PARALLEL_EXECUTION",
+	"failure_strategy": "IGNORE_FAILURE_CONTINUE",
+	"retry_strategy": "RETRY_ONCE",
+	"report_granularity": "FULL_REPORT",
+	"include_failure_analysis": "YES"
+}
+```
+
+直接输出 JSON 对象。
+''')

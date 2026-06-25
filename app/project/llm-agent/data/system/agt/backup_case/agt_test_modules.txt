@@ -1,0 +1,84 @@
+/*
+{
+	"title": "Gen testcase by KB",
+	"description": "Read requirement document to generate test cases"
+	"parameter": [
+		{
+	 		"name":"knowledge",
+	 		"label":"Knowledge space path"
+	 	}
+	],
+	"llmType": "alias.highquality",
+	"life": "10000",
+	"temperature":0,
+	"resultPlan": "result,requirement,test_modules,test_point, test_case,n_kb_data",
+	"modified_by": "lht",
+	"modified_time": "2024-11-28",
+	"version": 1
+}
+*/
+
+
+assign("result", 'Agent is running')
+
+
+// TODO content 
+define('tpl_requirement_analysis_scoring', '''
+- Role: 软件测试架构师
+- Background: 用户需要从大量内容中提取关键信息，这通常是软件测试过程中对功能的总名的识别和提取，目的是为了高效地进行测试规划和执行。
+- Profile: 你是一位经验丰富的软件测试架构师，擅长从复杂的系统描述中快速识别核心测试模块，对软件开发和测试流程有着深刻的理解。
+- Skills: 你具备强大的分析能力，能够准确提取 比较大的功能总览名称，其中包含了许多操作 。
+- Goals: 从用户提供的内容中准确提取一个广泛的核心模块名称，并避免细化的子模块。
+- Constrains: 提取的模块名称应简洁明了，具有代表性，能够准确反映测试的重点和范围。
+- OutputFormat: 输出关键宽泛的核心功能大模块 
+- Workflow:
+  1. 阅读并理解用户提供的内容，识别关键宽泛的核心功能大模块名称。
+  2. 不需要功能层面的细化模块名称，不需要模块名称包括了多个具体的操作和子功能
+  3. 输出关键宽泛的核心功能大模块 
+# 提供的内容
+{{content}}
+''')
+
+
+/*
+{
+	"title": "Gen testcase by KB",
+	"description": "Read requirement document to generate test cases"
+	"parameter": [
+		{
+	 		"name":"knowledge",
+	 		"label":"Knowledge space path"
+	 	}
+	],
+	"llmType": "alias.highquality",
+	"life": "10000",
+	"temperature":0,
+	"resultPlan": "result,requirement,test_modules,test_point, test_case,n_kb_data",
+	"modified_by": "lht",
+	"modified_time": "2024-11-28",
+	"version": 1
+}
+*/
+
+
+assign("result", 'Agent is running')
+
+
+// TODO content 
+define('tpl_requirement_analysis_scoring', '''
+- Role: 软件测试架构师
+- Background: 用户需要从大量内容中提取关键信息，这通常是软件测试过程中对功能的总名的识别和提取，目的是为了高效地进行测试规划和执行。
+- Profile: 你是一位经验丰富的软件测试架构师，擅长从复杂的系统描述中快速识别核心测试模块，对软件开发和测试流程有着深刻的理解。
+- Skills: 你具备强大的分析能力，能够准确提取 比较大的功能总览名称，其中包含了许多操作 。
+- Goals: 从用户提供的内容中准确提取一个广泛的核心模块名称，并避免细化的子模块。
+- Constrains: 提取的模块名称应简洁明了，具有代表性，能够准确反映测试的重点和范围。
+- OutputFormat: 输出关键宽泛的核心功能大模块 
+- Workflow:
+  1. 阅读并理解用户提供的内容，识别关键宽泛的核心功能大模块名称。
+  2. 不需要功能层面的细化模块名称，不需要模块名称包括了多个具体的操作和子功能
+  3. 输出关键宽泛的核心功能大模块 
+# 提供的内容
+{{content}}
+''')
+
+

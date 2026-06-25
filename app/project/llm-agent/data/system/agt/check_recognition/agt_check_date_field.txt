@@ -1,0 +1,80 @@
+/*
+{
+  "title": "支票日期字段识别",
+  "description": "读取支票图片并识别日期字段信息",
+  "parameter": [
+    {
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"knowledge_space"
+		},
+    {
+      "name":"image_path",
+      "label":"支票图片路径"
+    }
+  ],
+  "llm_type": "",
+  "life": "10",
+}
+*/
+
+when('fn.hasValue(kbSpaceFileId)', {
+  //# documentId
+assign("documentId", "{{kbSpaceFileId}}")
+// 查询文档所有信息
+n_file_infos, act_kb.selectBy?sql='select id as document_id,knowledge_name as document_name,extension as document_type,store_uri as source_path from kb_spaces_folder_knowledge where id="{{documentId}}" '
+// image path
+  assign("check_image_path", "{{n_file_infos[0].source_path}}")
+},{
+  // image path
+  assign("check_image_path", "{{image_path}}")
+})
+
+assign("system_prompt",'''
+这个区域的文本, 并完成以下任务：
+1.总结涂改和不属于涂改的标准
+2.找出图中所有被涂改的文本。
+3.对每一处涂改，判断其属于哪种类型。
+4.先解释,如果有修改输出json数据{'description':'修改说明',type:'修改类型','ratio':准确率(int类型),'check_area':'date_field'}
+
+# 涂改类型：
+
+全覆盖涂改：实心色块完全遮盖文字。
+删除线：清晰横线贯穿文字。
+乱涂线：多条杂乱弯曲线条覆盖文字。
+涂抹：笔墨反复涂抹造成模糊。
+修改符号：如圆圈、‘DEL’等标记删除。
+叠加文字：位置偏高，非同一基线，像插入式修正。
+颜色深浅：同一行文字颜色深浅差别较大。
+颜色不一致：同一行文字颜色差别较大(例如 黑白两种颜色字体)
+字迹不一致：印刷体与手写体风格不一致。
+ 
+
+# 不属于涂改的标准：
+
+数字或文字末尾的斜线/横线（防篡改标记）。
+文字下方的“下划线”（用于强调或输入提示）。
+''')
+assign("user_prompt",'''
+output result
+''')
+
+
+// 调用LLM获取json结果
+tpl_date_field_recognition
+ 
+// 输出结果
+assign("result", "{{tpl_date_field_recognition}}")
+
+// define定义对话信息
+define('tpl_date_field_recognition', '''
+/*{
+   "llmType":"alias.vision"
+}*/
+  {{user_prompt}}
+	{{fn.chatImageFlag('%{system_prompt}%', 'user_prompt', '', 'check_image_path', 1)}}
+''')
+

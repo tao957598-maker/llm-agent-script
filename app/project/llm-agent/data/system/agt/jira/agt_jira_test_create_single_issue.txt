@@ -1,0 +1,29 @@
+/*
+ {
+	 "title": "自动化测试-create issue",
+	 "description": "列表数据参数说明：projectKey: 项目名必填；type：类型必填，故障10006，新功能10005，子任务10004，任务10003，改进10002；summary：标题；description：描述；priority：优先级1-5选填",
+	 "parameter": [{
+                  	 		"name":"map",
+                  	 		"label":"要保存的单个JIRA数据"
+                  	 	}],
+	 "llmType": "",
+	 "resultPlan": "",
+	 "life": "100"
+ }
+*/
+
+/* map   getIssuesList是jira里面的数据 会根据desc和summary进行去重。要往jira存入数据需要先根据projectkey获取jira里面的数据
+ {
+       "priority"：1,
+       "type"：10003,
+       "projectKey"："项目key",
+       "description": "desc1必填",
+       "summary": "sum1必填"
+    }
+*/
+// 获取getIssues data   name数据库表 column列名  where条件
+// n_jira_project_issues, act_kb.select?name=kb_LLMAG&column='*'&where='{"summary":"summary"}'
+
+// 调用import data function to jira
+n_save,act_func?name='Jira.saveIssue(map)'
+assign("n_save22", '{{n_save}}')

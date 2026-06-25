@@ -1,0 +1,128 @@
+/*
+{
+	"title":"Web 自动化测试(后处理阶段)",
+	"description":"",
+	"parameter":[
+		{
+			"name":"system",
+			"label":"系统名称",
+			"required":true
+		},
+		{
+			"name":"test_no",
+			"label":"测试编号",
+			"required":true
+		},
+		{
+			"name":"steps",
+			"label":"测试步骤",
+			"type":"textarea"
+		},
+		{
+			"name":"version",
+			"label":"版本"
+		},
+	],
+	"resultPlan":"n_staus_result",
+	"life":1000,
+	"version":6
+}
+*/
+assign('n_staus_result', '自动化测试后处理开始')
+//# 阶段：后处理
+//# 参数1：步骤
+assign('none_mean_log_1', '{{n_plan_steps}}')
+// Process and store steps
+n_steps, act_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("test_no,test_no,application,system,version,version")}}'
+n_result, act_func?script='''
+    def result = ""
+    for (item in n_steps) {
+        result += item + "\\n"
+    }
+    return result.trim()
+'''
+//# 参数2：步骤结果
+assign("none_mean_log_2", "{{n_result}}")
+// ==================== async_post_process ====================
+agt_async_post_process?test_no={{test_no}}&steps={{n_result}}&version={{version}}&application={{system}}
+n_a_collection_answers,act_memory.retrieve?var=agt_async_1_answer&global=true
+n_word_report,act_func?script='''
+  def data = n_a_collection_answers
+  def paramMap = data.collectEntries { entry -> [ (entry.key): entry.value ] }
+  return paramMap.n_word_report ?: ''
+'''
+//# 产物：测试报告
+assign("word_report", "{{n_word_report}}")
+n_test_save_success,act_func?script='''
+  def data = n_a_collection_answers
+  def paramMap = data.collectEntries { entry -> [ (entry.key): entry.value ] }
+  return paramMap.n_test_save_success ?: ''
+'''
+//# 产物：留存状态
+assign("test_save_success", "{{n_test_save_success}}")
+
+
+//# Stop cloud grid
+act_rpa.send?command=StopCloudGrid
+on_failure({
+	// Force to success status
+    assign('n_staus_result', '自动化测试后处理出错')
+	act_flow.success
+})
+assign('n_staus_result', '自动化测试后处理结束')
+
+//# 后处理定义，确定后代码转义到 agt_post_process
+agent('agt_async_post_process', {
+    assign('async_list_post_process_inner', '[]')
+    assign('async_list_post_process_inner', '[]')
+    assign('answer_summary_inner', '[]')
+    assign('n_tmp_inner', '[]')
+
+    //# 1.生成测试报告
+    n_word_report, agt_test_wordreport?test_no={{test_no}}&application={{system}}&version={{version}}&async=true
+    n_word_report_temp,act_func?script='''
+        def expert = n_word_report
+        async_list_post_process_inner.add([n_word_report:expert])
+        return expert
+    '''
+
+    //# 2.保存测试结果
+    n_test_save_success, agt_test_save_success_file?steps={{steps}}&test_no={{test_no}}&async=true
+    n_test_save_success_temp,act_func?script='''
+        def expert = n_test_save_success
+        async_list_post_process_inner.add([n_test_save_success:expert])
+        return expert
+    '''
+
+    foreach('n_item', 'async_list_post_process_inner', {
+        assign('async_map', '{{n_item.item}}')
+        assign('answer_summary_inner', '[]')
+        n_key,act_func?script='''
+            def data = async_map
+            def entry = data.entrySet().first()  
+            def key = entry.key
+            return key
+        '''
+
+        n_value,act_func?script='''
+            def data = async_map
+            def entry = data.entrySet().first()  
+            def value = entry.value
+            return value
+        '''
+
+        assign('answer_summary_inner', '{{fn.hasValue(n_value,"value") ? n_value.value : "[]"}}')
+
+        n_tmp_inner,act_func?script='''
+            def newList = answer_summary_inner
+            async_list_post_process_inner.addAll([
+                key: n_key,
+                value: newList
+            ])
+            return newList
+        '''
+    })
+
+    act_memory.assign?var=agt_async_post_process_answer&value={{async_list_post_process_inner}}&global=true
+
+})

@@ -1,0 +1,111 @@
+/*
+{
+	"title":"API Performance Test",
+	"description":"API性能测试",
+	"parameter":[
+        {
+			"name":"base_url",
+			"label":"base url",
+		},
+		{
+			"name":"api",
+			"label":"api",
+			"type":"textarea"
+		},
+		{
+			"name":"version",
+			"label":"version",
+		},
+        {
+			"name":"num_threads",
+			"label":"thread num",
+		},
+        {
+			"name":"ramp_time",
+			"label":"ramp time",
+		},
+        {
+			"name":"loops",
+			"label":"loops",
+		}
+	],
+	"tag":"Automated Testing",
+	"resultPlan":"n_datas, n_result_data",
+	"life":1000,
+	"version":1
+}
+*/
+// base url
+assign('n_base_url', '{{base_url}}')
+
+// Get version
+assign("n_version", "{{version}}")
+
+// thread num
+assign('n_num_threads', '{{num_threads}}')
+
+// ramp time
+assign("n_ramp_time", "{{ramp_time}}")
+
+// loops
+assign('n_loops', '{{loops}}')
+
+n_threads,act_func?js='''
+(function() {
+	const res = {
+        "num_threads":  "{{n_num_threads}}",
+        "ramp_time": "{{n_ramp_time}}",
+        "loops": "{{n_loops}}"
+    };
+	return JSON.stringify(res)
+})();
+'''
+
+// Get api data
+when('!fn.hasValue(api)', {
+	// Get api data through version
+ 	n_info, act_kb.selectBy?sql='SELECT name, method, performance FROM kb_api_test_data WHERE version="{{n_version}}"'
+},
+{
+	// Get api
+	assign("n_all_api", "{{api}}")
+	n_apis, act_func?script='''
+		def inputStr = "{{n_all_api}}"
+		def parts = inputStr.split(",")
+		return parts.collect { it.trim() }.findAll { it } 
+	'''
+
+	n_str_apis,act_func?js='''
+	(function() {
+		let str_apis = JSON.stringify({{n_apis}})
+		const res = '(' + JSON.parse(str_apis).map(item => `"${item}"`).join(',') + ')';
+		return res
+	})();
+	'''
+
+	// Get api data through version and api name
+ 	n_info, act_kb.selectBy?sql='SELECT name, method, performance FROM kb_api_test_data WHERE version="{{n_version}}" AND name IN {{n_str_apis}}'
+})
+
+
+n_datas,act_func?js='''
+(function() {
+	return JSON.stringify({{n_info}});
+})();
+'''
+
+// Do Execute: url, name, method, description, para, verify
+n_result, act_api.doExecuteDynamic?name="api_performance"&dynamicParamData='{{fn.json("url, n_base_url, datas, n_datas, threads, n_threads")}}'
+
+// return result
+assign('n_resultTip', '{{n_result}}')
+
+// Get report
+when('n_resultTip["success"]=="true"', {
+	// Return the download path of the report
+	assign('n_result_data', 'Download <a href="{{n_resultTip["msg"]}}" target="_blank">report</a>')
+},
+{
+	// Print message
+	assign('n_result_data', '{{n_resultTip["msg"]}}')
+})

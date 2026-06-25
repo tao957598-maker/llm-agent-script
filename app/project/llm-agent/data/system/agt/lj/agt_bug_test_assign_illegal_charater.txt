@@ -1,0 +1,50 @@
+/*
+{
+	"title":"agt_bug_test_assign_illegal_charater",
+	"description":"测试assign 换行等特殊字符api接口报错-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_result_data",
+	"version":1
+} 
+*/
+
+assign("data_list",'''
+[
+                        {
+                            "summary": "Transfer Funds",
+                            "description": "application: Bank\nlanguage: English\ntest_no: TF-103\nsteps: 1. Login to the application\n2. Navigate to 'Transfer Funds' section\n3. Enter amount '500'\n4. Select 'john.doe' as recipient\n5. Click on 'Transfer' button\nexpected_result: Funds should be successfully transferred to the recipient and the balance should be updated"
+                        },
+                        {
+                            "summary": "Deposit Funds",
+                            "description": "application: Bank\nlanguage: English\ntest_no: DF-102\nsteps: 1. Login to the application\n2. Navigate to 'Deposit Funds' section\n3. Enter amount '1000'\n4. Select 'Bank Transfer' as payment method\n5. Click on 'Deposit' button\nexpected_result: Funds should be successfully deposited and the balance should be updated"
+                        }
+
+                    ]
+''')
+// Use foreach loop to iterate over data_list
+foreach('n_data', 'data_list', {
+  // Get the index of the current item
+  assign('current_index', '{{n_data.index}}')
+  // Get the value of the current item
+  assign('current_item', '{{n_data.item}}')
+
+  assign("issuesData", '{"issueUpdates":[{"fields":{"description":"{{current_item.description}}","issuetype":{"name":"Task"},"project":{"key":"LLMAG"},"summary":"{{current_item.summary}}"}}]}')
+
+//   n_result_issue_data, act_api.doExecute?name="jira_create_issues"&params='{"jira_config":{{jiraConfig}},"issues_data":{{issuesData}}}'
+// summary
+  assign("summary", '{{current_item.summary}}')
+  // description
+  assign("description", '{{current_item.description}}')
+  n_json_data,act_func?script='''["summary":summary,"description":description]'''
+  // jira_create_issues_chatdoc
+ n_result_issue_data, act_api.doExecuteDynamic?name="jira_create_issues_chatdoc"&dynamicParamData='{"summary":"{{summary}}","description":"{{description}}"}'
+   // n_result_issue_data, act_api.doExecuteDynamic?name="jira_create_issues_chatdoc"&dynamicParamData="{{n_data.item}}"
+  assign("issueKey1", '''{{n_result_issue_data.data.issues.key}}''')
+  assign("issueKey", '''{{issueKey1[0]}}''')
+  assign("result", 'Data insertion successful, JIra issueKey : {{issueKey}}')
+
+})
+// Tip
+assign("result", 'Agent task ended')

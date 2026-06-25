@@ -1,0 +1,50 @@
+/*
+{
+	"title":"Report Controller Agent (Collect Data and Generate Report)",
+	"description":"This agent orchestrates two sub-agents: first it calls agt_report_collect_data to gather report data, then passes the returned reportId and templateId to agt_report_generate to create the final Word/PDF report.",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"Customer Requirement",
+			"required":true,
+			"maxLength":50,
+			"type":"textarea"
+		},
+		{
+			"name":"kbTemplateName",
+			"label":"Report Template Name (Exact Match)",
+			"required":true,
+			"maxLength":50,
+			"type":"textarea"
+		},
+		{
+			"name":"reportName",
+			"label":"Report Name",
+			"required":false,
+			"maxLength":50,
+			"type":"textarea"
+		}
+	],
+	"tag":"report",
+	"version":1
+}
+*/
+// ===============================
+// Big Step 1: Call agt_report_collect_data
+// ===============================
+log('agent indicator report generation*****>kbTemplateName=={{kbTemplateName}}------->reportName==={{reportName}}')
+ //# Step 1
+log('Step 1: Start collecting report data...')
+
+n_collect_result, agt_report_collect_data?userInput="{{userInput}}"&kbTemplateName="{{kbTemplateName}}"&reportName="{{reportName}}"
+
+// ===============================
+// Big Step 3: Call agt_report_generate
+// ===============================
+log('Step 2: Start generating report...')
+
+// Step 2 Start generating report
+n_generate_result, agt_report_generator?reportId="{{n_collect_result.reportId}}"&templateId="{{n_collect_result.templateId}}"
+
+//# Report generation is complete
+log('Report generation is complete!')

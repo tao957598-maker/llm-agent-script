@@ -1,0 +1,83 @@
+/*
+{
+	"title":"Generate API Test Plan",
+	"description":"Generate API Test Plan",
+	"resultPlan":"status,n_kb_list,result",
+	"parameter":[
+		{
+			"name":"argMapping",
+			"label":"参数映射",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"kbList",
+			"label":"数据参数",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"task_name",
+			"label":"任务名称",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"base_url",
+			"label":"Base URL",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"Automated Testing",
+	"resultPlan":"status,n_kb_list,result",
+	"displayOrder":72,
+	"version":2
+}
+*/
+//# Agent status
+assign("status", 'Agent is running')
+// 传入的参数映射
+assign('n_agr_mapping', '{{argMapping}}')
+// 传入的数据参数
+assign('n_kb_list', '{{kbList}}')
+
+assign('n_base_url', '{{base_url}}')
+
+// 任务名称
+assign('n_task_name', '{{task_name}}')
+
+
+// 获取第一个application
+n_first_application, act_func.run?script="return kbList? kbList[0].application : null"
+
+"""
+// 数据入库plan表，后续api的plan表会废弃
+agt_data_to_task?application={{n_first_application}}&task_name={{n_task_name}}&kb_data={{n_kb_list}}&base_url={{n_base_url}}
+"""
+
+n_api_plan_data, act_func?js='''
+(function(){
+let kb_data = JSON.stringify({{n_kb_list}});
+let baseUrl = '{{n_base_url}}';
+let application = '{{n_first_application}}';
+let taskName = '{{n_task_name}}';
+const transformedApi = {
+	system: application,
+	task_name: taskName,
+	base_url: baseUrl,
+	data: kb_data
+};
+return JSON.stringify(transformedApi);
+})();
+'''
+
+assign("api_plan_data", '{{n_api_plan_data}}')
+

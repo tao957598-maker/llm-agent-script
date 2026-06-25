@@ -1,0 +1,18 @@
+/*
+{
+	"title":"Test call kb_argus",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"User Input\"}",
+	"tag":"all",
+	"discoverable":true,
+	"displayOrder":0,
+	"version":10
+}
+*/
+// ---------- Step 3: query knowledge base by agt_test_kb_argus.chatdoc_QA agent begin----------
+// ---------- Step 3: query knowledge base by agt_test_kb_argus.chatdoc_QA agent begin----------
+//n_test_kb_argus_result,agt_test_kb_argus.chatdoc_QA?userInput="{{userInput}}"&kbSpaceId="273100032240091136"&kbSpaceFileId="273100032245334016,273100120520753152,273100121353322496,273100121980370944"
+//log('n_test_kb_argus_result==={{n_test_kb_argus_result}}')
+
+//n_test_kb_search_question,agt_test_kb_argus.chatdoc_QA?userInput="{{userInput}}"&kbSpaceId="273100032240091136"&kbSpaceFileId="273100032245334016,273100120520753152,273100121353322496,273100121980370944"
+n_txt_search_data, act_kbs.searchQuestion?paramData={{fn.json('question, userInput, folderPath, "Agent user/riskrule"')}}&similarity='0.5'
+log('****n_txt_search_data===={{n_txt_search_data}}')

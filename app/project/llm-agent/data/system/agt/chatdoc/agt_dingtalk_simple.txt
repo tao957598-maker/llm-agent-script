@@ -1,0 +1,31 @@
+/*
+{
+	"title":"钉钉消息助手",
+	"description":"钉钉消息助手",
+	"resultPlan":"n_result",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"用户需求\",\"required\":true,\"description\":\"用户输入的需求描述\"}",
+	"tag":"chatdoc",
+	"version":2
+}
+*/
+
+// 获取配置的机器人
+n_robot_code, act_kb.readCfg?type='dingtalk'&key='robot_code'
+
+// 定义 LLM 模板：分析用户问题，选择工具并构建参数
+define('tpl_dingtalk', '''
+分析用户问题，从飞书工具集中选择合适的工具及参数。
+
+#用户问题:
+{{userInput}}
+
+#机器人 
+robotCode: {{n_robot_code}}
+
+#飞书工具集:
+{{fn.toolset('mcp_dingtalk')}}
+
+''')
+
+//解析 LLM 输出的 JSON
+tpl_dingtalk, act_plan.run?_asPlanResult=true

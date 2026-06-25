@@ -1,0 +1,105 @@
+/*{
+  "title": "切换Git分支",
+  "description": "切换 Git 分支，如目录不存在则重新克隆",
+  "parameter": [
+    {
+      "name": "os",
+      "label": "操作系统",
+      "required": true
+    },
+    {
+      "name": "project_root",
+      "label": "项目根目录"
+    },
+    {
+      "name": "branch_name",
+      "label": "分支名称",
+      "required": true
+    },
+    {
+      "name": "git_repo_url",
+      "label": "Git仓库地址"
+    },
+    {
+      "name": "server_id",
+      "label": "服务器ID"
+    }
+  ],
+  "resultPlan": "n_switch_branch_plan_result",
+  "discoverable": false,
+  "life": "100"
+}*/
+
+assign('n_log', '')
+
+// 先检查目录是否存在
+when('n_os == "windows"', {
+  assign('n_check_dir_cmd', 'if exist "{{project_root}}" (echo EXISTS) else (echo NOT_EXISTS)')
+}, {
+  assign('n_check_dir_cmd', 'if [ -d "{{project_root}}" ]; then echo EXISTS; else echo NOT_EXISTS; fi')
+})
+n_dir_check, agt_cmd_executor.assistant?cmd={{n_check_dir_cmd}}&cmd_executor_name="检查项目目录"&server_id={{server_id}}
+assign('n_dir_exists', '{{n_dir_check?trim == "EXISTS"}}')
+when('!fn.bool(n_dir_exists)', {
+  assign('n_log', '{{n_log}}\n⚠️ 项目目录不存在，尝试重新克隆...')
+  // 定义 clone base 路径
+  when('n_os == "windows"', {
+    assign('n_clone_base', 'C:\\temp\\git-repository-clone')
+  }, {
+    assign('n_clone_base', '/tmp/git-repository-clone')
+  })
+  // 确保 base 目录存在
+  n_mkdir_result, agt_cmd_executor.assistant?cmd='mkdir -p "{{n_clone_base}}"'&cmd_executor_name="创建基础目录"&server_id={{server_id}}
+  // 尝试重新 clone
+  assign('n_is_https_url', '{{fn.startsWith(git_repo_url, "https://")}}')
+  assign('n_effective_git_url', "{{fn.gitHttpsToSsh(git_repo_url)}}")
+  when('fn.bool(n_is_https_url)', {
+    assign('n_clone_cmd', 'git clone -b {{branch_name}} "{{n_effective_git_url}}" "{{project_root}}"')
+  }, {
+    assign('n_clone_cmd', 'git clone -b {{branch_name}} "{{git_repo_url}}" "{{project_root}}"')
+  })
+  n_clone_result, agt_cmd_executor.assistant?cmd="{{n_clone_cmd}}"&cmd_executor_name="重新克隆Git仓库"&server_id={{server_id}}
+  n_clone_ok, act_func?script='''
+    def output = n_clone_result ?: ""
+    return output.contains("Cloning into") || output.contains("warning: You appear to have cloned an empty repository")
+  '''
+  when('!fn.bool(n_clone_ok)', {
+    assign('n_deploy_result', '❌ 重新克隆仓库失败\n\n命令: {{n_clone_cmd}}\n\n输出: {{n_cmd_executor_result}}')
+    // 返回失败
+    assign("n_switch_branch_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"true"}')
+  })
+  assign('n_log', '{{n_log}}\n✓ 重新克隆仓库成功')
+  // 返回成功
+  assign("n_switch_branch_plan_result", '{"n_log":"{{n_log}}","n_data":"{{project_root}}","is_plan_break":"false"}')
+})
+//## 正在检查当前分支
+when('n_os == "windows"', {
+  assign('n_current_branch_cmd', 'cd /d "{{project_root}}" && git rev-parse --abbrev-ref HEAD')
+}, {
+  assign('n_current_branch_cmd', 'cd "{{project_root}}" && git rev-parse --abbrev-ref HEAD')
+})
+n_current_branch_result, agt_cmd_executor.assistant?cmd={{n_current_branch_cmd}}&cmd_executor_name="获取当前Git分支"&server_id={{server_id}}
+assign('n_current_branch', '{{n_current_branch_result?trim}}')
+when('n_current_branch != branch_name', {
+  //## 正在切换分支 {{branch_name}}
+  when('n_os == "windows"', {
+    assign('n_git_cmd', 'cd /d "{{project_root}}" && git checkout {{branch_name}} && git pull')
+  }, {
+    assign('n_git_cmd', 'cd "{{project_root}}" && git checkout {{branch_name}} && git pull')
+  })
+  n_git_result, agt_cmd_executor.assistant?cmd={{n_git_cmd}}&cmd_executor_name="切换Git分支并拉取代码"&server_id={{server_id}}
+  assign('n_log', '{{n_log}}\n✓ 切换到分支: {{branch_name}}')
+  // 返回成功
+  assign("n_switch_branch_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_git_result}}","is_plan_break":"false"}')
+}, {
+  //## 当前已在分支 {{branch_name}}，执行 git pull
+  when('n_os == "windows"', {
+    assign('n_git_cmd', 'cd /d "{{project_root}}" && git pull')
+  }, {
+    assign('n_git_cmd', 'cd "{{project_root}}" && git pull')
+  })
+  n_git_result, agt_cmd_executor.assistant?cmd={{n_git_cmd}}&cmd_executor_name="拉取最新代码"&server_id={{server_id}}
+  assign('n_log', '{{n_log}}\n✓ 已在分支 {{branch_name}}，已拉取最新代码')
+  // 返回成功
+  assign("n_switch_branch_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_git_result}}","is_plan_break":"false"}')
+})

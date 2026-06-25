@@ -1,0 +1,36 @@
+/*
+{
+	"title":"提取页面数字并查询数据库",
+	"description":"从传入参数Page8中提取数字8，并查询kb_okp_page_data表中page字段等于8的数据",
+	"parameter":[
+		{
+			"name":"page",
+			"label":"页面参数，格式为Page+数字，例如Page8"
+		},
+		{
+			"name":"documentId",
+			"label":"documentId"
+		}
+	],
+	"life":100,
+	"version":1
+}
+*/
+// get page
+n_page,tpl_get_page
+
+// 所有页面结果
+assign("result", "{{n_page}}")
+
+
+// 调用大模型处理source值
+define('tpl_get_page', '''
+根据页码,提取页码数字放在字符串的括号中,直接返回json数据,不必解释
+例如: 页码: page1,page2
+返回:
+```json
+{"pages":"(1,2)"}
+```
+# 页码
+{{page}}
+''')

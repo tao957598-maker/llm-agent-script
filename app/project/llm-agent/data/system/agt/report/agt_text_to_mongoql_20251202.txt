@@ -1,0 +1,114 @@
+/*
+ {
+	 "title": "Query report data",
+	 "description": "Query report data by indicator desc.",
+	 "parameter": [
+	 	{
+	 		"name":"kbsFileName",
+	 		"label":"KBS filename"
+	 	},
+        {
+	 		"name":"indicatorDesc",
+	 		"label":"Indicator desc"
+	 	}
+	 ],
+	 "llmType": "",
+	 "uiEntrance": "chatdoc",
+	 "tag": "chatdoc",
+	 "life": "100"
+ }
+*/
+
+// params - list metadata
+assign("queryParams", '{"fileNamePrefix": "{{kbsFileName}}"}')
+
+//## Query metadata by filename: {{kbsFileName}}
+n_reportMetaData, act_api.doExecuteDynamic?name=ReportMetaData&dynamicParamData='{{queryParams}}'
+
+//## Search report table
+n_report_title, tpl_searh_title, psr_json
+
+when('!fn.hasValue(n_report_title.title)', {
+    //## Empty data
+	assign('reportData', '[]')
+}, {
+	// params - query by titles
+	assign("queryByTitles", '{"fileNamePrefix": "{{kbsFileName}}", "titles": "{{n_report_title.title}}", "dataLimit": 3}')
+
+	// Query metadata by title
+	n_titleMetaData, act_api.doExecuteDynamic?name=ReportMetaData&dynamicParamData='{{queryByTitles}}'
+
+	//## Generate MQL 
+	n_mql, tpl_gen_mql, psr_javascript
+
+})
+
+
+
+define('tpl_searh_title', '''
+你是MongoDB专家，你能根据Collection report_data格式，从报告元数据查找出满足用户需求的报告表，以Json格式返回。不要解释直接给出结果。
+
+# Collection report_data格式
+- fileName: 数据来源文件（例如 xlsx）
+- title: 报告表名
+- fields: 报告表字段字典 { fieldKey: desc }
+- data: 报告表数据
+
+# 用户需求：
+{{indicatorDesc}}
+
+# 返回示例（大多数只有一个，如果没有匹配的返回空，如果需要关联查询多个table则以逗号分割如table1, table2）：
+{
+	"title": "<matched table1, table2>"
+}
+
+# 报告元数据
+{{n_reportMetaData.data}}
+
+{{sys_hint}}
+''')
+
+
+define('tpl_gen_mql', '''
+你是MongoDB专家，你能灵活运用MongoDB 查询，聚合管道($project、$match、$group、$unwind等)，请帮我生成满足用户需求的查询js语句。解释思路后，给出结果。
+
+# 额外要求（重要增强项）：
+A. 所有参与过滤或投影的 data.xxx 字段必须自动过滤掉 null、空字符串("")、不存在($exists: true)
+B. 如果字段是日期类型，请使用 { $type: "date" } 并同时要求字段非空
+C. 所有进入 $project 的字段，必须在 $match 阶段自动加入非空校验：
+   - { field: { $exists: true, $ne: null, $ne: "" } }
+
+# 原始要求：
+1. 如果你生成的过滤条件有日期类型，则请使用$type: "date"
+2. title对应fields，不能在其他title中交叉使用，且title是必需的过滤条件
+3. 为方便阅读结果以```javascript xxx ```返回，且不要在js代码添加任何注释
+
+# titles列表 
+{{n_report_title.title}}
+
+# 建议流程：
+1. 根据用户需求从title，fields生成过滤条件，并投影成需要的字段.
+2. 所有用到的字段必须严格取自fields元数据，不得假设字段名.
+3. 使用data.xxx访问数据字段，并在返回数据时 $unwind "$data".
+4. 所有用到的字段自动加入非空、存在性过滤。
+
+# Collection report_data格式
+- fileName: 数据来源文件，生成的查询语句必须经过【文档路径】过滤
+- title: 报告表名
+- fields: 字段字典 { fieldKey: desc }
+- data: 表数据数组
+- 【文档路径】：是fileName的前缀部分，它是一个文件夹路径，生成的查询语句要经过它来做过滤
+
+
+# 用户需求：
+{{indicatorDesc}}
+
+# 文档路径
+{{kbsFileName}}
+
+# 可选的report_data元数据
+{{n_titleMetaData.data}}
+
+{{sys_hint}}
+''')
+

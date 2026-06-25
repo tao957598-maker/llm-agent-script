@@ -1,0 +1,60 @@
+/*
+{
+  "title": "FC UI Generator",
+  "description": "Generate UI JSON configuration from a single sentence description",
+  "parameter": [
+    {
+      "name": "ui_description",
+      "label": "UI Description Text"
+    }
+  ],
+  "tag": "UI Generation",
+  "uiEntrance": "",
+  "version": 1
+}
+*/
+
+// Call FC Prompt to generate UI JSON
+n_system_prompt,agt_fc_prompt
+
+// User description
+assign("user_prompt", '{{ui_description}}')
+
+// Call LLM to generate UI JSON
+n_ui_json, tpl_generate_ui,psr_json
+// Parse generated UI JSON
+assign("ui_result", '{{n_ui_json}}')
+
+// Output result
+assign("result", '{{ui_result}}')
+
+// Prompt
+define('tpl_generate_ui_test', '''
+  {{n_system_prompt}}
+
+  用户需要根据以下描述生成 UI JSON 配置：
+  {{user_prompt}}
+
+  请根据提供的系统提示词，分析用户需求并生成符合规范的 UI JSON 配置。
+''')
+
+// Prompt
+define('tpl_generate_ui', '''
+  {{n_system_prompt}}
+
+  用户需要根据以下描述生成适合移动端的 UI JSON 配置：
+  {{user_prompt}}
+
+  请根据提供的系统提示词，分析用户需求并生成符合规范的 UI JSON 配置。
+  
+  生成规则：
+  1. 去除移动端使用不到的配置项
+  2. 非特殊情况基本只需要每项输出一行input即可
+  3. 保持配置简洁明了，适合移动端设备
+  4. 确保配置与移动端Vant框架兼容
+  5. 生成英文页面
+  6. 直接输出表单项，去除card包裹，减少左右边距
+  7. 头部单独标题，不与表单项合并，并且给标题添加margin-top: 20px;
+  8. 表单项可以控制在10个左右，每项精简单词，尽量控制一个单词或者使用通俗的缩写
+  9. 表单不需要cancel按钮，只需要confirm或者submit按钮
+''')

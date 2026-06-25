@@ -1,0 +1,58 @@
+/*
+{
+	"title": "Search Requirement List",
+	"description": "Agent for searching requirement list",
+	"parameter": [
+	 	{
+	 		"name":"pages",
+	 		"label":"指定页码"
+	 	},
+		{
+			"name":"document_id",
+			"label":"文档ID",
+			"type":"knowledge_space"
+		}
+  ],
+  "life":1000,
+	"version": "1"
+}
+*/
+// pages
+when('pages == "0"', {
+  assign("sql", "SELECT * FROM kb_doc_req_features WHERE documentId = {{document_id}}")
+},{
+  assign("sql", "SELECT * FROM kb_doc_req_features WHERE documentId = {{document_id}} AND JSON_OVERLAPS(sourcePages, \"[{{pages}}]\")")
+})
+
+// feature
+n_features_kb,act_kb.selectBy?sql='{{sql}}'
+
+// featureIds
+n_featureIds,act_func?script='''
+	def featureIds = n_features_kb.collect { '"' + it.featureId + '"' }.join(',')
+	return featureIds
+'''
+
+// story
+n_stories_kb,act_kb.selectBy?sql='SELECT * FROM kb_doc_req_stories WHERE documentId = {{document_id}} AND featureId IN ({{n_featureIds}})'
+
+// storyIds 
+n_storyIds,act_func?script='''
+	def storyIds = n_stories_kb.collect { '"' + it.storyId + '"' }.join(',')
+	return storyIds
+'''
+
+// task
+n_tasks_kb,act_kb.selectBy?sql='SELECT * FROM kb_doc_req_tasks WHERE documentId = {{document_id}} AND storyId IN ({{n_storyIds}})'
+
+// n_req_list
+n_req_list,act_func?script='''
+	def req_list = [:]
+	req_list.features = n_features_kb
+	req_list.stories = n_stories_kb
+	req_list.tasks = n_tasks_kb
+	return req_list
+'''
+
+// return
+assign("return", "{{n_req_list}}")

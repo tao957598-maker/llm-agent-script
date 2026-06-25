@@ -1,0 +1,404 @@
+/*
+{
+	"title": "自动化测试-用例执行",
+	"description": "执行指定的测试用例",
+	"parameter": [
+	 	{
+	 		"name":"system",
+	 		"label":"系统名称"
+	 	},
+	 	{
+	 		"name":"test_no",
+	 		"label":"测试编号"
+	 	},
+	 	{
+	 		"name":"explore_mode",
+	 		"label":"运行模式",
+	 		"type":"select",
+	 		"args":[
+	 			{
+	 				"label":"生产模式",
+	 				"value":"0"
+	 			},
+	 			{
+	 				"label":"开发模式",
+	 				"value":"1"
+	 			},
+	 			{
+	 				"label":"维护模式",
+	 				"value":"2"
+	 			}
+	 		]
+	 	}
+	 ],
+	"llmType": "alias.middelqulity",
+	"resultPlan": "n_test_step,n_python_file,n_report",
+	"life": "100"
+}
+*/
+// Check requirement
+when('!fn.hasValue(test_no)', {
+	// Load default requirement
+	assign("test_no", "deposit_and_transfer_funds", "system", "XX")
+})
+
+// Use selenium
+assign('pythonType', 'selenium', 'explore_mode', '{{fn.optional(explore_mode,1)}}', 'subfolder', '{{test_no}}')
+// Send product mode information to RPA
+assign('pythonType11','{"explore_mode":{{explore_mode}},"test_system":{{system}},"test_no":{{test_no}}}')
+act_rpa.send?command=SwitchExploreMode&name={{fn.json('explore_mode,explore_mode,test_system,system,test_no,test_no')}}
+// Load business information from KB
+n_envinfo, act_kb.select?name=kb_testcase_biz&column=envinfo&where='{"name":"{{system}}"}'
+// Query test steps from KB
+n_steps, act_kb.select?name=kb_testcase_step&column=step&where='{"test_no":"{{test_no}}"}'\
+	act_func?name=SortPlan&plans={{sys_last_result}}
+// Verify test steps size
+vrf_flag?value='n_steps?size > 0'
+
+// Execute the test steps
+foreach('n_test_step', 'n_steps', {
+	// Reset system variables
+	act_memory.forgetSystemVariable\
+		act_memory.increase?var=count_{{n_test_step.index}}&max=10
+
+	// Prepare to call agent based on product mode
+	when('fn.equals(explore_mode, 0)', {
+		// Call agent to run test case
+		agt_test_step_run_prod?current_step={{n_test_step.item}}&test_no={{test_no}}&system={{system}}
+		
+		// End flow in advance
+		on_failure({
+			act_flow.go?plan=n_report
+		})
+	}, {		
+		// Call agent to build and run test case
+		agt_run_test_case?current_step={{n_test_step.item}}&steps={{n_test_step.items}}&disableRead={{disableRead!}}
+		// html to kb 知识库导入
+		// expression(true, 'act_flow.wait?second=5')
+		// n_html_mardown, act_rpa.send?command=GetHtml2Mardown
+		// act_kb.importData?name=kb_testcase_step&data={{sys_last_result}}
+
+
+
+	})
+})
+
+// Update test result to KB
+act_kb.merge?name=kb_testcase&columnValues='{"test_result":"Pass"}'&where='{"test_no":"{{test_no}}"}'
+
+// test_notest_notest_no
+assign('Generate_test', '{{test_no}}')
+// Generate test report
+
+n_report, agt_test_wordreport?test_no={{test_no}}
+
+/////////// Load script information（Generate temporarily if not available） //////////////////////
+// Parameters: 1.current_step ==> python tool; 2.steps ==> StepTestInfo
+// Agent for building and running scripts
+agent('agt_run_test_case', {
+	// Prepare to run test step
+	n_python_file, act_python.read?requirement={{current_step}}&disableRead={{disableRead}}
+
+	// Check script type
+	when("python_code=='jsonl'", {
+		// Call new Agent to run subtasks
+		agt_test_steps_run?test_no={{sub_test_no}}&system={{system}}&explore_mode={{explore_mode}}
+	}, {
+		// Check if script is generated
+		when("!n_python_file.hasFilename()", {
+			// Identify task type
+			n_gen_code_begin, tpl_get_testcase_type, act_func?name=SubmitFormData
+	
+			// Prepare to generate script
+			when("tpl_get_testcase_type.taskType=='DATA_LOAD_TASK'", {
+				// Analyse the requirement and generate subtasks
+				agt_test_steps?test_no={{test_no}}_{{n_test_step.index+1}}&steps={{SubmitFormData}}&system={{system}}\
+					act_python.write?requirement={{current_step}}&jsonl='{"sub_test_no":"{{test_no}}_{{n_test_step.index+1}}" }'
+			}, {
+				// Call selenium agent to generate script and run it
+				n_python_file2, agt_gen_selenium_code?current_step={{current_step}}&steps={{steps}}&envinfo={{n_envinfo}}
+			})
+		}, {
+			// Run test step
+			n_python_result, act_rpa.send?name={{python_file}}&command=RunScript
+			
+			// Save execution result to KB
+			act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,n_python_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+	
+			// Handle error
+			on_failure({
+				// Waiting 5 seconds
+				expression(true, 'act_flow.wait?second=5')
+	
+				// Run test step again
+				n_python_result2, act_rpa.send?name={{python_file}}&command=RunScript
+	
+				// Try to re-generate script
+				act_flow.go?plan=n_gen_code_begin
+			}, 2)
+		})
+	})
+})
+
+// Parameters: 1.current_step ==> python tool; 2.steps; 3.n_envinfo ==> build memory variables: step_test_info
+// Agent for generating script
+agent('agt_gen_selenium_code', {
+	// Remove the old script
+	act_python.remove?requirement={{current_step}}
+
+	// Choose sub agent to generate script
+	when("tpl_get_testcase_type.taskType=='VERIFICATION_TASK'", {
+		// Call find agent to verify element
+		agt_test_findelement?test_no={{test_no}}&current_step={{current_step}}&steps={{steps}}&envinfo={{n_envinfo}}
+	}, {
+		// Call selenium agent to generate code
+		agt_test_selenium?test_no={{test_no}}&current_step={{current_step}}&steps={{steps}}&envinfo={{n_envinfo}}&system={{system}}&taskType={{tpl_get_testcase_type.taskType}}
+		
+		// Check if dialog exists
+		when('agt_test_selenium.hasDialog', {
+			// 考虑用tpl自动检测：n_test_step.nextItem
+			// Add new step
+			n_plan_result, act_plan.add?var=n_test_step&plan='点击关闭弹窗的按钮_{{n_test_step.index+1}}'
+			
+			// Save to KB
+			when('n_plan_result.success', {
+				// Clean old plan and save new plan to KB
+				act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'\
+					act_kb.convert?data={{n_test_step.items}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'\
+					act_kb.importData?name=kb_testcase_step&data={{sys_last_result}}
+			})
+		})
+		
+		// Return result
+		assign('result', '{{agt_test_selenium.python_file}}')
+	})
+	
+	on_failure({
+		// Collect page information
+		n_collect_page, act_rpa.send?command=CollectPageInfo\
+			act_func?name=StepTestInfo
+
+		// Load page information of current step
+		n_task_page_info, act_kb.select?name=kb_testcase_step_explorer&where='{{fn.json("test_no, test_no, step, current_step")}}'
+		
+		// Check whether to roll back to the previous task
+		tpl_flow_back
+		
+		// Check whether to abort the task and declare failure
+		tpl_flow_fix_or_back, psr_json_python
+		
+		// Check screenshot
+		rag_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("test_no, test_no, step, current_step")}}', tpl_analyse_screenshot
+		 
+		when('tpl_analyse_screenshot.behavior=="giveup"', {
+			// Announce task failure
+			act_flow.fail
+		}, {
+			// Adjust plan
+			act_plan.change?var=n_test_step&plan={{tpl_analyse_screenshot.next_step}}&operation={{tpl_analyse_screenshot.behavior}}
+		})
+	})
+})
+
+// 多次失败后的流程回退-1
+define('tpl_flow_back', '''
+	/*{
+		"llm_type":""
+	}*/
+	请结合"完整的测试步骤"判断:
+	1. 结合"完整测试步骤"分析"本次局部测试步骤"应该所在的页面，对比当前的实际所在页面(参见“页面相关信息”的字段“page”)，两者是否一致。 
+	2. 页面的错误信息显示为：【{{n_task_page_info.tip_message!}}】，它是否为"本次局部测试步骤"多次执行失败的原因。
+    3. 结合下面的最近几次代码执行的反馈，检查是否存在某个中间步骤的遗漏执行，导致"本次局部测试步骤"多次执行失败(目前已经修正的总次数为【{{sys_run_count}}】次).
+	4. 前面的步骤执行错误，导致"本次局部测试步骤"多次执行失败. 比如：当前页面需要随机从多个元素中点击一个，但是因为前面查询有问题，导致页面元素信息的elements没有可点击元素
+	5. 当前的尝试推理任务类型为:{{tpl_get_testcase_type}}, 应考虑采用其他任务类型的思考方案，对当前步骤重新尝试
+
+	# 按上述判断，直接用JSON返回结果：
+	1. 如果需要重新执行之前步骤，思考要退回到完整测试步骤中的哪一步，用JSON返回：{{fn.task().thought("多次执行失败的原因是XXX").plan('n_test_step', 'step_XXX').assign('disableRead', 'true')}}
+	(其中, XXX为数字，指完整测试步骤中的某一步，为避免浪费已经执行的步骤，优先考虑逐步回退) 
+	2. 否则，由后续逻辑思考，用JSON返回：{{fn.task().thought("多次执行失败的原因是XXX").plan('next')}}
+	
+	# 历史的错误信息，仅供参考
+	{{fn.dataRange(sys_failure_task.result, -1, 0)}}
+	
+	# 页面相关信息
+	{{fn.select('kb_testcase_step_explorer','*','test_no, test_no, step, current_step')}}
+	
+	# 本次局部测试步骤为：
+	{{current_step}}
+
+	# 完整的测试步骤为：
+	{{steps}}
+''')
+
+// 多次失败后的流程回退-2（待优化该流程）
+define('tpl_flow_fix_or_back', '''
+	/*{
+		 "llm_type":""
+	 }*/
+	你是一个熟悉selenium4的大模型，现在有一个局部的测试用例描述，已经多次生成python脚本失败，目前已经修正的总次数为【{{sys_run_count}}】次。
+
+	# 局部的测试用例描述：
+	{{current_step}}
+
+	# 主模块涉及的测试步骤为：
+	{{steps}}
+	
+	# 被测试的页面信息：
+	{{n_task_page_info}}
+
+	# 最近的上次执行结果为：
+	{{sys_failure_task.result}}
+
+	# 请判断是由后续逻辑继续修正python脚本，还是直接选择重新生成python脚本，请用JSON返回你的选择。注：思考时请仔细的逐一思考：
+	原因1. 测试用例任务已经执行成功，虽有个别错误，但局部的测试用例描述的要求已经达到。 
+	返回JSON格式：{{fn.task().thought('原因1. xxx').plan('n_test_step', 'next')}}
+
+	原因2. 页面信息存在弹窗，由后续逻辑思考，跳过本次判断。
+	返回JSON格式：  {{fn.task().thought('原因2. xxx')}}
+
+	原因3. python脚本本身并没有错误，界面信息表明当前测试案例已经无法继续往下执行，本轮测试宣告失败
+	返回JSON格式： {{fn.task(false).thought('测试案例不通过的原因XXX')}}
+
+	原因4. 无法做出合适判断，由后续逻辑思考，跳过本次判断。
+	返回JSON格式： {{fn.task().thought('原因4. xxx')}}
+
+	原因5. 当前的修正总次数为【{{sys_run_count}}】次，错误过多：
+	返回JSON格式： {{fn.task().thought('原因4. xxx，回到plan n_collect_page，重新生成python脚本').plan('n_collect_page')}}
+''')
+
+define('tpl_get_testcase_type', '''
+	/*{
+		 "llm_type":""
+	 }*/
+	你是一名测试工程师，请识别下面的“局部测试用例”的类型(共1步)，用json格式返回识别结果
+	
+	# 局部测试用例：
+	{{current_step}}
+
+	# 完整测试步骤：
+	{{steps}}
+	
+	# JSON格式：
+	VERIFICATION_TASK：涉及检查系统功能、行为、数据状态或界面元素是否符合预期的任务。这包括但不限于交易成功验证、数据一致性检查、界面元素存在性和可见性验证等
+	返回JSON: {{fn.task().result('{"taskType":"VERIFICATION_TASK"}')}}
+	DATA_LOAD_TASK：特指需要加载外部数据或预备测试数据的任务
+	返回JSON: {{fn.task().result('{"taskType":"DATA_LOAD_TASK", "orderName":"表单数据名称XXX"}')}}
+	OPERATION_EXECUTE_TASK：涉及执行系统操作或功能的任务，如输入数据、点击按钮、提交表单等。这些任务通常不直接涉及验证，但可能为后续验证提供条件或数据
+	返回JSON: {{fn.task().result('{"taskType":"OPERATION_EXECUTE_TASK"}')}}
+	DYNAMIC_SELECT_TASK：涉及动态点击或定位元素的任务，如随机选择记录、动态过滤元素等。这些任务通常不直接涉及验证，但可能为后续验证提供条件或数据
+	返回JSON: {{fn.task().result('{"taskType":"DYNAMIC_SELECT_TASK"}')}}
+''')
+
+define('tpl_analyse_screenshot', '''
+	/*{
+	 "llm_type":""
+	}*/
+	你是一名测试工程师，当前的局部测试用例执行后，出现了错误信息。 请观察当前界面截图，思考下一步应如何处理，并将思考结果用JSON格式返回：
+	JSON格式： {
+		"thought": {
+			"keywords": "界面截图中的关键元素中与测试错误有关的信息",
+			"current_step": "{{current_step}}",
+			"original_next_step": "原来规划的完整测试步骤中的下一步",
+			"reasoning":[
+				"检查界面截图中的关键元素是否按预期显示（例如，按钮是否可用、文本框是否填充正确等）。",
+            	"验证功能是否按预期工作（例如，点击按钮后是否跳转到正确的页面、是否触发了预期的弹出框等）。",
+				"检查current_step是否合理，尽量拆分为带有序号的小步骤。",
+            	"如果发现任何问题，思考是否需要调整测试用例或测试步骤。",
+            	"考虑是否有额外的测试步骤需要添加，以确保测试的全面性和准确性。"
+			]
+		},
+		result: {
+			'behavior': 'add/update/giveup',	// add或update下一步的局部测试步骤。giveup表示缺乏足够信息思考问题的解决方案。
+			'next_step': 'xxx'					// hehavior为add/update时，调整后的下一步的局部测试步骤。behavior为giveup时，为空。 
+		}
+	}
+	
+	# 局部测试步骤：
+	{{current_step}}
+
+	# 完整测试步骤：
+	{{steps}}
+	
+	# 错误信息
+	{{sys_hint}}
+	
+	{{fn.imageFlag(sys_last_result)}}
+''')
+
+
+// 未启用：多次失败后的流程回退-判断类型
+define('tpl_switch_testcae_type', '''
+	你是一名测试工程师，请识别下面的局部测试用例的类型，之前认定的任务类型为：{{tpl_get_testcase_type}}，出现的无法解决的错误信息，请分析是否应该调整任务类型重新思考。 用json格式返回结果
+	
+	# JSON返回结果：
+	1. 如果需要调整任务类型，重新思考当前步骤，用JSON返回：{{fn.task().thought("之前认定的任务类型XXX不正确，应该调整为“任务类型说明”中的XXX").plan('n_test_step', 'step_NNN')}}. NNN为完整测试步骤的第N步
+	2. 否则，由后续逻辑思考，用JSON返回：{{fn.task().plan('next')}}
+	
+	# 错误信息
+	{{fn.dataRange(sys_failure_task.result, 0, 1)}}
+	
+	# 局部测试用例：
+	{{n_test_step.item}}
+
+	# 完整测试步骤：
+	{{steps}}
+	
+	# 任务类型说明
+	VERIFICATION_TASK：涉及检查系统功能、行为、数据状态或界面元素是否符合预期的任务。这包括但不限于交易成功验证、数据一致性检查、界面元素存在性和可见性验证等
+	DATA_LOAD_TASK：特指需要加载外部数据或预备测试数据的任务
+	OPERATION_EXECUTE_TASK：涉及执行系统操作或功能的任务，如输入数据、点击按钮、提交表单等。这些任务通常不直接涉及验证，但可能为后续验证提供条件或数据
+	DYNAMIC_SELECT_TASK：涉及动态点击或定位元素的任务，如随机选择记录、动态过滤元素等。这些任务通常不直接涉及验证，但可能为后续验证提供条件或数据
+''')
+
+// 未启用：思考失败时的流程
+define('tpl_explorer_failure', '''
+	/*{
+	 "llm_type":""
+	}*/
+	你是一名自动化测试工程师，在测试"本次局部操作"时，遇到程序报错。请结合页面信息的分析，分析下一步改如何处理，用JSON格式给出回复：
+	{
+		"think": "观察到当前页面的情况，它处于什么状态下，和当前步骤应该处于的状态的吻合度如何，还有必要修正吗，是基于哪一步进行修正呢",
+		"speak_result": {"no":"1-6中的某个数字", "explain": "结论的解释说明"}
+	}
+	
+	# 可选的思考结论(speak_result.no):
+	1. 退回上一个步骤，重新执行
+	2. 退回之前的某个步骤，重新执行
+	3. 尽管多次修正失败，依然有改进的空间，通知开发人员继续修正
+	4. 系统环境问题，放弃执行
+	5. 测试用例错误，停止执行
+	6. 需要更多日志分析，或与开发人员沟通，此时无法直接判断（因为沟通成本很高，请谨慎选择该结论!!!)
+	
+	# 本次局部操作步骤：
+	{{current_step}}
+	
+	# 完整操作步骤：
+	{{steps}}
+	
+	# 历史的错误信息，不一定适合现在的情形，仅供参考
+	{{fn.dataRange(sys_failure_task.result, -1, 0)}}
+	
+	# 当前页面的元素：(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, value:表单元素的值, id: 用于定位的元素id, children:[子元素信息]}...])：
+	{{fn.str(fn.func('StepTestInfo'), 'simplepageinfo')}}
+	
+	{{fn.select('kb_testcase_step_explorer','*','test_no, test_no, step, current_step')}}
+''')
+
+// 未启用：将判断的结果转换为可执行的代码
+define('tpl_use_tool', '''
+	你是一名自动化测试工程师，将上一个测试工程师的反馈，转换为JSON格式：
+	
+	# JSON格式
+	1. no为1或2, 返回JSON: {{fn.task().plan('n_test_step', 'step_XXX').assign('disableRead', 'true')}}
+	2. no为3, 返回JSON: {{fn.task().plan('next')}}
+	3. no为4或5或6, 返回JSON: {{fn.task(false)}}
+	
+	# 上一个测试工程师的反馈（格式为JSON: no表示序号，explain表示细节说明）
+	{{sys_last_result.speak_result}}
+	
+	# 本次局部操作步骤：
+	{{current_step}}
+	
+	# 完整操作步骤：
+	{{steps}}
+''')

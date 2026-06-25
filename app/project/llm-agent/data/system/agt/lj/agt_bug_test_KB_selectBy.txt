@@ -1,0 +1,44 @@
+/*
+{
+	"title":"agt_bug_test_KB_selectBy",
+	"description":"kb.selectBy查询报错，参数特殊字符",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_result_data",
+	"version":1
+}
+*/
+assign("system","HSBC")
+assign("version","")
+assign("n_tmp_step",'Input Username "KEVIN_HKUAT"')
+
+// Matching similarity test step -- ERROR
+//n_result, act_kb.selectBy?sql='SELECT * FROM kb_testcase_step WHERE application = "{{system}}" and (version = "{{version}}" or version is null ) and step LIKE "%{{n_tmp_step}}%" and result is not null '
+
+// 不要定义 容易报错，改用groovy			
+// assign("n_param","['{{system}}','{{version}}'], '{{n_tmp_step}}']") 
+
+// groovy script: sql参数组装为list。注意顺序：和？对应的参数一致
+n_param,act_func?script='''
+	// 定义空list
+    def v = []
+    v << system   // 使用左移操作符添加元素 
+    v << version  
+    v << n_tmp_step    
+'''
+// n_result, act_kb.selectBy?sql='SELECT * FROM kb_testcase_step WHERE application = ? and (version = ? or version is null ) and step LIKE ? and result is not null '&parameters="{{n_param}}"
+
+
+// 如果groovy取值，spider_deep_result.login_redirect_uri，则等价于spider_deep_result.collect { it.guest_redirect_uri } 是个list ，改用spider_deep_result[0].guest_redirect_uri或spider_deep_result.first().guest_redirect_uri
+assign('spider_deep_result', """
+[{"guest_redirect_uri":"/index","login_redirect_uri":"/index"}]
+""")
+
+n_param,act_func?script='''
+			def v = []
+			v << spider_deep_result.first().guest_redirect_uri
+			v << spider_deep_result[0].login_redirect_uri
+		'''
+// 找到任务表并更新任务表状态 测试/转义字符
+act_kb.selectBy?sql='UPDATE kb_spiderdeep_content SET guest_redirect_uri=?, login_redirect_uri=? WHERE id = "255613164792020992"'&parameters={{n_param}}

@@ -1,0 +1,94 @@
+/*
+{
+	"title":"Generate Step Test",
+	"description":"生成测试步骤",
+	"parameter":[
+		{
+			"name":"system_name",
+			"label":"系统"
+		},
+		{
+			"name":"url",
+			"label":"Base URL"
+		},
+		{
+			"name":"current_uri",
+			"label":"当前路由"
+		},
+		{
+			"name":"cookie",
+			"label":"cookie"
+		},
+		{
+			"name":"version",
+			"label":"版本"
+		},
+		{
+			"name":"continue",
+			"label":"继续执行"
+		},
+		{
+			"name":"explore_mode",
+			"label":"运行模式",
+			"args":[
+				{
+					"label":"元素步骤探索模式",
+					"value":"stepExplorationMode"
+				},
+				{
+					"label":"URL探索模式",
+					"value":"urlExplorationMode"
+				},
+				{
+					"label":"文件下载模式",
+					"value":"FileDownExplorationMode"
+				}
+			],
+			"required":true,
+			"type":"select"
+		},
+		{
+			"name":"custom_param",
+			"label":"补充参数内容（账号密码等补充）"
+		},
+		{
+			"name":"spider_deep_num",
+			"label":"最大采集深度"
+		}
+	],
+	"life":1000,
+	"version":1
+}
+*/
+// current_uri
+when('!fn.hasValue(current_uri)', {
+  assign("current_uri", "")
+})
+// cookie
+when('!fn.hasValue(cookie)', {
+  assign("cookie", "")
+})
+// version
+when('!fn.hasValue(version)', {
+  assign("version", "1.0")
+})
+
+// is continue?
+when('!fn.hasValue(continue)', {
+  // first time
+	n_first_result,agt_loop_steps?system_name="{{system_name}}"&url="{{url}}"&current_uri={{current_uri}}&cookie={{cookie}}&version={{version}}&custom_param={{custom_param}}&explore_mode={{explore_mode}}&spider_deep_num={{spider_deep_num}}&time="first"
+	// check first result
+	when('n_first_result == "false"', {
+		// end
+		act_flow.go?plan=end
+	})
+})
+
+// 1000 loop
+foreach('n_l_data', '[1..1000]', {
+	n_loop_result,agt_loop_steps?system_name="{{system_name}}"&url="{{url}}"&current_uri={{current_uri}}&cookie={{cookie}}&version={{version}}&custom_param={{custom_param}}&explore_mode={{explore_mode}}&spider_deep_num={{spider_deep_num}}&time="loop"
+	when('n_loop_result == "false"', {
+		// end
+		act_flow.go?plan=end
+	})
+})

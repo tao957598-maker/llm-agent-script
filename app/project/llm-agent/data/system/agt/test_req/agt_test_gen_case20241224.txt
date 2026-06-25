@@ -1,0 +1,362 @@
+/*
+{
+	"name": "页面自动化测试-需求分析",
+	"description": "RQ+TestCase",
+	"parameter": [
+	 	{
+	 		"name":"system",
+	 		"label":"待测系统"
+	 	},
+		{
+	 		"name":"positive_num",
+	 		"label":"生成正例子个数" 
+	 		 
+	 	},
+		{
+	 		"name":"negative_num",
+	 		"label":"生成反例子个数" 
+	 		 
+	 	},
+	 	{
+	 		"name":"requirement",
+	 		"label":"需求文档",
+	 		"type":"file"
+	 	},
+
+	 ],
+	"llm_type": "Qwen/Qwen2.5-32B-Instruct",
+	"resultPlan": "test_point, n_test_point,n_test_case"
+	"life": "10000",
+	"temperature":0,
+	"modified_by": "lht",
+	"modified_time": "2024-11-28",
+	"version": 1
+}
+*/
+when('!fn.hasValue(negative_num)', {
+  assign("negative_num", "2")
+})
+when('!fn.hasValue(positive_num)', {
+  assign("positive_num", "10")
+})
+assign("positive_num222", "{{positive_num}}")
+assign("requirement", "{{requirement}}")
+n_requirement,act_func.read?filename='{{requirement}}'
+assign("product", "金融领域保险","requirement", "{{n_requirement}}","requirement_score", ">=7")
+
+
+// 需求文档评分
+tpl_requirement_analysis_scoring
+
+when('tpl_requirement_analysis_scoring.compare==true') {
+	// 抽取功能点 功能点: 显示list,输入界面(新增、修改), 查询,  增加一个字段,让GPT说明从原文对应内容提取到该功能点
+    tpl_gen_test_point
+	assign('test_point', '{{tpl_gen_test_point}}')
+	tpl_gen_test_point_check
+	assign('test_point', '{{tpl_gen_test_point_check}}')
+	
+	// 变量控制, Check 人工点确认交互,例如弹窗 
+	act_flow.wait?second=3
+
+	foreach('n_test_point', 'test_point.data', {
+		
+		assign('test_point_data', '{{n_test_point.item}}')
+		assign('test_point_index', '{{n_test_point.index}}')
+		
+		//  抽取功能点的业务逻辑 1-2正例(参数2)  10-20反例SIT(参数)  ( 公告新增 -> 正例子:新增成功 反例子: 各种创建失败场景  ) 
+		tpl_test_logic
+		
+
+		// for 正反例 -> 详细测试用例
+		foreach('n_positive', 'tpl_test_logic.positive', {
+			assign('logic_data', '{{n_positive.item}}')
+			// 生成详细测试用例
+			n_test_case, tpl_check_gen_test_case
+			// 注入测试数据
+			agt_crm_kb20241231?test_case={{n_test_case}}
+			// 获取agt最后一步的结果
+			assign("final_test_case", '{{sys_last_result}}')
+			// Check 人工点确认交互,例如弹窗
+			act_flow.wait?second=3
+            // 转换数据为JIRA CASE数据
+            n_jira_map, act_func?name='Jira.getResultMap(final_test_case)'
+            // 调用JIRA保存单个CASE
+            // agt_jira_test_create_issue.jira?list={{n_jira_list}}
+             n_jira_key, act_func?name='Jira.saveIssue(n_jira_map)'
+            assign('new_json', '{"system_type":{{system}},"test_point_data":{{test_point_data}},"test_case":{{final_test_case}},"jira_key":{{n_jira_key}}}')
+
+            // 保存为json文件
+            act_python.write?requirement='{{test_module_index}}_{{gen_test_case_index}}_'&pythonType='json'&pythonCode='{{new_json}}'&subfolder='crm_test_case'
+			// 导入知识库
+			act_kb.defineAndImportData?tableName=kb_testcase_crm010217&data='{{new_json}}'
+            // 调用agt_test_steps
+            agt_test_steps.test_fast?system='crm'&test_no={{n_jira_key}}&steps={{final_test_case}}&exploreMode=1
+            // 获取测试结果   test_result     kb-test
+            n_result, act_kb.select?name=kb_testcase&column=test_result&where='{"test_no":"{{n_jira_key}}"}'
+            // Generate test report
+            n_report, agt_test_wordreport.test_fast?test_no={{n_jira_key}}
+            //assign('map', '{"issueKey":{{n_jira_key}},"status":{{n_result}},"testReportPath":"{{n_report}}"}')
+            assign('map', '{"issueKey":{{n_jira_key}},"status":{{n_result[0]}},"testReportPath":"{{n_report}}"}')
+            //执行更新
+            n_jira_update, act_func?name='Jira.updateIssue(map)'
+
+			act_flow.go?plan=end
+			
+			})
+
+		// for 正例模块之间串联测试场景(整个流程串联) -> 详细测试用例
+
+
+
+
+
+		})
+		
+	
+	
+
+}
+
+when('tpl_requirement_analysis_scoring.compare==false') {
+    tpl_requirement_fix_analysis
+	act_flow.go?plan=end
+}
+
+
+// **++++++++++====== 完整度，评价体系，评分 ======++++++++++**
+define('tpl_requirement_analysis_scoring', '''
+# 需求文档的内容
+	<requirement>
+	{{requirement}}
+	</requirement>
+- Role: 高级需求分析专家
+- Background: 用户需要对特定产品的需求文档进行完整性分析，并根据预设的评分标准给出评分。
+- Profile: 你是一名对"{{product}}"业务非常熟悉的高级需求分析人员，拥有丰富的文档评估经验和敏锐的业务洞察力。
+- Skills: 你具备深入分析需求文档的能力，能够准确评估文档的完整性，并根据预设的评分标准给出公正的评分。
+- Goals: 对需求文档进行完整性分析，并给出1-10分的评价分，同时根据定义的比较表达式进行判断。
+- Constrains: 评价必须基于文档内容的完整性和业务相关性，评分应公正、客观。
+- OutputFormat: markdow JSON格式，包含评分和比较结果。
+- Workflow:
+  1. 阅读并理解需求文档内容。
+  2. 根据文档的完整性和业务相关性给出评分。
+  3. 根据预设的评分标准进行比较表达式判断。compare根据定义的比较表达式{{requirement_score}}和score进行判断,返回True or False
+  4. 输出markdow JSON格式的结果。
+- Examples:
+```json
+	{
+		score: 1-10分,
+		compare: true or false
+	}```
+''')
+
+// **++++++++++====== 需求文档更改建议 ======++++++++++**
+define('tpl_requirement_fix_analysis', '''
+# 需求文档的内容
+	<requirement>
+	{{requirement}}
+	</requirement>
+- Role: 高级需求分析专家
+- Background: 用户需要对特定产品的需求文档进行完整性分析，现在评分为{{tpl_requirement_analysis_scoring.score}}。
+- Profile: 你是一名对"{{product}}"业务非常熟悉的高级需求分析人员，拥有丰富的文档评估经验和敏锐的业务洞察力。
+- Skills: 你具备深入分析需求文档的能力，能够准确评估文档的完整性，并根据评分,给出合理的文档修改建议。
+- Goals: 对需求文档进行完整性分析，列出出合理的文档修改建议。
+- Constrains: 必须基于文档内容的完整性和业务相关性，给出合理建议。
+- OutputFormat:markdow JSON格式，建议内容。
+- Workflow:
+  1. 阅读并理解需求文档内容。
+  2. 根据文档的完整性和业务相关性给出给出合理建议。
+  3. 输出markdow JSON格式的结果。
+- Examples:
+	{
+		data: 建议内容
+	}
+''')
+
+// **++++++++++====== 抽取功能点 ======++++++++++**
+define('tpl_gen_test_point', '''
+# 功能点抽取任务描述  
+
+**需求文档内容：**  
+<requirement>  
+{{requirement}}  
+</requirement>  
+
+**任务角色：** 软件测试架构师  
+**背景信息：** 用户需要对软件进行功能点的细粒度抽取，以实现更精准的测试覆盖与管理，确保测试效率。  
+**角色画像：**  
+- 你是一位经验丰富的软件测试架构师，擅长从需求中提取功能点并设计对应的测试用例。  
+- 具备软件测试理论、测试设计与测试管理的专业技能，能够高效组织和规划测试活动。  
+
+**目标：**  
+- 从需求文档中提取清晰的功能点，确保每个功能点具有明确的测试范围。  
+
+**约束条件：**  
+- 功能点的提取需贴合需求文档内容，确保描述准确、全面，不遗漏关键点。  
+
+**输出要求：**  
+以Markdown格式输出功能点列表，JSON结构包含以下信息：  
+- **test_point**: 功能点的描述  
+- **req**: 对应的需求原文内容  
+
+**工作流程：**  
+1. 分析需求文档内容，逐条提取功能点。  
+2. 确保每个功能点的描述准确完整，避免冗余或遗漏。  
+3. 将功能点按以下JSON格式输出：  
+
+```json
+{
+  "data": [
+    {"test_point": "功能点描述", "req": "需求原文内容"},
+    ...
+  ]
+}
+```  
+无需进行额外解释，仅输出结果即可。  
+''')
+
+// **++++++++++====== 检查功能点 ======++++++++++**
+define('tpl_gen_test_point_check', '''
+	/*{
+	 "llm_type":""
+	}*/
+# 功能点检查与完善任务描述  
+
+**需求文档内容：**  
+<requirement>  
+{{requirement}}  
+</requirement>  
+
+**已拆分功能点列表：**  
+{{test_point}}  
+
+**任务角色：** 软件测试架构师  
+**背景信息：** 用户需要对软件功能点进行检查和完善，以确保测试规划和管理更加精准，避免重复或遗漏，提升测试覆盖率和效率。  
+**角色画像：**  
+- 你是一位经验丰富的软件测试架构师，擅长分析功能点，设计测试用例，并确保功能点描述清晰、完整且无冗余。  
+- 具备软件测试理论、测试管理与自动化测试的专业技能，能够高效执行功能点的优化工作。  
+
+**目标：**  
+- 对已拆分的功能点列表进行检查，消除重复项、补充遗漏点，并确保功能点的粒度清晰且无层级冲突。  
+- 删除重复test_point
+
+**约束条件：**  
+- 功能点应遵循需求文档内容，与软件架构一致，确保描述精准、独立、完整。  
+- 输出的功能点列表不应包含父子关系，所有功能点需为独立的子功能点。  
+
+**输出要求：**  
+以Markdown格式输出完善后的功能点列表，JSON结构如下：  
+- **test_point**: 功能点的描述  
+- **req**: 对应的需求原文内容  
+
+**工作流程：**  
+1. 检查已拆分功能点列表，删除重复项。  
+2. 补充遗漏的功能点，确保需求内容的完整性。  
+3. 删除不符合需求或无关的功能点。  
+4. 确保列表中功能点均为独立子功能点，移除任何存在父子关系的条目。  
+5. 按以下JSON格式输出完善结果：  
+
+```json
+{
+  "data": [
+    {"test_point": "功能点描述", "req": "需求原文内容"},
+    ...
+  ]
+}
+```  
+无需进行额外解释，仅输出结果即可。  
+''')
+
+
+
+// **++++++++++====== 抽取功能点的业务逻辑 ======++++++++++**
+define('tpl_test_logic', '''
+### 提示词模板
+
+**功能点描述：**  
+`{{test_point_data}}`  
+
+**任务角色：** 软件测试架构师  
+
+**背景信息：**  
+- 你需要基于功能点描述生成业务逻辑测试用例，包括正例和反例。  
+- 正例：描述功能点的预期成功场景，1-2个正例。  
+- 反例：描述功能点可能失败的场景，10-20个反例。  
+- 指定适合该业务逻辑的测试方法论，用于高效设计和执行测试用例。  
+
+**工作流程：**  
+1. 阅读功能点描述，分析其业务逻辑。  
+2. 根据功能点预期生成{{positive_num}}正例，确保描述预期成功场景。  
+3. 列出{{negative_num}}反例，覆盖各种失败场景。  
+4. 根据业务逻辑复杂度，指定适用的测试方法论（如边界值分析、等价类划分、组合测试等）。  
+5. 按 JSON 格式输出正反例和测试方法论。  
+
+**输出要求：**  
+- 对功能点生成如下结构的业务逻辑正反例：  
+```json
+  {
+    "positive": [
+      {
+        "test_point": test_point
+        "logic": "正例1描述",
+        "test_methodology": "适用的测试方法论描述"
+      },
+	  {...},...
+    ],
+	"negative": [
+		{
+        "test_point": test_point
+        "logic": "反例1描述",
+        "test_methodology": "适用的测试方法论描述"
+      },
+	  {...},...
+    ]
+  }
+```
+无需解释，仅输出结果即可。  
+
+''')
+
+
+// **++++++++++====== 生成详细测测试步骤 ======++++++++++**
+define('tpl_check_gen_test_case', '''
+	/*{
+	 "llm_type":""
+	}*/
+# 需求文档的内容
+<requirement>
+{{requirement}}
+</requirement>
+
+# 已抽取功能点
+{{test_point}}
+
+## 需要生成详细测试用例的业务逻辑
+{{logic_data}}
+
+## 任务流程:
+	1. 根据需要生成详细测试用例的业务逻辑，生成符合要求的测试用例。
+	2. 输出格式：markdown 文本,以json 格式列表的形式输出一条json数据
+- Examples:
+```json
+	{
+	"TestCaseTitle": "验证公告搜索页面的重置功能",
+	"Preconditions": "用户已登录系统，并且已执行过一次搜索。",
+	"TestSteps": [
+		"进入公告管理页面。",
+		"在一个或多个字段中输入搜索条件。",
+		"点击‘查询’按钮进行筛选。",
+		"点击‘重置’按钮。"
+	],
+	"ExpectedResults": "所有搜索字段被清空，公告列表恢复到默认状态。",
+	"Postconditions": "无",
+	"TestData": "标题：'季度更新'",
+	"Dependencies": "系统支持重置搜索表单。"
+	}```
+''')
+
+
+
+
+
+
+

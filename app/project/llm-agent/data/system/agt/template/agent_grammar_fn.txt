@@ -1,0 +1,220 @@
+## fn 函数能力说明（FunctionUtil）
+
+// 本文档与 agent_grammar.txt 配套，专门介绍脚本/模板中 fn.xxx 的能力。fn 对应实现：com.llm.agentcore.core.agent.FunctionUtil。
+// 使用场景：在 AgentFlow 脚本的 {{fn.xxx}} 表达式、define 的 LLM 模板、以及 act_func.run 的 Groovy/JS 脚本中，均可通过 fn 调用下述能力。
+
+### 一、结果与流程控制
+
+// 用于让 LLM 通过 JSON 驱动流程跳转、多轮对话等。
+
+// 创建任务结果构造器，供 LLM 返回 JSON 时指定“成功/失败、跳转、重跑、结果”等。
+// 无参或 fn.task() 表示 success=true；fn.task(false) 表示失败。
+// 返回 TaskResultHelper，可链式调用：
+//   .plan(planName)        - 跳转到指定 plan（如 'next'、'n_file_info'）
+//   .plan(planName, step)  - 跳转到指定 plan 的 step
+//   .rerun(true/false)     - 是否重跑当前步骤
+//   .thought(text)         - 思考过程（可被 psr_json 采集）
+//   .suggest(suggest)      - 建议
+//   .rational(rational)    - 推理说明
+//   .result(result)        - 最终结果内容
+//   .result(thought, result)
+//   .jsonResult(k1,v1,k2,v2...) - 按 key-value 对构造 JSON 结果
+//   .vote(value)           - 多模型决策时的选项
+//   .assign(key, value)     - 向 memory 赋值（key 会加 assign_ 前缀由引擎解析）
+//   .put(key, value)        - 仅写入输出给 LLM 的 JSON，不参与 assign 解析
+//   .build()                - 返回 TaskResult（程序内用）
+// 示例（在 define 的模板最后让 LLM 返回）：
+//   下一步：{{fn.task().plan('next')}}
+//   回到某步：{{fn.task().plan('n_file_info')}}
+//   重跑当前：{{fn.task().rerun(true)}}
+//   带结果：{{fn.task().result('答案内容')}}
+fn.task(success?)
+
+// 适用于脚本或代码中一次性反馈“成功/失败 + 结果内容”的场景（如 Groovy/JS 中 return fn.result(true, data)）。
+// 与 fn.task(success).result(result).build() 等价。
+fn.result(success, result)
+
+// 根据 plan 名称获取 PlanInfo（如 name、defaultName 等），用于条件判断等。
+fn.indexOfPlan(name)
+
+// 构建多轮对话标记（无人设、user 为全部参数、assistant 为自己输出、无工具、无图片）。
+// maxLength：最大对话历史轮次；为 1 表示单轮。该标记须放在 prompt 最后一行。
+fn.chatFlag(maxLength)
+
+// 构建多轮对话标记（完整版）。
+// systemPromptVar：人设/系统 prompt 变量名；userPromptVar：用户 prompt 变量名（空则用全部参数 JSON）；
+// assistantPlanName：assistant 结果来源的 plan 名（空则用当前 plan 输出）；toolsetName：MCP 工具集名；maxLength：历史轮次。
+fn.chatFlag(systemPromptVar, userPromptVar, assistantPlanName, toolsetName, maxLength)
+
+// 构建静态多轮对话消息（预定义 user/assistant 消息列表）。
+fn.chatListFlag(systemPrompt, userMessageList, assistantMessageList, toolsetName)
+
+// 图文混合消息的多轮对话标记。
+fn.chatImageFlag(systemPromptVar, userPromptVar, assistantPlanName, imageVar, maxLength)
+
+// 查询指定 plan 的消息历史。返回 List<Message>。
+fn.queryMessages(planName, start, size)
+
+### 二、工具调用
+
+// 调用工具。name 支持：agt_xxx, act_xxx, rag_xxx, xxx, xxx.yyy, agt_xxx?p1=v1&p2=v2。调用前会对 name 做标准化。
+fn.run(name)
+
+// 执行 func 表达式。wrapMap=true 时把返回的 Map 包成 MapWrapper，避免 Freemarker 自动转换。
+fn.func(expression)
+fn.func(funcFolder, expression, wrapMap)
+
+// 执行 Groovy 脚本（可读写 agent 变量）。示例：act_func.run?script=''' fn.put("x", fn.get("y")) '''
+fn.script(script)
+fn.script(script, wrapMap)
+
+// 执行 JavaScript 片段。
+fn.js(js)
+
+// 调用 Spring 服务类（ObjectFactory.getBean）。
+fn.service(name)
+
+### 三、类型转换
+
+// 转成字符串。无 property 时整值转字符串（若为 JSON 则转 JSON 字符串）；
+// 有 property 时从 val 中取属性（支持 "optional_sub_property_name" 这种多级），再转字符串。
+fn.str(val)
+fn.str(val, property)
+
+// 在 target（Map 或 Bean）上设置属性。property 为 key 或点分路径（如 "a.b.c"），
+// 支持 Map 与 Bean，与 fn.str/hasValue/vals 的 property 语义一致。原地修改并返回 target。
+fn.setProperty(target, property, value)
+
+// 原样返回 val，不转为字符串。用于 assign 时保持数字、布尔等类型写入 memory；
+// 若直接写 assign('x', '15') 会得到字符串 "15"，用 assign('x', '{{fn.raw(15)}}') 则得到数字 15。
+// 示例：assign('max_react_steps', '{{fn.raw(15)}}')、assign('enabled', '{{fn.raw(true)}}')
+fn.raw(val)
+
+// 将 val 转为 Map。val 可为 null/空串、Map、或 JSON 字符串。
+fn.map(val)
+
+// 将 val 转为 List。val 可为 null/空串、List、或 JSON 字符串；元素中形如 "[...]"、"{...}" 的字符串会递归转成 List/Map。
+fn.list(val)
+
+// 转成 boolean。true/1/y/yes（不区分大小写）为 true。
+fn.bool(val)
+fn.bool(val, property)
+
+// 按“逗号分隔的 key,refValue,key,refValue...”构造 JSON 字符串。refValue 为变量名或引用。
+// 字面量可用 /xxx/ 表示（借鉴 JS 正则字面量），避免多重引号转义；逗号在 /.../ 内不参与分割。
+// storeValuesAsString=true 时所有值以字符串存储，无深层嵌套。
+// 示例：{{fn.json('question, userInput, folderPath, /Coding/agent/')}}
+fn.json(keyRefValue)
+fn.json(keyRefValue, storeValuesAsString)
+
+// 通过 keyRefValue 构建 JSON 对象。
+fn.jsonObj(keyRefValue)
+
+### 四、时间
+
+// 当前日期（DATE_STYLE 格式）。
+fn.today()
+
+// 当前时间，格式 yyyy-MM-dd HH:mm:ss。
+fn.now()
+
+### 五、变量（Memory）读写
+
+// 获取变量。name 为 sys_run_count 时返回当前 run count。
+fn.get(name)
+
+// 写入变量（等价于 memory.write）。在 Groovy 脚本中用于读写 agent 变量，如 fn.put('list2', new ArrayList<>())。
+// 注：脚本内写变量请使用 fn.put；若在其他示例中看到 fn.write，请以 fn.put 为准（FunctionUtil 仅提供 put）。
+fn.put(name, value)
+
+// 检查变量是否已被赋值（阻塞/等待语义由引擎决定）。
+fn.wait(name)
+
+### 六、条件与默认值
+
+// checkVal 非空时返回 val 的字符串，否则返回 null。
+fn.when(checkVal, val)
+
+// checkVal 非空时返回 trueVal，否则返回 falseVal。常用于模板中的条件输出。
+fn.when(checkVal, trueVal, falseVal)
+
+// 判断两值是否相等。
+fn.equals(checkVal, val)
+
+// 逻辑非。
+fn.not(checkVal)
+
+// 判断值是否存在（非空）。可带 property 检查嵌套属性。常用于 vrf 条件，如 fn.hasValue(sys_last_result,"optional_sub_property_name")。
+fn.hasValue(checkVal)
+fn.hasValue(checkVal, property)
+
+// 从对象取指定属性值并规范为 List。property 为空时用 bean 本身作为值；若属性已是 List 则返回该列表，否则将单值包装为单元素列表；列表中的 FutureValue 会解包为实际值。返回列表不为 null。
+fn.vals(bean)
+fn.vals(bean, property)
+
+// val 为空（null、空串、空集合）时返回 defaultVal，否则返回 val。
+fn.optional(val, defaultVal)
+
+### 七、知识库与 Hint
+
+// 格式化输出 agent 级别或表达式级别的 hint 信息（多轮 input+output）。
+fn.buildHint(title)
+fn.buildHint(title, agentLevel)
+
+// 查询知识库表。name：表名；column：返回列；where：JSON 查询条件；ignoreWhereIfBlank：空时是否忽略 where。
+fn.select(name, column, where, ignoreWhereIfBlank)
+
+// 按实体与 where 查询。
+fn.query(entityName, where)
+
+// 按类名查询示例知识。
+fn.example(className)
+
+### 八、模型与工具元信息
+
+// 获取当前模型配置 LLMModelProperty。
+fn.model(modelName)
+
+// 移除 prompt 中的 Hint 标记。
+fn.removeHintFlag(prompt)
+
+// 给数据加标题（用于提示词构建中的描述）。
+fn.title(title, value)
+
+// 取 val 在 [begin, end] 范围内的片段（如列表切片）。
+fn.dataRange(val, begin, end)
+
+// 根据包含文件信息的数据构建真实文件路径。
+fn.filepath(value)
+
+// 读取文件内容。
+fn.readFile(filepath)
+
+// 根据需求描述和后缀生成文件名（内部用 MD5 等规则）。
+fn.filename(requirement, suffix)
+
+// 按 toolset 编码获取工具集，返回 JSON 字符串。
+fn.toolset(code)
+
+// 获取工具参数定义（含 inputSchema、name、description、type 等），返回 JSON。
+fn.tool(toolType, toolCode)
+
+// 国际化：code 为 i18n properties 的 key，args 为占位参数 {0},{1}...
+fn.i18n(code, args...)
+
+### 九、字符串与哈希
+
+// 用 replacement 替换 text 中首次匹配 regex 的子串。replacement 中 $n、${name} 可引用捕获组。
+fn.replaceFirst(text, regex, replacement)
+
+// 计算字符串的 32 位小写 MD5；input 为 null 返回 null。
+fn.md5(input)
+
+---
+
+// 与 agent_grammar.txt 的对应关系简述：
+// - 模板中条件输出、默认值、时间、JSON 构造：fn.when, fn.optional, fn.today, fn.now, fn.json
+// - 流程与多轮对话：fn.task().plan/rerun/result、fn.chatFlag、fn.chatImageFlag
+// - 校验与分支：fn.hasValue、fn.get、fn.equals、fn.not
+// - 脚本内读写变量：fn.get、fn.put（脚本里写变量请用 fn.put，与 memory.write 一致）
+// - 知识库/工具/文件：fn.select、fn.query、fn.tool、fn.toolset、fn.readFile、fn.filepath 等

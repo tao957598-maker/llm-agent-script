@@ -1,0 +1,172 @@
+/*
+ {
+	 "title": "自动化测试-录入执行",
+	 "description": "录入测试步骤并执行",
+	 "parameter": [
+	 	{
+	 		"name":"system",
+	 		"label":"系统名称"
+	 	},
+	 	{
+	 		"name":"test_no",
+	 		"label":"测试编号"
+	 	},
+	 	{
+	 		"name":"steps",
+	 		"label":"测试步骤",
+	 		"type": "textarea"
+	 	},
+	 	{
+	 		"name":"exploreMode",
+	 		"label":"运行模式",
+	 		"type":"select",
+	 		"args":[
+	 			{
+	 				"label":"生产模式",
+	 				"value":"0"
+	 			},
+	 			{
+	 				"label":"开发模式",
+	 				"value":"1"
+	 			},
+	 			{
+	 				"label":"维护模式",
+	 				"value":"2"
+	 			}
+	 		]
+	 	}
+	 ],
+	 "llmType": "alias.middelqulity",
+	 "resultPlan": "n_steps, n_steps2",
+	 "life": "100"
+ }
+*/
+// Check requirement
+when('!fn.hasValue(test_no)', {
+	// Load default requirement
+	assign("test_no", "deposit_and_transfer_funds",
+		"steps", '''
+			1. User types 'peter.li' as Username and 'gientech@123' as Password, clicks the Sign in button, and verifies that Primary Balance and Savings Balance are displayed to ensure login success.
+			2. Click Go to Deposit, select 'Primary' Account, enter amount $'2580' for the deposit, and click the deposit button. Verify the transaction details to confirm success.
+			3. Click Transfer To Someone Else in the menu, select 'James Liu' as the recipient, choose 'Primary' for account of transfer from, enter Amount $'2580,' and click the Transfer button.
+			4. Logout from the system.
+		''',
+		"system", "XX")
+})
+
+// Load test case
+n_db_testcase, act_kb.select?name=kb_testcase&column=steps&where='{{fn.json("test_no,test_no,steps,steps")}}'\
+	act_func?name=SortPlan&plans={{sys_last_result}}
+
+// Check test case
+when('n_db_testcase?size==0', {
+	// Save test case and reset test steps
+	act_kb.importData?name=kb_testcase&data='{{fn.json("test_no,test_no,steps,steps,application,system")}}'&uniqueKey=test_no\
+		act_kb.delete?name=kb_testcase_step&where='{{fn.json("test_no,test_no")}}'
+})
+
+// Load test steps
+n_steps, act_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("test_no,test_no")}}'
+
+// Check test steps
+when('n_steps?size==0', {
+	// Identify language
+	tpl_identify_language
+
+	// Load business information from KB
+	n_envinfo, act_kb.select?name=kb_testcase_biz&column=envinfo&where='{"name":"{{system}}"}'
+
+	// Sort out requirements
+	n_steps2, tpl_format_requirement, vrf_tpl_check_requirement_format
+    // 修复步骤格式
+    assign('fix_steps_content', '{{n_steps2}}')
+    tpl_fix_update_requirement
+    assign('tpl_format_requirement', '{{tpl_fix_update_requirement}}')
+
+	// Clean old plan and save new plan to KB
+	act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'\
+		act_kb.convert?data={{tpl_format_requirement}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'\
+		act_kb.importData?name=kb_testcase_step&data={{sys_last_result}}
+
+	// Run test steps
+	agt_test_steps_run?test_no={{test_no}}&steps={{tpl_format_requirement}}&system={{system}}&exploreMode={{exploreMode}}
+}, {
+	// Run test steps
+	agt_test_steps_run?test_no={{test_no}}&steps={{n_steps}}&system={{system}}&exploreMode={{exploreMode}}
+})
+
+define('tpl_identify_language', '''
+	请识别下面内容的语言，并用json格式直接回复：{"language":"xxx"}
+	注意：如果有多种语言，请回复最主要的语言。
+
+	{{steps}}
+''')
+
+define('tpl_format_requirement', '''
+	/*{
+		"llm_type":""
+	}*/
+	你是一个熟悉selenium的具有国际化视野的高级测试工程师， 请按检查方案，给出调整后的步骤，用一维的json数组格式： ["1.步骤1", "2.步骤2", ...]
+
+	# 检查方案：
+	1. 调整后的步骤保持原有的语言：{{tpl_identify_language}}
+	2. 步骤应描述用户或系统的具体行为，且尽量拆分为带有序号的小步骤，包括页面导航步骤。
+	3. 步骤的序号不同才被认为是独立步骤
+	4. 拆分步骤时，确保每个步骤都对应一个明确的用户操作或系统响应，无需单独列出元素定位步骤，但描述中应隐含元素定位的信息。
+
+	5. 仅仅拆分或者合并步骤，不要随意加入新逻辑。
+	6. 将补充解释纳入到关联的步骤中，确保最终的步骤列表包含足够的信息。但注意，宁愿保持原有不清晰的描述，也不可加入猜测的信息。
+
+	7. 不会产生页面变化的操作，无需拆分。比如：单纯的验证步骤
+	8. 可能带来页面变动的操作，需要拆分到独立的步骤中。比如：点击按钮，点击菜单，链接，导航，切换选择，输入文本。
+
+	9. 点击或选择菜单的操作时，因为涉及到子菜单的显示隐藏，一个步骤中不可以有2个click动作，需要做拆分
+	10. 需要将给出的测试数据整合到步骤中.例如 url,用户名,账号密码,输入等测试数据
+	11. 请使用utf-8编码格式
+
+	**错误示例：**
+	- 无页面变化操作错误：
+	1. 将“打开 URL”和“输入操作”合并为一个步骤。
+	2. 将“URL 跳转”和“输入操作”合并为一个步骤。
+	- 页面变动操作错误：
+	1. 未将两个输入操作分开列出。
+	2. 未将“输入操作”和“点击操作”分开列出。
+	3. 将多个文本输入操作合并为一个步骤。
+
+	**正确示例：**
+	- **拆分建议**：
+	1. 将两个输入操作分开列出。
+	2. 将“输入操作”和“点击操作”分开列出。
+	3. 对每个独立的文本输入操作分别列出步骤。
+
+	{{sys_hint}}
+
+	# 待检测的测试任务步骤：
+	{{steps}}
+
+	# 补充解释：
+	{{n_envinfo}}
+''')
+
+define('tpl_check_requirement_format', '''
+	/*{
+		"llmType":"gpt-4o,ernie-3.5-128k,ernie-4.0-turbo-8k"
+	}*/
+	请检查下面的"整理后的需求"是否符合"检查要求",并用json给出意见：
+	1. 没有明显的改进意见,JSON回复：{{fn.task().result('基本符合检查要求，没有改进意见').vote('1')}}
+	2. 发现需要改进的地方,给出简洁的意见,JSON回复：{{fn.task(false).result('suggestion: 1.XXX, 2.XXX ...').vote('2')}}
+
+	# 检查要求
+	1. 步骤的序号不同才被认为是独立步骤
+	2. 不会产生页面变化的操作，可以放在一起。比如：单纯的字段验证步骤
+	3. 可能带来页面变动的操作，都需要拆分。比如：点击按钮，链接，导航，切换选择，输入文本，都处在独立的步骤中。
+	4. 点击或选择菜单的操作时，因为涉及到子菜单的显示隐藏，一个步骤中不可以有2个click动作，需要做拆分
+
+	# 原始需求
+	{{steps}}
+	# 补充解释：
+	{{n_envinfo}}
+
+	# 整理后的需求
+	{{sys_last_result}}
+''')

@@ -1,0 +1,270 @@
+/*{
+	"title":"测试报告AI分析Agent",
+	"parameter":[
+		{"name":"planId", "label":"测试计划ID", "required":true, "description":"测试计划的唯一标识"},
+		{"name":"locale", "label":"语言", "required":true, "description":"语言"},
+		{"name":"totalCases", "label":"总用例数", "required":true, "description":"测试用例总数"},
+		{"name":"executedCases", "label":"已执行用例数", "required":true, "description":"已执行的用例数量"},
+		{"name":"passedCases", "label":"通过用例数", "required":true, "description":"通过的用例数量"},
+		{"name":"failedCases", "label":"失败用例数", "required":true, "description":"失败的用例数量"},
+		{"name":"blockedCases", "label":"阻塞用例数", "label":"阻塞用例数", "required":false, "description":"阻塞的用例数量"},
+		{"name":"skippedCases", "label":"跳选用例数", "required":false, "description":"跳过的用例数量"},
+		{"name":"coverageRate", "label":"覆盖率", "required":false, "description":"执行覆盖率百分比"},
+		{"name":"agentSuccessRate", "label":"Agent成功率", "required":false, "description":"Agent成功执行率百分比"},
+		{"name":"passRate", "label":"整体通过率", "required":false, "description":"整体通过率百分比"},
+		{"name":"failRate", "label":"失败率", "required":false, "description":"失败率百分比"},
+		{"name":"stabilityScore", "label":"稳定性评分", "required":false, "description":"执行稳定性评分"},
+		{"name":"flakyRate", "label":"不稳定用例比例", "required":false, "description":"疑似不稳定用例比例百分比"},
+		{"name":"moduleStats", "label":"模块统计", "required":false, "description":"各模块的执行统计数据JSON"},
+		{"name":"failureReasons", "label":"失败原因分布", "required":false, "description":"失败原因的分布统计JSON"},
+		{"name":"trendData", "label":"趋势数据", "required":false, "description":"历史通过率趋势数据JSON"},
+		{"name":"caseTrackingList", "label":"用例追踪列表", "required":false, "description":"用例执行明细列表JSON"}
+	],
+	"version":1,
+	"resultPlan":"",
+	"discoverable": true
+}*/
+
+// 定义中文模板
+define('tpl_ai_analysis_zh', '''
+# 角色设定
+你是一位资深的软件测试专家、质量分析师和测试经理，擅长从测试数据中提炼关键洞察并撰写专业的测试报告结论。
+
+# 测试执行数据
+- 测试计划ID: {{planId}}
+- 总用例数: {{totalCases}}
+- 已执行: {{executedCases}}
+- 通过: {{passedCases}}
+- 失败: {{failedCases}}
+- 阻塞: {{blockedCases}}
+- 跳过: {{skippedCases}}
+- 执行覆盖率: {{coverageRate}}%
+- Agent成功率: {{agentSuccessRate}}%
+- 整体通过率: {{passRate}}%
+- 失败率: {{failRate}}%
+- 稳定性评分: {{stabilityScore}}
+- 不稳定用例比例: {{flakyRate}}%
+
+# 模块统计信息
+{{moduleStats}}
+
+# 失败原因分布
+{{failureReasons}}
+
+# 历史趋势数据
+{{trendData}}
+
+# 任务要求
+请基于以上数据，进行深度分析并生成两部分内容（全部使用中文）：
+
+## 第一部分：AI执行洞察
+
+### 1. 高优先级问题 (highPriorityIssue)
+识别当前最紧急、最需要关注的质量风险点。考虑：
+- 如果失败率高(>30%)，强调严重质量问题
+- 如果有特定模块失败集中，指出该模块
+- 如果有明显的失败模式（如网络超时、元素未找到等），指出根本原因
+- 如果存在阻塞用例，说明影响范围
+- 如果没有明显问题，给出积极评价
+- 字数控制在100-200字
+
+### 2. 疑似不稳定用例 (unstableCases)
+分析可能的Flaky Test（不稳定测试）。考虑：
+- 如果某些模块通过率波动大，指出这些模块
+- 如果失败原因多为"元素未找到"或"超时"，可能是环境问题导致的不稳定
+- 如果通过率在70%-90%之间，可能存在边界条件问题
+- 如果没有明显不稳定迹象，给出肯定评价
+- 字数控制在100-200字
+
+### 3. 执行优化建议 (optimizationSuggestion)
+提供可操作的改进建议。考虑：
+- Agent成功率低于90%时，建议检查环境和配置
+- 失败率高时，建议优先修复缺陷
+- 覆盖率低时，建议补充测试用例
+- 如果有特定失败类型集中，建议针对性优化
+- 如果整体表现良好，给予肯定并建议保持
+- 字数控制在100-200字
+
+## 第二部分：最终结论
+
+### 1. 质量评估 (qualityAssessment)
+对整体质量状况进行评估。考虑：
+- 通过率>=90%：质量风险可控，满足发布标准
+- 通过率70%-90%：存在一定质量风险，需要关注
+- 通过率<70%：质量风险较高，不建议发布
+- 结合覆盖率、失败分布、稳定性评分等因素综合评估
+- 字数控制在80-150字
+
+### 2. 高风险模块 (highRiskModule)
+识别并说明高风险模块。考虑：
+- 如果有模块失败率特别高，明确指出
+- 如果失败集中在某个功能域，说明影响
+- 如果没有明显高风险模块，说明"未发现高风险模块"
+- 可以引用具体的失败原因分布
+- 字数控制在50-100字
+
+### 3. 修复建议 (recommendation)
+提供清晰、可执行的修复建议。考虑：
+- 优先级的排序（先修什么，后修什么）
+- 是否需要补充测试
+- 是否需要重新测试
+- 是否可以直接发布
+- 分条列出，条理清晰
+- 字数控制在80-150字
+
+# 输出格式
+请直接返回JSON格式，不要添加任何解释文字：
+
+```json
+{
+  "highPriorityIssue": "高优先级问题的详细描述",
+  "unstableCases": "疑似不稳定用例的分析",
+  "optimizationSuggestion": "执行优化建议",
+  "qualityAssessment": "质量评估的详细描述",
+  "highRiskModule": "高风险模块的说明",
+  "recommendation": "修复建议的详细描述"
+}
+```
+
+# 注意事项
+- 所有文本必须使用中文
+- 内容要具体、有针对性，避免空泛
+- 基于实际数据进行分析，不要编造不存在的问题
+- 语言专业、客观、准确
+- 建议要具体、可操作
+- 语气既要专业又要易于理解
+- **重要：不要在输出中使用任何Markdown格式标记（如**加粗**、*斜体*、#标题等）**
+- **直接输出纯文本内容，不要使用任何格式化符号**
+{{sys_hint}}
+''')
+
+// 定义英文模板
+define('tpl_ai_analysis_en', '''
+# Role Definition
+You are a senior software testing expert, quality analyst, and test manager, skilled at extracting key insights from test data and writing professional test report conclusions.
+
+# Test Execution Data
+- Test Plan ID: {{planId}}
+- Total Cases: {{totalCases}}
+- Executed: {{executedCases}}
+- Passed: {{passedCases}}
+- Failed: {{failedCases}}
+- Blocked: {{blockedCases}}
+- Skipped: {{skippedCases}}
+- Coverage Rate: {{coverageRate}}%
+- Agent Success Rate: {{agentSuccessRate}}%
+- Overall Pass Rate: {{passRate}}%
+- Failure Rate: {{failRate}}%
+- Stability Score: {{stabilityScore}}
+- Flaky Test Rate: {{flakyRate}}%
+
+# Module Statistics
+{{moduleStats}}
+
+# Failure Reasons Distribution
+{{failureReasons}}
+
+# Historical Trend Data
+{{trendData}}
+
+# Task Requirements
+Please conduct in-depth analysis based on the above data and generate two parts of content (all in English):
+
+## Part 1: AI Execution Insights
+
+### 1. High Priority Issues (highPriorityIssue)
+Identify the most urgent quality risk points that need attention. Consider:
+- If failure rate is high (>30%), emphasize serious quality issues
+- If failures are concentrated in specific modules, point out those modules
+- If there are obvious failure patterns (e.g., network timeout, element not found), identify root causes
+- If there are blocked cases, explain the impact scope
+- If no obvious issues, provide positive evaluation
+- Word count: 100-200 words
+
+### 2. Suspected Unstable Cases (unstableCases)
+Analyze potential Flaky Tests. Consider:
+- If some modules have volatile pass rates, point out those modules
+- If failure reasons are mostly "element not found" or "timeout", it may be environment-related instability
+- If pass rate is between 70%-90%, there may be boundary condition issues
+- If no obvious instability signs, provide positive evaluation
+- Word count: 100-200 words
+
+### 3. Execution Optimization Suggestions (optimizationSuggestion)
+Provide actionable improvement suggestions. Consider:
+- If Agent success rate is below 90%, suggest checking environment and configuration
+- If failure rate is high, suggest prioritizing defect fixes
+- If coverage is low, suggest adding test cases
+- If specific failure types are concentrated, suggest targeted optimization
+- If overall performance is good, provide affirmation and suggest maintaining
+- Word count: 100-200 words
+
+## Part 2: Final Conclusion
+
+### 1. Quality Assessment (qualityAssessment)
+Assess the overall quality status. Consider:
+- Pass rate >=90%: Quality risk is controllable, meets release standards
+- Pass rate 70%-90%: Some quality risks exist, needs attention
+- Pass rate <70%: High quality risk, not recommended for release
+- Comprehensive assessment considering coverage, failure distribution, stability score, etc.
+- Word count: 80-150 words
+
+### 2. High Risk Modules (highRiskModule)
+Identify and explain high-risk modules. Consider:
+- If any module has particularly high failure rate, clearly state it
+- If failures are concentrated in a functional domain, explain the impact
+- If no obvious high-risk modules, state "No high-risk modules identified"
+- Can reference specific failure reason distributions
+- Word count: 50-100 words
+
+### 3. Fix Recommendations (recommendation)
+Provide clear, actionable fix recommendations. Consider:
+- Priority ordering (what to fix first, what later)
+- Whether additional testing is needed
+- Whether retesting is required
+- Whether it can be released directly
+- List items clearly and logically
+- Word count: 80-150 words
+
+# Output Format
+Please return JSON format directly, without any explanatory text:
+
+```json
+{
+  "highPriorityIssue": "Detailed description of high priority issues",
+  "unstableCases": "Analysis of suspected unstable cases",
+  "optimizationSuggestion": "Execution optimization suggestions",
+  "qualityAssessment": "Detailed quality assessment description",
+  "highRiskModule": "Description of high-risk modules",
+  "recommendation": "Detailed fix recommendations"
+}
+```
+
+# Notes
+- All text must be in English
+- Content should be specific and targeted, avoid being vague
+- Analyze based on actual data, do not fabricate non-existent problems
+- Language should be professional, objective, and accurate
+- Recommendations should be specific and actionable
+- Tone should be both professional and easy to understand
+- **Important: Do NOT use any Markdown formatting markers in the output (such as **bold**, *italic*, #headers, etc.)**
+- **Output plain text content directly without any formatting symbols**
+{{sys_hint}}
+''')
+
+// 根据语言环境选择使用的模板
+when('{{locale == "en"}}', {
+    n_ai_analysis_json, tpl_ai_analysis_en
+}, {
+    n_ai_analysis_json, tpl_ai_analysis_zh
+})
+
+// 解析AI洞察结果
+assign('highPriorityIssue', '{{n_ai_analysis_json.highPriorityIssue}}')
+assign('unstableCases', '{{n_ai_analysis_json.unstableCases}}')
+assign('optimizationSuggestion', '{{n_ai_analysis_json.optimizationSuggestion}}')
+
+// 解析最终结论
+assign('qualityAssessment', '{{n_ai_analysis_json.qualityAssessment}}')
+assign('highRiskModule', '{{n_ai_analysis_json.highRiskModule}}')
+assign('recommendation', '{{n_ai_analysis_json.recommendation}}')
+

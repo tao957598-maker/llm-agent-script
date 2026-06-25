@@ -1,0 +1,395 @@
+/*
+ {
+	 "title": "Query report data",
+	 "description": "Query report data by indicator desc.",
+	 "parameter": [
+	 	{
+	 		"name":"kbsFileName",
+	 		"label":"KBS filename"
+	 	},
+        {
+	 		"name":"indicatorDesc",
+	 		"label":"Indicator desc"
+	 	}
+	 ],
+	 "llmType": "",
+	 "uiEntrance": "chatdoc",
+	 "tag": "chatdoc",
+	 "life": "100"
+ }
+*/
+
+// params - list metadata
+assign("queryParams", '{"fileNamePrefix": "{{kbsFileName}}"}')
+
+//## Query metadata by filename: {{kbsFileName}}
+n_reportMetaData, act_api.doExecuteDynamic?name=ReportMetaData&dynamicParamData='{{queryParams}}'
+
+//## Search report table
+n_report_title, tpl_searh_title, psr_json
+
+when('!fn.hasValue(n_report_title.title)', {
+    //## Empty data
+	assign('mql', '')
+}, {
+	// params - query by titles
+	assign("queryByTitles", '{"fileNamePrefix": "{{kbsFileName}}", "titles": "{{n_report_title.title}}", "dataLimit": 3}')
+
+	// Query metadata by title
+	n_titleMetaData, act_api.doExecuteDynamic?name=ReportMetaData&dynamicParamData='{{queryByTitles}}'
+  assign('n_meta_data_title', '')
+  when('fn.hasValue(n_titleMetaData.data)', {
+    //## Set data to n_meta_data_title
+	  assign('n_meta_data_title', '{{n_titleMetaData.data!}}')
+  })
+ log('n_meta_data_title={{n_meta_data_title}}===============n_titleMetaData=={{n_titleMetaData}}')
+	//## Generate MQL 
+  tpl_gen_mql, psr_javascript, n_reportData, act_api.doExecuteDynamic?name=ReportDataSearch&dynamicParamData={{fn.json("searchMQL, tpl_gen_mql, size, '1', filterNull, 'true'", true)}}
+	
+  //Check log
+  log('text2mongo n_reportData={{n_reportData}}')
+
+  when('!fn.hasValue(n_reportData.data)', {
+        //Generate MQL again
+		n_reportData, tpl_update_mql, psr_javascript, act_api.doExecuteDynamic?name=ReportDataSearch&dynamicParamData={{fn.json("searchMQL, tpl_update_mql, size, '1', filterNull, 'true'", true)}}
+
+		assign('mql', '{{tpl_update_mql}}')
+    }, {
+		assign('mql', '{{tpl_gen_mql}}')
+	})
+})
+
+define('tpl_searh_title', '''
+/*{
+  "enableThinking":"false"
+}*/
+<nothink>
+你是MongoDB专家，你能根据Collection report_data格式，从报告元数据查找出满足用户需求的报告表，以Json格式返回。不要解释直接给出结果。
+
+# Collection report_data格式
+- fileName: 数据来源文件（例如 xlsx）
+- title: 报告表名
+- fields: 报告表字段字典 { fieldKey: desc }
+- data: 报告表数据
+
+# 用户需求：
+{{indicatorDesc}}
+
+# 返回示例（大多数只有一个，如果没有匹配的返回空，如果需要关联查询多个table则以逗号分割如table1, table2）：
+{
+	"title": "<matched table1, table2>"
+}
+
+# 报告元数据
+{{n_reportMetaData.data}}
+
+{{sys_hint}}
+</nothink>
+''')
+
+define('tpl_gen_mql', '''
+/*{
+  "enableThinking":"false"
+}*/
+<nothink>
+你是 MongoDB 专家，请根据 Collection report_data 格式与用户需求生成 **可直接执行且稳定可靠的原生 MongoDB 聚合语句**（db.report_data.aggregate([...])）
+
+你必须在遵守原有规则的基础上进行 **容错增强**，确保在字段类型不一致（string/date/double）、字段缺失、空字符串、Excel 导入异常等情况下依然保持稳定。
+
+--------------------------------------------
+# 一、必须遵循的基础规则（保持原样，不得删除）
+--------------------------------------------
+1. 若出现日期字段，才使用 { $type: "date" }。
+2. title 对应 fields，字段不可交叉使用。
+3. 最终输出必须以  ```javascript 开头，以 ``` 结尾。
+4. 必须使用 data.xxx 访问字段。
+5. 返回数据前必须执行 $unwind "$data"。
+
+--------------------------------------------
+# 二、新增的可靠性增强规则（必须严格执行）
+--------------------------------------------
+
+A. 所有参与过滤、排序、投影的字段必须自动加入非空校验：
+   { data.xxx: { $exists: true, $ne: null, $ne: "" } }
+   ⚠ 字段必须写成 data.xxx，不可直接写字段名。
+
+B. 字段类型不确定（string/date）时，不允许直接假设其类型。
+   - 若字段声明类型为 Date，可使用 $type:"date"
+   - 若字段声明为 String 或未知类型，必须使用 dateFromString 解析
+   - 必须使用 onError:null、onNull:null 防止解析报错
+
+C. 当字段声明为日期但实际数据可能是 string 时，必须使用容错转换：
+   {
+     $addFields: {
+       parsedDateField: {
+         $switch: {
+           branches: [
+             { case: { $eq: [ { $type: "$data.xxx" }, "date" ] }, then: "$data.xxx" },
+             { case: { $eq: [ { $type: "$data.xxx" }, "string" ] },
+               then: { $dateFromString: { dateString: "$data.xxx", onError: null, onNull: null } }
+             }
+           ],
+           default: null
+         }
+       }
+     }
+   }
+
+D. 除非字段类型明确为 double，否则禁止直接使用 $type:"double" 过滤。
+
+E. 必须允许字段命名不规范（空格、大写、小写、下划线、特殊符号），不得重新命名字段、不得猜测字段名，只能使用 fields 中存在的原始字段名。
+
+F. 关于文档路径过滤：fileName 必须使用前缀匹配，而非完全相等。
+   { fileName: { $regex: "^{{kbsFileName}}" } }
+
+G. 若最终排序字段为日期，必须使用 parsedDateField，不可直接排序 string 日期。
+
+--------------------------------------------
+# 三、生成流程（必须遵循）
+--------------------------------------------
+1. 根据 titles 列表选出对应的报告表 title。如果titles列表包含繁体内容，那么过滤条件也必须是繁体。
+2. 严格从 fields 的 key 列表中选择字段（不得猜测字段名）。
+3. 自动构造非空校验 $match。
+4. 若字段可能为日期 → 加入 addFields + dateFromString 容错处理。
+5. 构建最终 $project（只投影使用到的字段）。
+6. 若包含日期字段 → 必须按 parsedDateField 排序。
+7. 整体输出 db.report_data.aggregate([...])。
+
+--------------------------------------------
+# 四、数据结构背景说明（不可当作输入，仅用于理解结构）
+--------------------------------------------
+Collection report_data 文档结构固定为：
+
+- fileName：数据来源文件路径（可能包含文件夹层级）
+- title：报告表名（相当于逻辑表名）
+- fields：字段字典，格式为 { fieldKey: desc }
+          注意：fieldKey 才是真实字段名，必须严格使用
+- data：数组，每行是一个业务数据对象，所有字段均在 data.xxx 中访问
+
+⚠ 以上结构仅用于理解，不属于输入内容，不可直接用于输出。
+
+--------------------------------------------
+# 五、输入信息
+--------------------------------------------
+titles 列表：
+{{n_report_title.title}}
+
+用户需求：
+{{indicatorDesc}}
+
+可选元数据（禁止输出元数据本身）：
+{{n_meta_data_title}}
+
+文档路径：
+{{kbsFileName}}
+
+{{sys_hint}}
+
+--------------------------------------------
+# 六、最终输出要求（强制）
+--------------------------------------------
+1.必须说明解释分析拆解用户需求
+2.查询语句第一行必须是：
+```javascript
+
+3 接下来只能输出 MongoDB 原生语句：
+db.report_data.aggregate([...])
+
+4 最后一行必须是：
+禁止：
+  - 输出解释
+  - 输出空行在 ```javascript 之前
+  - 输出任何内容在 ``` 之后
+  - 输出多个代码块
+若无法生成完整代码块，必须仍然输出空的：
+  - db.report_data.aggregate([])
+请生成最终 MongoDB 聚合查询语句。
+</nothink>
+''')
+
+define('tpl_update_mql', '''
+/*{
+  "enableThinking":"false"
+}*/
+<nothink>
+你是 MongoDB 专家，请根据 Collection report_data 格式与用户需求生成 **可直接执行且稳定可靠的原生 MongoDB 聚合语句**（db.report_data.aggregate([...])），用户上次生成的mql无法检索到数据，可能原因有：
+1. 过滤条件设置错误
+2. 数据库没有符合条件的数据
+请帮我检查用户上次生成的MQL是否正确，请帮我再次生成满足用户需求的查询js语句，或者再次确认输出上次的js语句。
+
+你必须在遵守原有规则的基础上进行 **容错增强**，确保在字段类型不一致（string/date/double）、字段缺失、空字符串、Excel 导入异常等情况下依然保持稳定。
+--------------------------------------------
+# 一、必须遵循的基础规则（保持原样，不得删除）
+--------------------------------------------
+1. 若出现日期字段，才使用 { $type: "date" }。
+2. title 对应 fields，字段不可交叉使用。
+3. 最终输出必须以  ```javascript 开头，以 ``` 结尾。
+4. 必须使用 data.xxx 访问字段。
+5. 返回数据前必须执行 $unwind "$data"。
+
+--------------------------------------------
+# 二、新增的可靠性增强规则（必须严格执行）
+--------------------------------------------
+
+A. 所有参与过滤、排序、投影的字段必须自动加入非空校验：
+   { data.xxx: { $exists: true, $ne: null, $ne: "" } }
+   ⚠ 字段必须写成 data.xxx，不可直接写字段名。
+
+B. 字段类型不确定（string/date）时，不允许直接假设其类型。
+   - 若字段声明类型为 Date，可使用 $type:"date"
+   - 若字段声明为 String 或未知类型，必须使用 dateFromString 解析
+   - 必须使用 onError:null、onNull:null 防止解析报错
+
+C. 当字段声明为日期但实际数据可能是 string 时，必须使用容错转换：
+   {
+     $addFields: {
+       parsedDateField: {
+         $switch: {
+           branches: [
+             { case: { $eq: [ { $type: "$data.xxx" }, "date" ] }, then: "$data.xxx" },
+             { case: { $eq: [ { $type: "$data.xxx" }, "string" ] },
+               then: { $dateFromString: { dateString: "$data.xxx", onError: null, onNull: null } }
+             }
+           ],
+           default: null
+         }
+       }
+     }
+   }
+
+D. 除非字段类型明确为 double，否则禁止直接使用 $type:"double" 过滤。
+
+E. 必须允许字段命名不规范（空格、大写、小写、下划线、特殊符号），不得重新命名字段、不得猜测字段名，只能使用 fields 中存在的原始字段名。
+
+F. 关于文档路径过滤：fileName 必须使用前缀匹配，而非完全相等。
+   { fileName: { $regex: "^{{kbsFileName}}" } }
+
+G. 若最终排序字段为日期，必须使用 parsedDateField，不可直接排序 string 日期。
+
+H. 关于日期范围过滤与时区（重要补充）：
+   1. 当用户需求中出现“起始日期 / 结束日期 / 某日期范围”等描述，且使用了日期字段时：
+      - 范围过滤必须基于前面步骤中生成的 parsedDateField（或等价命名），
+        不允许直接用原始 string 日期做范围比较。
+   2. 所有日期范围的边界，必须按照东八区时间（Asia/Shanghai，+08:00）解析，而不是默认 UTC。
+   3. 推荐写法之一（使用 ISODate 带时区）：
+      {
+        $match: {
+          parsedDateField: {
+            $ne: null,
+            $gte: ISODate("{{startDate}}T00:00:00.000+08:00"),
+            $lte: ISODate("{{endDate}}T23:59:59.999+08:00")
+          }
+        }
+      }
+   4. 或者使用 $dateFromString + timezone（当边界本身以字符串形式出现时）：
+      {
+        $match: {
+          parsedDateField: {
+            $ne: null,
+            $gte: {
+              $dateFromString: {
+                dateString: "{{startDate}} 00:00:00",
+                timezone: "+08:00",
+                onError: null,
+                onNull: null
+              }
+            },
+            $lte: {
+              $dateFromString: {
+                dateString: "{{endDate}} 23:59:59",
+                timezone: "+08:00",
+                onError: null,
+                onNull: null
+              }
+            }
+          }
+        }
+      }
+   5. 同一个 $match 内，不允许出现多个同名 parsedDateField 字段键，必须将
+      $ne / $gte / $lte 合并写到同一个对象里。
+
+
+--------------------------------------------
+# 三、生成流程（必须遵循）
+--------------------------------------------
+1. 根据 titles 列表选出对应的报告表 title。
+2. 严格从 fields 的 key 列表中选择字段（不得猜测字段名）。
+3. 自动构造非空校验 $match。
+4. 若字段可能为日期 → 加入 addFields + dateFromString 容错处理。
+5. 构建最终 $project（只投影使用到的字段）。
+6. 若包含日期字段 → 必须按 parsedDateField 排序。
+7. 整体输出 db.report_data.aggregate([...])。
+
+--------------------------------------------
+# 四、数据结构背景说明（不可当作输入，仅用于理解结构）
+--------------------------------------------
+Collection report_data 文档结构固定为：
+- fileName：数据来源文件路径（可能包含文件夹层级）
+- title：报告表名（相当于逻辑表名）
+- fields：字段字典，格式为 { fieldKey: desc }
+          注意：fieldKey 才是真实字段名，必须严格使用
+- data：数组，每行是一个业务数据对象，所有字段均在 data.xxx 中访问
+
+⚠ 以上结构仅用于理解，不属于输入内容，不可直接用于输出。
+
+--------------------------------------------
+# 五、输入信息
+--------------------------------------------
+# 用户需求：
+{{indicatorDesc}}
+
+# 可选的report_data元数据
+{{n_titleMetaData.data!}}
+
+# 上次生成的MQL
+{{tpl_gen_mql}}
+
+{{sys_hint}}
+
+--------------------------------------------
+# 六、最终输出要求（强制）
+--------------------------------------------
+【输出顺序是强约束】
+1 第一行必须是：
+```javascript
+
+2 接下来只能输出 MongoDB 原生语句：
+db.report_data.aggregate([...])
+
+3 最后一行必须是：
+禁止：
+  - 输出解释
+  - 输出空行在 ```javascript 之前
+  - 输出任何内容在 ``` 之后
+  - 输出多个代码块
+若无法生成完整代码块，必须仍然输出空的：
+  - db.report_data.aggregate([])
+请生成最终 MongoDB 聚合查询语句。
+</nothink>
+''')
+
+define('tpl_fix_mql', '''
+/*{
+  "enableThinking":"false"
+}*/
+<nothink>
+你是 MongoDB 专家，请根据 Collection report_data 格式与用户需求生成 **可直接执行且稳定可靠的原生 MongoDB 聚合语句**（db.report_data.aggregate([...])）
+
+# 要求:
+1.阅读输入信息,分析拆解用户需求
+2.如果查询数据满足用户需求,则不需要更改和优化查询语句.
+3.分析检查查询语句是否需要改写,如果需要改写,指出需要修正查询语句哪些点
+4.若不需要修改输出:```javascript
+True
+```
+若需要修改,输出修正后得查询语句
+## 备注: 1.Mongo查询语句中 注意正则匹配语句得书写
+
+# 输入信息
+用户需求：{{indicatorDesc}}
+数据库示例元数据（禁止输出元数据本身）：{{n_titleMetaData.data!}}
+上次生成的MQL：{{tpl_gen_mql}}
+查询出的前几条数据:
+{{n_reportData.data[0:5]}}
+</nothink>
+''')

@@ -1,0 +1,168 @@
+/*
+{
+	"title": "Tool Set Executor",
+	"description": "Toolset executor with manual confirm.",
+	"parameter": [
+		{
+			"name": "userInput",
+			"label": "User Input"
+		},
+		{
+			"name": "toosetCode",
+			"label": "Tool Set Code"
+		},
+		{
+			"name": "manualRequired",
+			"label": "Is Manual required",
+			"defaultValue": "true",
+			"args": [
+				{
+					"label": "true",
+					"value": true
+				},
+				{
+					"label": "false",
+					"value": false
+				}
+			],
+			"type": "select"
+		},
+		{
+			"name": "paramsContext",
+			"label": "Parameters Context"
+		}
+	],
+	"llmType": "",
+	"resultPlan": "",
+	"uiEntrance": "chatDoc",
+	"discoverable": true,
+	"tag": "toolset",
+	"life": "100"
+}
+*/
+
+//## {{fn.i18n('analyzing.user.input.tool')}}
+tpl_choose_tool_and_params, psr_json
+when("tpl_choose_tool_and_params.score < 2", {
+	//# No available tool found
+	act_flow.go?plan=end
+})
+
+when('manualRequired', {
+    //## {{fn.i18n('confirm.select.tool')}}
+    n_tool_confirm, act_flow.pageConfirm?params={{tpl_choose_tool_and_params}}
+    assign('confirmed_tool', '{{n_tool_confirm.confirmed}}')
+}, {
+    assign('confirmed_tool', '{{tpl_choose_tool_and_params}}')
+})
+
+//##获取工具结构
+//## {{fn.i18n('extracting.parameters')}}
+when('manualRequired', {
+	//# please manual confirm tool params
+    n_param_confirm, act_flow.pageConfirm?toolType={{confirmed_tool.type}}&toolCode={{confirmed_tool.name}}&params={{confirmed_tool.params}}
+    assign('confirmed_params', '{{n_param_confirm.confirmed}}')
+}, {
+    assign('confirmed_params', '{{tpl_choose_tool_and_params.params}}')
+})
+
+when('fn.bool(confirmed_params,"userInput")', {
+    act_func.run?script='''
+        fn.setProperty(confirmed_params, "userInput", fn.get("userInput"))
+    '''
+})
+
+when('confirmed_tool.type == "AGENT" && confirmed_tool.name == "agt_test_steps.test"', {
+    assign('jobData','{"agentName":"{{confirmed_tool.name}}","jobDesc":"ChatDocJob","notifyStrategy":"全部通知","executorParam":{{confirmed_params}}}')
+    n_job_exec, act_job.createAndTrigger?data={{jobData}}&isOneOffTask=true&isOnlyAdd=true
+
+    //# {{fn.i18n('result.tip')}}
+    assign('resultTip','{"status":"SUCCESS","result":"{{fn.i18n("job.created",n_job_exec.jobDesc,n_job_exec.id)}}","source":"{{confirmed_tool.name}}"}')
+}, {
+	when('confirmed_tool.type == "API"',{
+		log('*******Executing API tool: {{confirmed_tool.name}} with params: {{confirmed_params}}')
+		//## Api tool execution
+		n_tool_api_exec,act_api.doExecuteDynamic?name='{{confirmed_tool.name}}'&dynamicParamData='{{confirmed_params}}'
+
+		when('n_tool_api_exec.code==200',{
+			assign('resultTip', '{"status":"SUCCESS","result":{{n_tool_api_exec.data}},"source":"{{confirmed_tool.name}}"}')
+		},{
+			assign('resultTip', '{"status":"FAIL","result":{{n_tool_api_exec.msg}},"source":"{{confirmed_tool.name}}"}')
+		})
+	},{
+		//## {{confirmed_tool.type}} tool execution
+		n_plan_run_tool_exec, act_plan.run?toolType={{confirmed_tool.type}}&code={{confirmed_tool.name}}&parameters={{confirmed_params}}
+		assign('resultTip', '{"status":"SUCCESS","result":"{{n_plan_run_tool_exec}}","source":"{{confirmed_tool.name}}"}')
+		// 捕捉所有前序异常,将当前流程转为正常状态。（可使用act_flow.fail再次将流程转为异常状态）
+        on_failure({
+		   assign('resultTip', '{"status":"FAIL","result":"{{n_plan_run_tool_exec}}","source":"{{confirmed_tool.name}}"}')
+          // goto语句，跳转到代码结尾
+          act_flow.go?plan=end
+        })
+	})
+})
+
+define('tpl_choose_tool_and_params', '''
+    You are a tool selector and runtime parameter builder.
+    Select the best tool from the toolset, then build runtime params for that selected tool in the same response.
+    Use one fast pass only. Do not ask for another model/tool call.
+
+    Input:
+    User input: {{userInput}}
+    Reference context: {{paramsContext!}}
+    Toolset: {{fn.toolset(toosetCode,false, false)}}
+
+    Output rules:
+    0. Special Field Rule (Highest Priority)
+       If a tool's parameters include: userInput, docContent, kbSpaceId, kbSpaceFileId,
+       the value of that field MUST be set to the original user input — without modification or summarization.
+       Example: User input: "帮我查天气" → {"userInput": "帮我查天气"}
+       Prohibited: rewriting, summarizing, paraphrasing, abbreviating, translating, changing context.
+
+    1. Return only one valid JSON object. Do not add explanations, markdown, or extra text.
+    2. The JSON object must use this exact shape:
+       {
+         "type": "",
+         "name": "",
+         "score": 0,
+         "params": {}
+       }
+    3. "type" and "name" must exactly match one selected tool in the toolset.
+    4. "score" must be a number from 0 to 10. Higher means a better match.
+    5. If no tool matches the user input, return type="", name="", score=0, params={}.
+
+    Tool selection rules:
+    6. Choose the tool whose name, description, type, endpoint/schema, table fields, or agent/MCP input definition best satisfies the user input.
+    7. If several tools are plausible, prefer the one that can run with the fewest missing required values.
+    8. After selecting one tool, inspect only that selected tool definition to build params.
+
+    Compatible parameter rules:
+    9. Tool definitions may use different schema styles depending on tool type: API, AGENT, DBTABLE, TABLE, MCP, FUNCTION, SYSTEM, UI, REPORT, PYTHON, GROOVY, JS, or others.
+    10. Prefer explicit parameter definitions in this order when present:
+        parameters.properties > inputSchema.properties > schema.properties > parameters > parameter > params > args > fields > columns.
+    11. Parameter keys must come from explicit parameter definitions whenever such definitions exist.
+    12. If the selected tool definition explicitly disallows extra fields (additionalProperties=false), do not include undeclared fields.
+    13. Do not pass tool metadata as runtime params: endpoint, base_url, headers, method, description, name, type, score, toolsetName, toolsetCode.
+    14. For API and MCP tools, prefer JSON Schema style fields: parameters.properties, inputSchema.properties, schema.properties, required, enum, items, additionalProperties.
+    15. For AGENT tools, prefer the agent parameter definition. If a parameter named userInput exists, set it to the exact original user input.
+    16. For DBTABLE or TABLE tools, use only explicitly defined table/query fields: columns, fields, where, column, maxSize, order, limit, or other listed parameters. Do not invent business columns.
+    17. If no parameter definition is available, return params={} unless the selected tool definition clearly names a natural-language input field: userInput, query, input, prompt, question, text, requirement.
+    18. Required fields must be present only when the selected tool schema declares them.
+    19. Optional fields should be omitted unless the user input or reference context clearly provides a value.
+    20. Match declared field types when available: string, number, integer, boolean, array, object.
+    21. If a required value cannot be found, use a safe default matching the declared type: string "", number/integer 0, boolean false, array [], object {}.
+    22. For enum-like fields, choose only a value explicitly allowed or clearly described by the selected tool definition. If no value is clear, use the safe default.
+    23. Use each parameter description to infer values. Use user input first, then reference context. If they conflict, user input wins.
+    24. Do not invent business facts that are not present in user input, reference context, or the selected tool definition.
+    25. Keep string values concise, but preserve exact original text for params.userInput.
+
+    Example:
+    {
+      "type": "API",
+      "name": "google_web_search",
+      "score": 8,
+      "params": {
+        "query": "OpenAI latest model"
+      }
+    }
+''')

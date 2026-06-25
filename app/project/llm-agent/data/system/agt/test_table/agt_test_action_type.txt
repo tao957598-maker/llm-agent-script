@@ -1,0 +1,90 @@
+/*
+{
+	"title":"Verify result",
+	"description":"Verify test result",
+	"parameter":"current_step=当前测试步骤",
+	"version":1
+}
+*/
+/
+
+// Init variable for action type
+assign('current_step',"{{current_step}}")
+assign('is_action_type','0')
+assign('action_result','{}')
+
+n_data, tpl_get_action_type
+
+
+// Determine the action type is opening url
+when('n_data.action_type=="open_url"',{
+    // Check open_url 
+    agt_test_verification_open_url?current_step={{current_step}}
+    assign('action_result','{{sys_last_result}}')
+    assign('is_action_type','1')
+})
+
+
+// Determine the action type is inputting
+when('n_data.action_type=="input"',{
+    // Check input
+    agt_test_verification_input?current_step={{current_step}}
+    assign('action_result','{{sys_last_result}}')
+    assign('is_action_type','2')
+})
+
+// Determine the action type is clicking
+when('n_data.action_type=="click"',{
+    // Check click
+    agt_test_verification_input?current_step={{current_step}}
+    assign('action_result','{{sys_last_result}}')
+    assign('is_action_type','3')
+})
+
+
+
+when('action_result.run_success == "false"', {
+    // run_success is false , base check action
+   assign('is_action_type','0')
+})
+
+
+// Get result
+assign('result', "{{fn.json('action_type,is_action_type,action_result,action_result')}}")
+
+
+define('tpl_get_action_type',"""
+- Role: web自动化测试的专家
+- Background: 用户将web测试所涉及的操作动作分为三个类型：open url、click、input,用户需要根据"当前测试步骤"执行的操作,获取相应的操作类型
+- Profile: 你是一位精通Python编程和自动化测试的专家，对Selenium库和自动化测试框架有深入的理解和丰富的实践经验。你熟悉JSON格式的数据处理，能够准确地分析代码逻辑，并根据实际页面元素信息生成符合要求的测试脚本。
+- Skills: 你具备资深web测试能力、JSON数据处理能力以及逻辑分析能力。你能够熟练使用Selenium库进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。
+- Workflow:
+    1. 分析'当前测试步骤'位置及依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤所执行的操作，获取相应的操作类型
+    3. 根据分析结果，生成符合要求的JSON格式审查结果。
+- Examples:
+  - 例子1：假设current_step为打开网页www.baidu.com，该操作类型为open_url,只返回json数据:
+    具体的修正方案:
+    ```json
+    {"action_type"："open_url"}
+    ```
+
+  - 例子2：假设current_step为在网页www.baidu.com输入框中输入文本xxxxx，该操作类型为input,只返回json数据:
+    具体的修正方案:
+    ```json
+    {"action_type"："input"}
+    ```
+
+  - 例子3：假设current_step为点击网页www.baidu.com的搜索按钮，该操作类型为click,只返回json数据:
+    具体的修正方案:
+    ```json
+    {"action_type"："click"}
+    ```
+
+    # 当前测试步骤
+    {{current_step}}
+
+    # 返回当前测试步骤的操作类型
+    {"action_type"："xxxx"}
+
+""")

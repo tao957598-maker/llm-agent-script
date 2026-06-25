@@ -1,0 +1,43 @@
+/*
+{
+	"title":"COBOL代码分析转换",
+	"description":"基于人工智能的COBOL代码分析和转换系统，接收知识库中的COBOL源代码文件，执行代码分析并转换为目标格式",
+	"parameter":[
+		{
+			"name":"files",
+			"label":"上传文件",
+			"description":"知识库中的COBOL源代码文件ID，系统会根据该ID查询文件路径",
+			"required":true,
+			"type":"knowledge_space"
+		},
+		{
+			"name":"option",
+			"label":"选项",
+			"description":"转换选项参数，用于指定分析模式或输出格式",
+			"type":"text"
+		}
+	],
+	"version":7
+}
+*/
+// ==============================================
+// 从知识库获取文件信息
+// ==============================================
+// 根据文件ID查询知识库，获取文件名和存储路径
+n_file_name, act_kb.selectBy?sql='select knowledge_name, store_uri from kb_spaces_folder_knowledge where id="{{files}}"'
+assign("file_name", '{{n_file_name[0].knowledge_name}}')
+assign("file_path", '{{n_file_name[0].store_uri}}')
+log('文件名称：{{file_name}}')
+log('文件路径：{{file_path}}')
+
+// ==============================================
+// 调用COBOL分析转换API
+// ==============================================
+// 参数说明：
+// - files: 文件在知识库中的存储路径
+// - option: 可选的转换选项
+assign("optionoption", '{{option}}')
+n_result, act_api.doExecuteDynamic?name="COBOL2Model_keyword3"&dynamicParamData='{"file":"{{file_path}}","option":"{{option}}"}'
+
+// 记录API响应结果
+log('API响应结果：{{n_result}}')

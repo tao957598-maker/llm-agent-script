@@ -1,0 +1,97 @@
+/*
+{
+	"title":"Read Image",
+	"description":"读取图片",
+	"parameter":[
+		{
+			"name":"imagePath",
+			"label":"图片路径"
+		},
+		{
+			"name":"ocrContent",
+			"label":"图片内容",
+			"type":"textarea"
+		}
+	],
+	"resultPlan":"n_last_result_data",
+	"life":1000,
+	"version":1
+}
+*/
+// 获取参数1111111111111111
+assign('image_path', '{{imagePath}}')
+assign('ocr_content', '{{ocrContent}}')
+
+// 识别图片生成json
+n_img_result_json, tpl_image_chat,psr_json_python
+assign("img_result_json", "{{n_img_result_json}}")
+
+// json转文本
+n_txt_result,tpl_json_to_txt,psr_ref
+assign("last_result", "{{n_txt_result}}")
+
+//# last_result_data
+n_last_result_data,act_memory.assign?value='''{{last_result}}'''&type=md
+
+on_failure({
+    // Parsing error and force to success status
+	  act_flow.success
+})
+
+
+define('tpl_json_to_txt','''
+你是一个严谨的多模态数据转写引擎。请将以下 JSON 格式的图表解析结果转换为一段**完整、连贯、无信息丢失**的自然语言文本。
+
+**强制要求：**
+1. **必须包含以下三项内容（缺一不可）**：
+   - **图的标题**（若 extracted_info.title 不存在，则用 type + position_hint 拼成，如“位于左上角的饼图”）
+   - **图的描述与用途**（优先使用 summary_for_retrieval 字段；若缺失，根据 type 和数据推断其业务目的，如“用于展示交易地域分布”）
+   - **图中的全部文本与数据**（包括标签、数值、颜色、单位、风险提示、冲突说明等，不得省略任何字段值）
+
+2. **所有 JSON 中的字段都必须被转述**，即使是未知类型或冗余信息；
+3. 若某字段值为列表或嵌套对象，请展开为自然语言（如“扇区包括：香港占25.0%、中国占20.0%……”）；
+4. 若存在 consistency_note，必须明确写出冲突细节；
+5. 输出为**单一段落**（不要分点、不要换行），语言简洁专业，适合向量检索。
+6. 输出的内容前后面会带上标签[IMAGE]，例如：[IMAGE] 解析内容 [/IMAGE]
+7. 仅输出结果，不输出任何过程与解释
+
+以下是输入的 JSON 数据：
+{{img_result_json}}
+''')
+
+// 定义输出模板
+define('tpl_image_chat', '''
+  /*{
+	 "llmType":"alias.vision"
+	}*/
+  你是一个专业的多模态信息提取引擎，负责从图像中精确解析结构化数据与业务洞察。图像可能包含折线图、柱状图、饼图、表格、网页截图等可视化元素。
+
+ **输出要求：仅输出json，不输出任何过程与解释
+
+  以下是该图像通过高精度 OCR 提取到的全部可见文本， 仅供参考：
+  <OCR_TEXT>
+  {{ocr_content}}
+  </OCR_TEXT>
+
+  请结合图像视觉内容与 OCR 文本，完成以下任务：
+
+  1. **识别独立视觉元素**：每个图表或功能区域视为一个“part”，独立处理。
+  2. **判断类型并提取结构化信息**：严格基于图像与 OCR 文本，禁止编造任何未出现的信息。
+  3. **强制数据一致性校验**：
+    - 若图中存在数值标注（如“Total: 45”），必须与可视化数据（如柱高总和、扇区角度比例）进行交叉验证。
+    - 若发现矛盾，**仅在 `consistency_note` 字段中明确标注冲突**，并提供视觉估算值；**不得在其他字段采信矛盾标注值**。
+  4. **按图表类型输出核心分析语义**：
+    - **折线图 / 柱状图**：提取坐标轴标签（含单位）、至少5个数据点（含单位）、**描述趋势（如上升/下降/波动/季节性）**。
+    - **饼图**：提取扇区标签、颜色（若可识别）、百分比（无标注则按视觉角度估算至一位小数），**描述分布结构与集中度**。
+    - **表格图**：还原为结构化行列数据（含单位），**总结关键汇总或对比关系**。
+    - **网页截图**：提取标题、表单字段、按钮文本，**说明其交互意图与查询范围**。
+    - **流程图/架构图**：列出节点与连接逻辑，**说明系统流向或依赖关系**。
+    - **纯图片**：描述主体、风格、用途，**不依赖OCR文本**。
+  5. **输出格式**：严格使用 JSON 格式，包含 `type`, `extracted_info`, `summary_for_retrieval` 三个字段。
+  6. **摘要要求**：
+    - `summary_for_retrieval` 必须控制在 30~60 字。
+    - **必须体现该图表的核心分析目的**（如“用于识别风险地域”、“监测交易趋势”、“比较渠道效率”等），而非单纯复述数据。
+    - **避免冗余描述**，仅保留必要且符合图表语义的关键结论。
+
+	{{fn.chatImageFlag('', '', '', 'image_path', 1)}}
+''')

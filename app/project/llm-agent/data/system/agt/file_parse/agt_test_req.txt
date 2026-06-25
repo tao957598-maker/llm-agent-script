@@ -1,0 +1,31 @@
+/*
+{
+	"title":"test agent",
+	"description":"test agent",
+	"parameter":[
+		{
+			"name":"document_id",
+			"label":"文档ID",
+			"type":"knowledge_space"
+		}
+	],
+	"resultPlan":"document_id",
+	"life":1000,
+	"version":1
+}
+*/
+
+// get features
+n_features_data,act_kb.selectBy?sql='SELECT * FROM kb_test_req_features WHERE documentId = {{document_id}}'
+
+// foreach
+foreach('n_data', 'n_features_data', {
+  // item
+  assign('item', '{{n_data.item}}')
+  // featureId
+  assign('feature_id', '{{item.featureId}}')
+  // get stories
+  n_stories_data,act_kb.selectBy?sql='SELECT * FROM kb_test_req_stories WHERE documentId = {{document_id}} AND featureId = {{feature_id}}'
+  // storyId
+  assign('story_id', '{{item.storyId}}')
+})

@@ -1,0 +1,31 @@
+/*
+{
+	"title": "Loop Generate Step Test",
+	"description": "生成测试步骤",
+	"parameter": [
+	 	{
+	 		"name":"spider_deep_num",
+	 		"label":"最大采集深度"
+	 	}
+  ],
+  "life":1000,
+	"version": "1"
+}
+*/
+
+
+n_spider_deep_list, act_func?script='''
+    def for_list = spider_deep_num.toInteger()
+    return for_list
+'''
+
+foreach('n_data', 'n_spider_deep_list', {
+	// index 下标
+	assign('test_data_index', '{{n_data.index}}')
+	// 下标对应内容
+	assign('test_item', '{{n_data.item}}')
+})
+
+
+
+

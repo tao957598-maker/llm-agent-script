@@ -1,0 +1,143 @@
+/*
+{
+	"title":"verification data after steps",
+	"description":"According to historical data and step-by-step data validation.",
+	"parameter":"current_step=当前测试步骤&steps=完整验证步骤&envinfo=补充信息",
+	"version":1
+}
+*/
+assign('current_step',"{{current_step}}")
+assign('steps',"{{steps}}")
+assign('envinfo',"{{envinfo}}")
+
+//# Collect page information
+n_collect_page, act_rpa.send?command=CollectPageInfo
+assign('collect_page','{{n_collect_page}}')
+n_history_memory, act_rpa.send?command=ReadHistoryData
+n_history_memory_list,act_func?script='''n_history_memory[0]'''
+act_func?name=StepTestInfo
+
+//# run to verify data after steps
+tpl_generate_verify_script,psr_python
+assign('python_code','{{sys_last_result}}')
+
+n_isMap,act_func?script='''
+def isMap  // 定义一个变量存储 true/false
+if (python_code instanceof java.util.Map) {
+    isMap = true
+} else {
+    isMap = false
+}
+return isMap'''
+
+when('n_isMap==true',{
+   act_flow.fail
+},{
+    // Write selenium script to the artifact repository
+  assign('result','true')
+  assign('result','{{fn.json("result,result,python_code,python_code")}}')
+})
+
+
+
+define('tpl_generate_verify_script',"""
+- Role: web自动化测试的专家
+- Background: 用户将web测试所涉及的操作动作分为三个类型：open url、click、input,用户需要根据"当前测试步骤"执行的操作,获取相应的操作类型
+- Profile: 你是一位精通Python编程和自动化测试的专家，对Selenium库和自动化测试框架有深入的理解和丰富的实践经验。你熟悉JSON格式的数据处理，能够准确地分析代码逻辑，并根据实际页面元素信息生成符合要求的测试脚本。
+- Skills: 你具备资深web测试能力、JSON数据处理能力以及逻辑分析能力。你能够熟练使用Selenium库进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。必须符合测试脚本要求，使用Selenium 4版本的方法。
+请你根据下面信息生成校验步骤是否执行成功的代码
+- python代码逻辑:
+  1.根据索引选择历史信息,
+  2.根据提供的元素id,
+  3.通过readHistoryData()['history_item_list']获取历史存储的数据
+  4.通过collectPageInfo(browser, model='idPathMap')获取当前的元素信息,返回格式说明
+```python dict
+{
+    '元素ID1': {
+        'id': '元素ID1',
+        'rect': {'height': int, 'left': int, 'top': int, 'width': int},
+        'tag': str,
+        'type': str,           # 可选，如 'checkbox', 'input', 'button', 'div' 等
+        'value': str,          # 可选，如 'off', 'on' 等
+        'xpath': str,          # 可选，元素的XPath路径
+        'name': str            # 可选，元素的名称/标签文本
+    },
+    '元素ID2': {
+        'id': '元素ID2',
+        'rect': {'height': int, 'left': int, 'top': int, 'width': int},
+        'tag': str,
+        'name': str,
+        'type': str
+    },
+    ...
+}```
+
+  5.验证逻辑代码.
+其中
+1、必须使用`autotest`库中封装的方法 writeResult(success, desc),使用英文记录执行结果,success为测试是否成功的true/false标志,desc为结果的说明
+2、涉及到计算的内容，尽可能使用decimal方法进行高精度的计算，尽可能避免出现误差
+3、本代码仅仅涉及数据计算，不涉及任何的额外代码
+- Examples:
+  - 例子1：
+    # 当前测试步骤：判断Savings Balance的数据是否大于0
+
+    # 所有的步骤：
+    1.记录当前Savings Balance的数据
+    2.Click Go to Deposit
+    3.Select `Savings` Account
+    4.Enter amount `1080` for the deposit
+    5.Click the deposit button.
+    6.判断Savings Balance的数据是否正确修改
+
+    # 历史记忆信息，通过readHistoryData()['history_item_list']得到的数据如下：
+    [{'children': None, 'id': 'id_4049119883', 'isOption': False, 'name': '100.00', 'tag': 'text', 'type': 'SPAN', 'xpath': '/html/body/div[2]/div[2]/div[1]/div[2]/div/div/div[2]/h1/span', "msg":"1.记录当前Savings Balance的数据"}]
+```python
+# -*- coding: utf-8 -*-
+from autotest import *
+from autotest_triple import *
+from operator import itemgetter
+def run(browser):
+	try:
+        history_data = readHistoryData()['history_item_list']
+        # 1、根据history_data index 选择某些数据
+        get_items = itemgetter(0)
+        history_item = get_items(history_data)
+        history_number = history_item[0]['name']   # 根据步骤要求从历史数据中选取合适的数据
+
+        # 获取当前页面所有的元素信息
+        collect_page_info = collectPageInfo(browser, model='idPathMap')
+        column_index = 1  # 根据搜集到的数据找到待操作数据存在的索引位置
+        target_item = xxx  # 从collect_page_info中根据column_index索引获取到的item数据
+        
+        ... 
+        # 执行校验操作，最终返回success，Bool类型
+        success = 目标target_item中的元素信息 与 history_item元素信息进行比较
+
+        # 判断结果采用Bool
+        if not success:
+                writeResult(False, "verify script is False")
+                return False
+        else:
+                writeResult(True, "verify script is success")
+                return True
+	except Exception as e:
+	error_data = traceback.format_exc()
+	writeResult(False, f"Unexpected error occurred: {error_data}")
+	return False
+```
+
+# 补充信息
+{{envinfo}}
+
+# 当前测试步骤
+{{current_step}}
+
+所有的步骤：
+{{StepTestInfo.steps}}
+
+# 历史记忆信息
+{{n_history_memory_list}}
+
+当前页面元素信息：
+{{collect_page}}
+""")

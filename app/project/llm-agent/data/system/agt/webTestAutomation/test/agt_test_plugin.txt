@@ -1,0 +1,11 @@
+/*
+{
+  "title": "Test Agent",
+  "parameter": [],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+// Simple test agent
+assign('test_data', 'Hello Codex Plugin')
+n_result, act_memory.assign?var=test_result

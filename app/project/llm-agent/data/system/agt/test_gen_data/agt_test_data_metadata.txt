@@ -1,0 +1,92 @@
+/*
+{
+	"title":"Test Data Generation - metadata",
+	"description":"Generate test data from file input",
+	"parameter":[
+		{
+			"name":"file_data",
+			"label":"*文件",
+			"type":"file"
+		},
+		{
+			"name":"count",
+			"label":"Generation Quantity"
+		},
+		{
+			"name":"knowledge_name",
+			"label":"File Name"
+		},
+		{
+			"name":"folder_name",
+			"label":"knowledge Space"
+		}
+	],
+	"resultPlan":"Applicant_metadata,Appl_Card_metadata,Applicant_data,Appl_Card_data",
+	"life":10000,
+	"version":1
+}
+*/
+/
+
+assign("file_data", "{{file_data}}")
+
+when('!fn.hasValue(count)', {
+	assign("count", "10")
+})
+
+
+// 判断没有文件取知识库参数
+when('fn.hasValue(file_data)',{
+  // 读取信息
+  n_result_data1,act_func.read?filename='{{file_data}}'
+  assign("n_file_data", "{{n_result_data1}}")
+},{
+  // 读取知识库文件
+  n_result_data2,act_kbs.readSectionFile?folderName='{{folder_name}}'&knowledgeName='{{knowledge_name}}'&isSource=true
+  assign("n_file_data", "{{n_result_data2}}")
+})
+
+// 调用大模型，返回表名称
+agt_tpl_gen_metadata?file_data="{{n_file_data}}"
+assign('tpl_table_list', '{{sys_last_result}}')
+
+// 将返回的 data["data"] 赋值给 table_list
+assign("table_list", '{{tpl_table_list.data}}')
+
+// 定义输出数据
+assign("last_all_data", '[]')
+
+//  数据解析与关联关系识别
+foreach('n_data', 'table_list', {
+  // 下标对应内容
+  assign('table_item', '{{n_data.item}}')
+
+  // 生成元数据信息
+  n_metadata,agt_metadata_information?input="{{n_file_data}}"&other="生成表名称{{table_item}}"
+  
+  // 表数据返回
+  agt_tpl_gen_data?metadata="{{n_metadata}}"&information="[]"
+  // 表数据返回
+  assign('n_table_data', '{{sys_last_result}}')
+
+  n_item,act_func?script='''
+    def result = [:]          
+        
+    result.table_name = table_item 
+    result.metadata = n_metadata 
+    result.columns = n_table_data.columns.toString()
+    result.data = n_table_data.data.toString()
+    return result
+  '''
+  
+  // 生成元数据对象
+  assign('data_item', '{{n_item}}')
+  act_func?script="last_all_data.add(data_item)"
+
+})
+
+// 输出
+assign("result_list", '{{last_all_data}}')
+
+// 保存数据库
+act_kb.defineAndImportData?tableName='kb_test_data_market'&data='{{result_list}}'

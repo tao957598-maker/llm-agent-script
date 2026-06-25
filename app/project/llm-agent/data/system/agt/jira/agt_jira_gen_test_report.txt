@@ -1,0 +1,11 @@
+/*
+ {
+	 "title": "自动化测试-生成测试报告",
+	 "description": "生成测试报告，根据issueKey获取",
+	 "parameter": "issueKey=待获取ISSUE的key",
+
+ }
+*/
+
+// Generate test report
+            n_report, agt_test_wordreport.test_72?testing_no={{issueKey}}

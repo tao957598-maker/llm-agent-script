@@ -1,0 +1,35 @@
+/*
+{
+	"title":"agt_bug_test_plan_run",
+	"description":"lj测试rag_kbs.agt_bug_test_plan_run",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"displayOrder":0,
+	"version":1
+}
+*/
+
+assign('python_code','''
+print("hello world")
+ ''') 
+assign('chatdoc_answer1','''
+{
+    "code": "print(1111)",
+    "image": "python:3.10-slim",
+    "enviroment": null,
+    "cpu": 1,
+    "memory": 100,
+    "timeout": 60
+}
+''') 
+ 
+// act_plan.run?toolType=API&code='run_code_api'&parameters={{chatdoc_answer1}}
+assign("n_aaa","""
+{"code": "def compute(inputs):
+    import math
+    return {"average_result": 25.0}","image": "python:3.10-slim","cpu": 1,"memory": 100,"timeout": 60}
+""")
+
+// test api
+assign("n_bbb","{\"code\": \"print(''hello'')\", \"image\": \"python:3.10-slim\", \"env\": null, \"cpu\": 1, \"memory\": 100, \"timeout\": 60}")
+n_result_data, act_api.doExecuteDynamic?name="run_code_api"&dynamicParamData="{{n_bbb}}"

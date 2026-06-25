@@ -1,0 +1,111 @@
+/*
+{
+	"title":"Gen testcase by KB",
+	"description":"Read requirement document to generate test cases",
+	"parameter": [
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"llmType":"alias.highquality",
+	"resultPlan":"status,design_flattened_data_one",
+	"life":10000,
+	"version":1
+}
+*/
+//# Agent status
+assign("status", 'Agent is running')
+// Document ID
+assign("documentId", '{{kbSpaceFileId}}')
+
+n_test_module, act_kb.selectBy?sql='SELECT * FROM kb_gen_test_module WHERE documentId ="{{documentId}}" and version ="{{version}}"'
+
+
+
+// 异步处理设计数据
+assign('async_test_content_list', '[]')
+// 异步处理每页数据
+foreach('n_test_module_content', 'n_test_module', {
+    // 获取当前模块名称
+    assign('test_module_content', '{{n_test_module_content.item}}')
+    // 计算数据
+    n_design,agt_test_doc_design?input_data='{{test_module_content}}'&documentId='{{documentId}}'&async=true
+    act_func?script="async_test_content_list.add(n_design)"
+})
+assign('test_design_list', '[]')
+foreach('n_test_design', 'async_test_content_list', {
+
+    assign('test_design', '{{n_test_design.item}}')
+    // test_point_valuetest_point_value map
+    assign('test_design_value', '{{test_design.value}}')
+     act_func?script='''
+                test_design_list.add(test_design_value)
+            '''
+    
+})
+
+
+assign('result_list_design', '[]')
+foreach('n_test_design', 'test_design_list', {
+        // test_contenttest_content map list
+        assign('test_design_map', '{{n_test_design.item}}')
+        foreach('n_test_design_map','test_design_map.data',{
+            assign('test_content_list', '{{n_test_design_map.item}}')
+            
+            foreach('n_test_content_list', 'test_content_list', {
+                assign('test_content_map', '{{n_test_content_list.item}}')
+                foreach('n_test_content', 'test_content_map.test_content', {
+                    assign('test_content', '{{n_test_content.item}}')
+                
+
+                    assign('item_map', '''{
+                    "design_element": "{{test_content_map.design_element}}",
+                    "sub_category": "{{test_content.sub_category}}",
+                    "sub_id": "{{test_content.sub_id}}",
+                    "platform": "{{test_design_map.platform}}",
+                    "main_module_name": "{{test_design_map.main_module_name}}",
+                    "main_module_source": "{{test_design_map.main_module_source}}",
+                    "submodule_name": "{{test_design_map.submodule_name}}",
+                    "submodule_description": "{{test_design_map.submodule_description}}",
+                    "submodule_source": "{{test_design_map.submodule_source}}",
+                    "documentId": "{{fn.optional(kbSpaceFileId,'')}}" ,
+                    "version":"{{version}}"
+                    }''')
+                    
+                    act_func?script='''
+                        result_list_design.add(item_map)
+                    '''
+                    })
+                })
+
+        })
+ 
+    })
+
+
+// flattened_data_designflattened_data_design
+assign('design_flattened_data', '{{result_list_design}}')
+ // 先删除旧数据
+ n_first_item,act_func?script='''
+   return design_flattened_data[0]
+ '''
+act_kb.selectBy?sql='delete from kb_gen_test_module_design where version = "{{version}}" and documentId = "{{documentId}}"'
+on_failure({
+	// Force to success status
+	act_flow.success
+})
+// 保存展平数据到数据库
+act_kb.defineAndImportData?tableName='kb_gen_test_module_design'&data='{{design_flattened_data}}'
+//# kb_gen_test_module_design
+assign('kb_gen_test_module_design', 'Download <a href="/knowledge-base/retrieval?title=knowledgeBaseList/knowledgeRetrieval/kb_gen_test_module_design&tableName=kb_gen_test_module_design&schema=llm_agent" target="_blank">kb_gen_test_module_design</a>')
+
+n_one,act_func?script=''' [design_flattened_data[0] ] ''' 
+// flattened_data_designflattened_data_designone
+assign('design_flattened_data_one', '{{n_one}}')

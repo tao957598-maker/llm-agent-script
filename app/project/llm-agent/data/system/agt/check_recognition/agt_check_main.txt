@@ -1,0 +1,194 @@
+/*
+{
+	"title":"Cheque Recognition",
+	"description":"Read the cheque image and identify the relevant information.",
+	"resultPlan":"Agent_status,n_result",
+	"parameter":[
+    {
+        "name": "kbSpaceFileId",
+        "label": "支票图片路径",
+        "maxLength": 50,
+        "hidden": false,
+        "readOnly": false,
+        "type": "knowledge_space"
+    },
+    {
+        "name": "extract_content",
+        "label": "提取支票内容",
+        "args": [
+            {
+                "label": "false",
+                "value": "false"
+            },
+            {
+                "label": "true",
+                "value": "true"
+            }
+        ],
+        "defaultValue": "false",
+        "type": "select",
+        "required": true
+    }
+],
+	"tag":"check_recognition",
+	"version":1
+}
+*/
+// Agent status
+assign("Agent_status", 'Agent is running')
+
+// file name
+n_file_name, act_kb.selectBy?sql='select  knowledge_name,store_uri  from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}" '
+assign("file_name", '{{n_file_name[0].knowledge_name}}')
+assign("file_path", '{{n_file_name[0].store_uri}}')
+assign("upload_path", 'check_recognition')
+
+// Call image_process_api with file_name and upload_path
+n_image_process_result,act_api.doExecuteDynamic?name="image_process_api"&dynamicParamData='{{fn.json("file_name,file_path,upload_path,upload_path")}}'
+
+assign("search_data", '{{n_image_process_result.upload_path}}/')
+n_file_name, act_kb.selectBy?sql="select  store_uri  from kb_spaces_folder_knowledge where store_uri like  '%{{search_data}}%'  and store_uri!='{{search_data}}' "
+
+// Agent status
+assign("status", 'Agent is running')
+
+// 将 n_file_name 中每条 store_uri 转为路径列表，并取出 image_marked 对应路径
+n_image_path_list, act_func.run?script='''
+def rows = fn.list(fn.get("n_file_name"))
+def paths = new ArrayList()
+def marked = ""
+rows.each { row ->
+  def m = fn.map(row)
+  def uri = fn.str(m, "store_uri")
+  paths.add(uri)
+  
+}
+return paths
+'''
+
+n_image_marked_uri,act_func.run?script='''
+def rows = fn.list(fn.get("n_file_name"))
+def result = null
+
+rows.each { row ->
+  def m = fn.map(row)
+  def uri = fn.str(m, "store_uri")
+  
+  if (uri.contains("_marked")) {
+    result = uri   
+    return   
+  }
+}
+
+return result   
+'''
+
+// 获取原始支票图片路径
+n_original_image,act_func.run?script='''
+def rows = fn.list(fn.get("n_file_name"))
+def original = null
+
+rows.each { row ->
+  def m = fn.map(row)
+  def uri = fn.str(m, "store_uri")
+  
+  if (!uri.contains("_marked") && !uri.contains("image_")) {
+	original = uri   
+	return   
+  }
+}
+
+return original   
+'''
+
+// =============================================
+// 逻辑1：分割识别模式（始终执行）
+// =============================================
+assign('async_content_list', '[]')
+
+foreach('n_image_path', 'n_image_path_list', {
+    assign('image_path', '{{n_image_path.item}}')
+    n_image_type,act_func.run?script='''
+    if (image_path.contains("_date")) return 1
+    if (image_path.contains("_amount_figures")) return 2
+    if (image_path.contains("_amount_words")) return 3
+
+    if (image_path.contains("_memo")) return 6
+    if (image_path.contains("_payee")) return 7
+    if (image_path.contains("_signature")) return 8
+    return 0
+    '''
+    when("n_image_type==1", {
+        n_data,agt_check_date_field?image_path='{{image_path}}'&async=true
+        act_func?script="async_content_list.add(n_data)"
+    })
+    when("n_image_type==2", {
+        n_data,agt_check_amount_figures?image_path='{{image_path}}'&async=true
+        act_func?script="async_content_list.add(n_data)"
+    })
+    when("n_image_type==3", {
+        n_data,agt_check_amount_words?image_path='{{image_path}}'&async=true
+        act_func?script="async_content_list.add(n_data)"
+    })
+    
+    when("n_image_type==6", {
+        n_data,agt_check_memo_field?image_path='{{image_path}}'&async=true
+        act_func?script="async_content_list.add(n_data)"
+    })
+    when("n_image_type==7", {
+        n_data,agt_check_payee_field?image_path='{{image_path}}'&async=true
+        act_func?script="async_content_list.add(n_data)"
+    })
+    when("n_image_type==8", {
+        n_data,agt_check_signature_box?image_path='{{image_path}}'&async=true
+        act_func?script="async_content_list.add(n_data)"
+    })
+})
+
+assign('test_data_list', '[]')
+foreach('n_test_data', 'async_content_list', {
+    assign('test_data', '{{n_test_data.item}}')
+    assign('test_data_value', '{{test_data.value}}')
+    act_func?script="test_data_list.add(test_data_value)"
+})
+
+define('tpl_recognition_result', '''
+# 银行风控导向的总体风险评估
+处理：
+综合判断整张支票是否被修改（只要任一关键字段被篡改即视为"已修改"）。
+根据银行合规标准（如《票据法》及内部风控政策），评定风险等级（如高/中/低）。
+生成风控建议（如"拒绝受理"、"人工复核"、"正常受理"）。
+输出markdown格式数据, 数据包含解释和json数据:
+1.简明的风险原因说明(对于支票修改的信息标记红颜色)。
+2.标准化 JSON 报告，包含：
+是否篡改（is_altered）
+风险等级（overall_risk_level）
+处理建议（recommendation）
+风险原因（reason）
+详细证据（details）
+时间戳（timestamp）
+
+# 输入数据
+{{test_data_list}}
+''')
+tpl_recognition_result,psr_all
+
+
+// 提取支票内容 当 extract_content=true 
+when('extract_content==true', {
+    n_extract_result,agt_check_extract_content?image_path='{{file_path}}'&async=false
+})
+
+// =============================================
+// 合并最终结果
+// =============================================
+assign("combined_result",'''
+# 原始支票图片
+![原始支票图片](/{{n_image_marked_uri}})
+
+{{tpl_recognition_result}}
+# 支票内容
+{{n_extract_result}}
+''')
+
+n_result,act_memory.assign?value '''{{combined_result}}'''&type=md

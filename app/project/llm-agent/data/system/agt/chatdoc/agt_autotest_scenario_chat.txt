@@ -1,0 +1,104 @@
+/*
+ {
+	 "title": "Auto-Test intelligent chat",
+	 "description": "Auto-Test scenario AI chat agent.",
+	 "parameter": [
+	 	{
+	 		"name":"userInput",
+	 		"label":"用户输入"
+	 	}
+	 ],
+	 "llmType": "",
+	 "resultPlan": "",
+	 "uiEntrance": "chatDoc",
+	 "tag": "chatdoc",
+	 "life": "100"
+ }
+*/
+
+// 正在分析用户输入选择工具
+//## {{fn.i18n('analyzing.user.input.tool')}}
+tpl_choose_tool, psr_json
+
+// 确认选择工具
+//## "{{fn.i18n('confirm.select.tool')}}"
+n_tool_confirm, act_flow.pageConfirm?params={{tpl_choose_tool}}
+
+assign('sys_prompt_parameter_extract', '''
+	你是智能化系统专家，请根据工具参数信息，结合用户输入和补充信息，完善工具参数以Json格式返回。请注意如果工具没有参数，则params={}空
+	1. 工具参数规则按照properties描述填充；
+	2. 必填项需要有值，默认值一般为缺省的值；
+	3. 遇到日期业务的字段，格式一般都为yyyy-MM-dd或者yyyy-MM-dd HH:mm:ss
+	4. 遇到测试编号可以按照业务生成一个测试编号+序号，如测试登录案例，则测试编号为test_logincase_001;
+
+
+	# 返回示例：
+	{
+		"type": "AGENT",
+		"name": "agt_test_xxx.test",
+		"params": {
+			"key1": "value1"
+		}
+	}
+
+	# 工具描述：
+	{{fn.tool(n_tool_confirm.confirmed.type, n_tool_confirm.confirmed.name)}}
+''')
+
+//## {{fn.i18n('extracting.parameters')}}
+n_tool_param, tpl_parameter_extract, psr_json
+
+// 进行人工确认运行参数
+//# {{fn.i18n('manual.confirm.run.parameters')}}
+n_param_confirm, act_flow.pageConfirm?toolType={{n_tool_confirm.confirmed.type}}&toolCode={{n_tool_confirm.confirmed.name}}&params={{n_tool_param.params}}
+
+// 根据人工确认后的参数运行工具
+when('n_param_confirm.confirmed.type == "AGENT" && n_param_confirm.confirmed.name == "agt_test_steps.test"', {
+	// 构建JOB参数
+	assign('jobData','{"agentName":"{{n_param_confirm.confirmed.name}}","jobDesc":"ChatDocJob","notifyStrategy":"全部通知","executorParam":{{n_param_confirm.confirmed}}}')
+
+	// 创建自动化测试agent JOB
+	n_tool_exec, act_job.createAndTrigger?data={{jobData}}&isOneOffTask=true&isOnlyAdd=true
+
+    //# {{fn.i18n('result.tip')}}
+	assign('resultTip','{{fn.i18n("job.created",n_tool_exec.jobDesc,n_tool_exec.id)}}')
+}, {
+	// 工具执行处理
+	//## {{fn.i18n('tool.execution')}}
+	n_tool_exec, act_plan.run?toolType={{n_param_confirm.confirmed.type}}&code={{n_param_confirm.confirmed.name}}&parameters={{n_param_confirm.confirmed}}
+
+	// 执行结果
+	assign('resultTip', '')
+})	
+
+
+define('tpl_choose_tool', '''
+- Role: 熟悉智能办公系统的管家
+- Background: 需要根据用户的输入，精确的定位使用哪种工具，符合用户的需求。
+- Requirements: 
+1. 结果以Json格式返回选择的工具名和工具所属分类；
+2. json需要包含score分值，范围0-10，值越高则代表匹配度越高；
+3. 如果工具列表都不符合用户的需求，则name为空，score的值为0；
+
+# 返回示例：
+{
+	"type": "AGENT",
+	"name": "agt_test_xxx.test",
+	"score": 5
+}
+
+# 用户输入：
+{{userInput}}
+
+# 工具集列表：
+{{fn.toolset('toolset_autotest_scenario')}}
+
+''')
+
+define('tpl_parameter_extract', '''
+	# 用户输入：
+	{{userInput}}
+
+	{{fn.chatFlag('sys_prompt_parameter_extract', 'userInput', 'resultTip', '', 6)}}
+''')
+

@@ -1,0 +1,375 @@
+/*{
+  "title": "智能打包部署助手",
+  "description": "基于用户输入智能执行项目查找、分支切换、thin打包、部署等操作",
+  "parameter": [
+    {
+      "name": "userInput",
+      "label": "用户输入",
+      "description": "用自然语言描述你的需求，如：帮我打包部署到 dev 环境，跳过测试"
+    },
+    {
+      "name": "projectName",
+      "label": "项目名称",
+      "type": "select",
+      "defaultValue": "llm-agent",
+      "args": [
+        {
+          "label": "llm-agent",
+          "value": "llm-agent"
+        }
+      ]
+    },
+    {
+      "name": "buildLocation",
+      "label": "编译位置",
+      "type": "select",
+      "required": true,
+      "description": "代码编译在哪里执行",
+      "args": [
+        {
+          "label": "远程服务器（推荐）",
+          "value": "remote"
+        },
+        {
+          "label": "本地机器",
+          "value": "local"
+        }
+      ]
+    },
+    {
+      "name": "gitRepoUrl",
+      "label": "Git仓库地址",
+      "description": "如果项目找不到，将从此地址克隆代码"
+    },
+    {
+      "name": "branchName",
+      "label": "分支",
+      "type": "select",
+      "args": [
+        {
+          "label": "develop",
+          "value": "develop"
+        },
+        {
+          "label": "HW-release",
+          "value": "HW-release"
+        },
+        {
+          "label": "BEA-release",
+          "value": "BEA-release"
+        }
+      ]
+    },
+    {
+      "name": "contextEnv",
+      "label": "目标环境",
+      "type": "select",
+      "required": true,
+      "defaultValue": "172.18.2.14:2222",
+      "args": [
+        {
+          "label": "本地环境 (local)",
+          "value": "localhost"
+        },
+        {
+          "label": "开发环境 (dev)",
+          "value": "172.18.2.14:2222"
+        },
+        {
+          "label": "UAT环境 (uat)",
+          "value": "172.18.3.11"
+        },
+        {
+          "label": "生产环境 (prod)",
+          "value": "189.1.224.215"
+        }
+      ]
+    },
+    {
+      "name": "skipTests",
+      "label": "跳过测试",
+      "type": "select",
+      "required": false,
+      "defaultValue": "true",
+      "args": [
+        {
+          "label": "跳过测试 (推荐)",
+          "value": "true"
+        },
+        {
+          "label": "执行测试",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "name": "deployScript",
+      "label": "部署脚本路径",
+      "description": "远程部署脚本路径",
+      "defaultValue": "/mnt/e/project/llm-agent/startup-test.sh"
+    }
+  ],
+  "resultPlan": "n_deploy_result",
+  "tag": "deploy",
+  "life": "100"
+}*/
+
+//# 正在分析用户需求
+when('!fn.hasValue(projectName) || !fn.hasValue(branchName) || !fn.hasValue(skipTests) || !fn.hasValue(deployScript) || !fn.hasValue(gitRepoUrl)', {
+  // 优先使用用户下拉框选择的参数，如果没有则通过LLM智能提取
+  n_params, tpl_extract_params, psr_json
+}, {
+  // 用户已通过下拉框选择所有参数，跳过智能提取
+  assign('n_params', '{{fn.json("projectName, projectName, branchName, branchName, skipTests, skipTests, deployScript, deployScript, gitRepoUrl, gitRepoUrl, action, full_pipeline")}}')
+})
+
+// 参数优先级：用户选择 > 智能提取 > 默认值
+assign('n_project_name', '{{fn.optional(projectName, fn.optional(n_params.projectName, "llm-agent"))}}')
+assign('n_branch_name', '{{fn.optional(branchName, fn.optional(n_params.branchName, "develop"))}}')
+assign('n_skip_tests', '{{fn.optional(skipTests, fn.optional(n_params.skipTests, "true"))}}')
+assign('n_deploy_script', '{{fn.optional(deployScript, fn.optional(n_params.deployScript, "/mnt/e/project/llm-agent/startup-test.sh"))}}')
+assign('n_action', '{{fn.optional(n_params.action, "full_pipeline")}}')
+assign('n_git_repo_url', '{{fn.optional(gitRepoUrl, fn.optional(n_params.gitRepoUrl, ""))}}')
+assign('n_log', '')
+assign('n_project_root', '')
+
+// 解析目标环境 IP 和端口（格式：ip 或 ip:port）
+n_ssh_parse, act_func?script='''
+  def env = (contextEnv ?: "").trim()
+  fn.put("n_env", env)
+  def parts = env.split(":", 2)
+  fn.put("n_ssh_host", parts[0])
+  fn.put("n_ssh_port", parts.length > 1 ? parts[1] : "22")
+  return true
+'''
+
+// 执行器类型控制：local_ac / cloud
+n_g_local_ac_flag,act_memory.retrieve?var=n_g_localAcFlag&global=true
+when("fn.bool(n_g_local_ac_flag)", {
+  // 命令执行器：本地AC
+  assign('n_executor_type', 'local_ac')
+}, {
+  // 命令执行器：云端
+  assign('n_executor_type', 'cloud')
+  // 获取云端配置信息
+  n_cloud_config, act_api.doExecuteDynamic?name="get_servers"
+  act_func?script='''
+    // 匹配选择ip n_ssh_host存在，则直接返回
+    def servers = n_cloud_config?.data
+    if (servers == null) {
+      fn.put("n_server_id", n_ssh_host)
+      return
+    }
+    def serverList = servers instanceof List ? servers : [servers]
+    for (def server : serverList) {
+      if (server?.host == n_ssh_host) {
+        fn.put("n_server_id", server?.serverId ?: server?.server_id ?: n_ssh_host)
+        return
+      }
+    }
+    fn.put("n_server_id", n_ssh_host)
+  '''
+})
+
+// 根据编译位置决定操作系统
+when('buildLocation == "local"', {
+  n_os, act_func?script='''
+    def osType = "linux"
+    if(contextSystem?.toLowerCase().contains("windows")){
+      osType = "windows"
+    } else if(contextSystem?.toLowerCase().contains("mac")){
+      osType = "macos"
+    }
+    return osType
+  '''
+}, {
+  assign('n_os', 'linux')
+})
+
+// 定义执行步骤列表
+n_steps, act_plan.parse?task='''
+- [ ] find_project
+- [ ] check_git
+- [ ] check_ssh
+- [ ] clone_repo
+- [ ] switch_branch
+- [ ] check_maven
+- [ ] build_project
+- [ ] check_git_bash
+- [ ] check_deploy
+'''
+
+//# 执行完整流程
+when('n_action != "full_pipeline" && n_action != "build"', {
+  assign('n_deploy_result', '暂不支持的操作: {{n_action}}\n\n当前支持:\n- 打包构建 (build)\n- 完整流程 (full_pipeline)')
+  act_flow.go?plan=end
+})
+
+foreach('n_step', 'n_steps', {
+  //# Step: {{n_step.item}}
+  assign("n_page_step_temp","{{n_step.item}}")
+
+  // 匹配 n_step.item 等于 "find_project" 的步骤并执行
+  when('n_step.item == "find_project"', {
+    // 调用外部 agent 查找项目
+    n_agt_result, agt_find_project.assistant?project_name={{n_project_name}}&os={{n_os}}&git_repo_url={{n_git_repo_url}}&server_id={{n_server_id}}
+    log("-----n_agt_result：{{n_agt_result}}")
+    // 合并日志
+    assign('n_log', '{{n_log}}\n{{n_agt_result.n_log}}')
+    // 提取数据
+    when('fn.hasValue(n_agt_result.n_data)', {
+      assign('n_project_root', '{{n_agt_result.n_data}}')
+    })
+    // 失败则中断
+    when('n_agt_result.is_plan_break == "true"', {
+      act_flow.go?plan=break
+    })
+  })
+
+  // 匹配 n_step.item 等于 "check_git" 的步骤并执行
+  when('n_step.item == "check_git"', {
+    // 调用外部 agent 检查 Git 环境
+    n_agt_result, agt_check_git.assistant?os={{n_os}}&server_id={{n_server_id}}
+    // 合并日志
+    assign('n_log', '{{n_log}}\n{{n_agt_result.n_log}}')
+    // 失败则中断
+    when('n_agt_result.is_plan_break == "true"', {
+      act_flow.go?plan=break
+    })
+  })
+
+  // 匹配 n_step.item 等于 "clone_repo" 的步骤并执行
+  when('n_step.item == "clone_repo"', {          
+    n_agt_result, agt_clone_repo.assistant?project_name={{n_project_name}}&os={{n_os}}&git_repo_url={{n_git_repo_url}}&branch_name={{n_branch_name}}&server_id={{n_server_id}}
+    when('n_project_name == "llm-agent"', {       
+      assign('n_git_repo_url', '{{n_git_repo_url?replace("llm-agent.git", "llm-agent-framework.git")}}')
+      n_agt_framework_result, agt_clone_repo.assistant?project_name=llm-agent-framework&os={{n_os}}&git_repo_url={{n_git_repo_url}}&branch_name={{n_branch_name}}&server_id={{n_server_id}}
+    })
+    // 合并日志
+    assign('n_log', '{{n_log}}\n{{n_agt_result.n_log}}')
+    // 提取数据
+    when('fn.hasValue(n_agt_result.n_data)', {
+      // clone_repo n_project_root
+      assign('n_project_root', '{{n_agt_result.n_data}}')
+    })
+    // 失败则中断
+    when('n_agt_result.is_plan_break == "true"', {
+      act_flow.go?plan=break
+    })
+  })
+
+  // 匹配 n_step.item 等于 "check_maven" 的步骤并执行
+  when('n_step.item == "check_maven"', {
+    n_agt_result, agt_check_maven.assistant?os={{n_os}}&server_id={{n_server_id}}
+    // 合并日志
+    assign('n_log', '{{n_log}}\n{{n_agt_result.n_log}}')
+    // 提取数据
+    when('fn.hasValue(n_agt_result.n_data)', {
+      assign('n_check_maven_result', '{{n_agt_result.n_data}}')
+    })
+    // 失败则中断
+    when('n_agt_result.is_plan_break == "true"', {
+      act_flow.go?plan=break
+    })
+  })
+
+  // 匹配 n_step.item 等于 "switch_branch" 的步骤并执行
+  when('n_step.item == "switch_branch"', {
+    n_agt_result, agt_switch_branch.assistant?os={{n_os}}&project_root={{n_project_root}}&branch_name={{n_branch_name}}&git_repo_url={{n_git_repo_url}}&server_id={{n_server_id}}
+    // 合并日志
+    assign('n_log', '{{n_log}}\n{{n_agt_result.n_log}}')
+    // 失败则中断
+    when('n_agt_result.is_plan_break == "true"', {
+      act_flow.go?plan=break
+    })
+  })
+
+  // 匹配 n_step.item 等于 "build_project" 的步骤并执行
+  when('n_step.item == "build_project"', {
+    n_agt_result, agt_build_project.assistant?os={{n_os}}&project_root={{n_project_root}}&skip_tests={{n_skip_tests}}&mvn_bin={{n_check_maven_result}}&server_id={{n_server_id}}
+    // 合并日志
+    assign('n_log', '{{n_log}}\n{{n_agt_result.n_log}}')
+    // 失败则中断
+    when('n_agt_result.is_plan_break == "true"', {
+      act_flow.go?plan=break
+    })
+  })
+
+  // 匹配 n_step.item 等于 "check_git_bash" 的步骤并执行
+  when('n_step.item == "check_git_bash"', {
+    n_agt_result, agt_check_git_bash.assistant?os={{n_os}}&server_id={{n_server_id}}
+    // 合并日志
+    assign('n_log', '{{n_log}}\n{{n_agt_result.n_log}}')
+    // 提取数据
+    when('fn.hasValue(n_agt_result.n_data)', {
+      assign('n_bash_path', '{{n_agt_result.n_data}}')
+    })
+    // 失败则中断
+    when('n_agt_result.is_plan_break == "true"', {
+      act_flow.go?plan=break
+    })
+  })
+
+  // 匹配 n_step.item 等于 "check_ssh" 的步骤并执行
+  when('n_step.item == "check_ssh"', {
+    n_agt_result, agt_check_ssh.assistant?os={{n_os}}&env={{n_env}}&executor_type={{n_executor_type}}&ssh_host={{n_ssh_host}}&ssh_port={{n_ssh_port}}&server_id={{n_server_id}}
+    // 合并日志
+    assign('n_log', '{{n_log}}\n{{n_agt_result.n_log}}')
+    // 失败则中断
+    when('n_agt_result.is_plan_break == "true"', {
+      act_flow.go?plan=break
+    })
+  })
+
+  // 匹配 n_step.item 等于 "check_deploy" 的步骤并执行
+  when('n_step.item == "check_deploy"', {
+    n_agt_result, agt_check_deploy.assistant?os={{n_os}}&env={{n_env}}&project_root={{n_project_root}}&bash_path={{n_bash_path}}&ssh_host={{n_ssh_host}}&ssh_port={{n_ssh_port}}&deploy_target={{n_deploy_script}}&server_id={{n_server_id}}
+    // 合并日志
+    assign('n_log', '{{n_log}}\n{{n_agt_result.n_log}}')
+    // 失败则中断
+    when('n_agt_result.is_plan_break == "true"', {
+      act_flow.go?plan=break
+    })
+  })
+})
+
+// 捕捉所有前序异常,将当前流程转为正常状态。（可使用act_flow.fail再次将流程转为异常状态）
+on_failure({
+  assign('n_deploy_result', '❌ 执行失败\n\n{{n_log}}\n\n异常: {{sys_failure_task.result}}')
+  // goto语句，跳转到代码结尾
+  act_flow.go?plan=end
+})
+
+assign('n_deploy_result', '✅ 执行完成 \n{{n_log}}')
+
+//# 智能参数提取
+define('tpl_extract_params', '''
+你是工程打包部署专家。请从用户输入中提取以下参数，以JSON格式返回：
+
+{
+  "projectName": "项目名称，默认 llm-agent",
+  "gitRepoUrl": "Git仓库地址",
+  "branchName": "分支名称，默认 develop",
+  "skipTests": "是否跳过测试，默认 true",
+  "deployScript": "部署脚本路径",
+  "buildLocation": "编译位置: remote/local，默认 remote",
+  "contextEnv": "目标环境（IP或localhost），如 172.18.2.14:2222",
+  "action": "用户意图: build/full_pipeline"
+}
+
+## 用户输入
+{{userInput}}
+
+## 提取规则
+1. "打包部署"/"全流程" → action: "full_pipeline"
+2. "打包"/"构建" → action: "build"
+3. 提到"跳过测试"/"不测试" → skipTests: "true"
+4. 提到"本地编译"/"本地构建" → buildLocation: "local"
+5. 提到"远程编译"/"服务器编译" → buildLocation: "remote"
+6. 提到"开发"/"dev" → contextEnv: "172.18.2.14:2222"
+7. 提到"生产"/"prod" → contextEnv: "189.1.224.215"
+8. Git地址（http/https/git@） → gitRepoUrl
+
+仅返回JSON，不要解释。
+''')
+

@@ -1,0 +1,111 @@
+/*
+{
+	"title":"Extract Table or File Path from User Input",
+	"description":"根据用户一句话提取目标表名或文件路径信息，用于生成测试数据",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"客户问题\",\"type\":\"textarea\"}",
+	"life":100,
+	"version":1
+}
+*/
+/
+
+// 调用大模型抽取结构化信息
+n_input_info,tpl_json_list
+
+// isfile
+assign("is_file", "{{n_input_info.type}}")
+
+// 定义最终输出数据
+assign("last_all_data", '[]')
+
+// 判断走文件读取还是走数据库读取
+when('is_file == "file"', {
+  assign("file_test_data", '[]')
+  // 读取知识库文件
+  n_file_data,act_kbs.readSectionFile?folderName='{{n_input_info.kb_name}}'&knowledgeName='{{n_input_info.file_name}}'&isSource=true
+
+  // 获取文件内表名agent
+  n_table_list,agt_tpl_gen_metadata?file_data="{{n_file_data}}"
+  assign('table_list', '{{n_table_list.data}}')
+  
+  // 遍历解析表内数据
+  foreach('n_data', 'table_list', {
+    // 下标对应内容
+    assign('table_item', '{{n_data.item}}')
+
+    // 元数据agent
+    n_metadata,agt_metadata_information?input="{{n_file_data}}"&other="生成表名称{{table_item}}"
+    
+    // 表数据agent
+    n_table_data,agt_tpl_gen_data?metadata="{{n_metadata}}"&information="[]"
+
+    // 生成数据结构
+    n_item,act_func?script='''
+      def result = [:]          
+          
+      result.table_name = table_item 
+      result.metadata = n_metadata 
+      result.columns = n_table_data.columns.toString()
+      result.data = n_table_data.data.toString()
+      return result
+    '''
+    
+    // 输出对象
+    act_func?script="file_test_data.add(n_item)"
+  })
+
+},{
+  assign("file_test_data", '[]')
+  // 查表
+  n_ddl_result, act_kb.selectBy?sql='SHOW CREATE TABLE {{n_input_info.table}}'
+
+  // 元数据agent
+  n_metadata,agt_metadata_information?input="{{n_ddl_result}}"&other="生成表名称{{n_input_info.table}}"
+
+  // 表数据agent
+  n_table_data,agt_tpl_gen_data?metadata="{{n_metadata}}"&information="[]"
+
+  // 生成数据结构
+  n_item,act_func?script='''
+    def result = [:]          
+    result.table_name = n_input_info.table 
+    result.metadata = n_metadata 
+    result.columns = n_table_data.columns.toString()
+    result.data = n_table_data.data.toString()
+    return result
+  '''
+
+  // 输出对象
+  act_func?script="file_test_data.add(n_item)"
+})
+
+// 数组输出
+assign("result_list", '{{file_test_data}}')
+
+// 保存数据库
+// act_kb.defineAndImportData?tableName='kb_test_data_market'&data='{{result_list}}'
+
+// 提取表名或文件路径信息
+define("tpl_json_list", '''
+你是一个信息提取器。请从以下用户问句中提取关键信息，并输出标准JSON格式，不要添加解释：
+
+- 其中 method 来自用户输入的生成方式，如提到“Python方式生成”则是 "Python"，否则默认为 "llm"
+
+输出结构如下：
+1. 若是表相关的句子（如“生成XXX表的测试数据”），输出：
+{
+  "type": "table",
+  "table": "xxx",
+  "method": "llm 或 Python（若语句中提到用 Python 方式）"
+}
+
+2. 若是文件路径相关句子（如“在/XXX/YYY.txt生成测试数据”或“在知识库XXX中提取YYY”），输出：
+{
+  "type": "file",
+  "kb_name": "XXX",  // 表示路径或知识库名
+  "file_name": "YYY",    // 文件名不含后缀
+  "method": "llm 或 Python"
+}
+
+用户问句：{{userInput}}
+''')

@@ -1,0 +1,112 @@
+/*
+{
+  "title": "文档节点处理",
+  "description": "根据documentid查询文档信息并生成Neo4j节点",
+  "parameter": [
+    {
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+	}
+  ],
+  "uiEntrance": "",
+  "version": 1
+}
+*/
+
+ 
+// 1. 读取数据库信息
+assign('kbSpaceFileId', '{{kbSpaceFileId}}')
+// 查询文档所有信息
+n_file_info, act_kb.selectBy?sql='select id as document_id,knowledge_name as document_name,extension as document_type,create_time as upload_date,store_uri as source_path from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}" '
+ 
+
+n_page, act_kb.selectBy?sql='select max(page) as page_count from kbs_doc_page_parse where  documentId="{{kbSpaceFileId}}" '
+
+n_summary, act_kb.selectBy?sql='select page,description as summary from kb_doc_req_metadata where  documentId="{{kbSpaceFileId}}" limit 20'
+
+
+
+n_json,act_func?script='''
+// 取第一个 map 并添加 max_page
+def json_data = [:]
+if (n_file_info && !n_file_info.isEmpty()) {
+    json_data = n_file_info[0]
+    json_data['page_count'] = n_page[0]['page_count']
+} 
+return json_data
+'''
+
+n_summary_data,tpl_document_summary,psr_json
+
+n_json_data,act_func?script='''
+
+    n_json['summary'] = n_summary_data['summary']
+
+return n_json
+'''
+
+define('tpl_document_summary', '''
+- Role: 语言处理与文本分析专家
+- Background: 用户需要对文本进行语言识别、内容提炼和总结，并确保总结的风格与原文一致，最终以Markdown JSON格式输出。这表明用户可能在处理多语言文本，需要高效且准确的文本处理能力。
+- Profile: 你是一位精通多语言处理和文本分析的专家，擅长从各种语言的文本中提取关键信息，并以简洁、准确的方式进行总结。你对不同语言的语法、风格和语义有深刻的理解，能够确保总结的风格与原文保持一致。
+- Skills: 你具备语言识别能力、文本提炼能力、总结能力以及对不同语言风格的敏感度。你能够熟练使用Markdown和JSON格式进行输出。
+- Goals: 
+  1. 准确识别文本的原始语言。
+  2. 在同一种语言内对文本内容进行提炼和总结。
+  3. 确保总结的风格与原文一致。
+  4. 将提炼的信息整合为一个简洁的总结字符串。
+  5. 以Markdown JSON格式输出总结内容,语言格式与原始语言一致。
+- Constrains: 你必须确保语言识别的准确性，总结的简洁性和准确性，以及输出格式的正确性。
+- OutputFormat: Markdown JSON格式字符串。
+````json
+{ "language": "english or chinese or other",
+  "summary": "summary data"
+}
+```
+- Workflow:
+  1. 解释摘要信息属于哪种语言。
+  2. 对文本内容进行提炼和总结，确保风格与原文一致。
+  3. 提炼的信息整合为简洁的总结字符串,将总结内容以Markdown JSON格式输出,语言格式与原始语言一致。json格式 
+
+# 根据每页原始摘要信息:
+{{n_summary}}
+
+''')
+
+
+// 2. 使用GPT生成Neo4j节点信息
+// tpl_neo4j_node,psr_cypher
+
+// 定义生成Neo4j节点的提示词
+define('tpl_neo4j_node', '''
+- Role: 数据库架构师和Cypher查询专家
+- Background: 用户需要将文档信息转换为Neo4j数据库中的节点，并通过Cypher查询语句实现。用户提供了详细的文档信息，包括文件属性、最大页数和摘要信息，需要将这些信息整合到一个Cypher查询语句中，以创建一个标记为“Document”的节点。
+- Profile: 你是一位资深的数据库架构师，精通Neo4j图数据库的架构设计和Cypher查询语言。你擅长将复杂的数据结构转化为高效的数据库模型，并能够通过精确的查询语句实现数据的存储和管理。
+- Skills: 你具备深入的Neo4j数据库知识，熟练掌握Cypher查询语言，能够根据提供的数据结构生成准确的节点创建语句。你还具备数据建模和信息整合的能力，确保节点的属性完整且符合数据库设计规范。
+- Goals: 根据用户提供的文档信息，生成一个Cypher查询语句，用于在Neo4j中创建一个标记为“Document”的节点，并将文档的各个属性作为节点的属性。
+- Constrains: 
+1.根据每页原始摘要信息,生成当前文件简短的`summary`(字符串),必须保持与原始摘要信息一致的语言风格
+2.生成的Cypher查询语句必须符合Neo4j的语法规范，确保节点的属性完整且准确。节点标签必须为“Document”，并且节点的属性必须与用户提供的文档信息一致。。
+| 节点类型 | Label      | 主要字段都是字符串类型                                                            | 说明            |
+| ---- | ---------- | ----------------------------------------------------------------- | ------------- |
+| 文件   | `Document` | `document_id`, `document_name`, `document_type`, `upload_date`, `source_path`,`page_count`,`summary` | 唯一标识文件  |
+3. neo4j使用MERGE + SET语句创建或更新节点
+- OutputFormat: Cypher查询语句
+- Workflow:
+  1. 解析用户提供的文档信息，提取文件的各个属性。
+  2. 根据文档信息生成节点的属性列表。
+  3. 构造符合Neo4j语法的Cypher查询语句，创建标记为“Document”的节点。
+
+# 文档信息：
+{{n_file_info}}
+# 最大页数：{{n_page}}
+# 根据每页原始摘要信息:
+{{n_summary}}
+
+''')
+
+
+
+
+

@@ -1,0 +1,112 @@
+/*
+{
+	"title": "Hint记录合并决策Agent",
+	"description": "根据新Hint和历史Hint信息，使用大模型判断应该执行哪种合并策略",
+	"parameter": [
+		{
+			"name": "newActivationRules",
+			"label": "新Hint的激活规则",
+			"type": "textarea",
+			"length": "4000",
+			"required": true
+		},
+		{
+			"name": "newSolution",
+			"label": "新Hint的解决方案",
+			"type": "textarea",
+			"length": "4000",
+			"required": true
+		},
+		{
+			"name": "newType",
+			"label": "新Hint的类型",
+			"type": "input",
+			"length": "50",
+			"required": true
+		},
+		{
+			"name": "newPositive",
+			"label": "新Hint是否成功",
+			"type": "input",
+			"length": "10",
+			"required": false
+		},
+		{
+			"name": "historyData",
+			"label": "历史Hint数据(JSON数组)",
+			"type": "textarea",
+			"length": "8000",
+			"required": false
+		}
+	],
+	"life": "",
+	"uiEntrance": "",
+	"tag": "hint管理"
+}
+*/
+
+// 打印参数信息
+log('========== Hint记录合并决策 ==========')
+
+// 解析历史数据
+n_history_list, act_func.run?script='''
+    def data = fn.list(historyData)
+    return data
+'''
+
+// 调用LLM进行决策判断
+log('')
+log('========== 调用LLM进行合并决策 ==========')
+
+// 调用LLM进行判断
+n_llm_decision, tpl_llm_decision, psr_json
+
+// log('LLM原始决策结果: {{n_llm_decision}}')
+
+// 解析决策结果
+n_decision,act_func.run?script='''
+
+def decision = "INSERT_ONLY"
+def upper = fn.str(n_llm_decision,"decision")
+if (upper.contains("MERGE")) {
+    decision = "MERGE"
+} else if (upper.contains("SOFT_DELETE")) {
+    decision = "SOFT_DELETE_INSERT"
+} else if (upper.contains("INSERT_ONLY") || upper.contains("INSERT")) {
+    decision = "INSERT_ONLY"
+} else if (upper.contains("SKIP")) {
+    decision = "SKIP"
+}
+
+'''
+assign('return', '{{n_decision}}')
+
+// 构建决策提示
+define('tpl_llm_decision', '''
+    你是一个Hint记录合并决策专家。请根据以下信息判断应该执行哪种合并策略。
+
+    #新记录信息
+    - activation_rules: {{newActivationRules}}
+    - solution: {{newSolution}}
+    - type: {{newType}}
+    - positive: {{newPositive}}
+
+    #现有相似记录
+    {{n_history_list}}
+
+    #决策选项
+    1. MERGE - 合并到现有记录：当新记录与现有记录的activation_rules、solution、type高度相似时选择
+    2. SOFT_DELETE_INSERT - 软删除现有记录并新增：当新记录与现有记录相似但有显著差异时选择
+    3. INSERT_ONLY - 仅新增记录：当没有查到相似记录或相似度很低时选择
+    4. SKIP - 跳过处理：当新记录是重复的或无价值时选择
+
+    #判断规则
+    - 如果相似度score >= 0.8 且内容高度相似，应该选择 MERGE
+    - 如果相似但有显著差异，应该选择 SOFT_DELETE_INSERT
+    - 如果没有相似记录或相似度很低，应该选择 INSERT_ONLY
+    - 如果是重复记录或无价值记录，应该选择 SKIP
+
+    #输出格式
+    {"decision": "MERGE(决策选项的某一种）", "reason": "原因描述"}
+
+''')

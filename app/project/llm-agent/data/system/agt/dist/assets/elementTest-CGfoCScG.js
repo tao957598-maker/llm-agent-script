@@ -1,0 +1,1 @@
+import{_ as s,c as t,aU as o,o as a}from"./index-B18jbYqT.js";const r={},i={id:"test"};function c(d,e){return a(),t("div",i,e[0]||(e[0]=[o("iframe",{src:"http://localhost:5171/show-ui?apiKey=sk-k1-11GkSB_zszHZi3QniTFlJSjczMSl9&pageIdentifier=daily_supplies_list",frameborder:"0"},null,-1)]))}const l=s(r,[["render",c],["__scopeId","data-v-dbdd1f48"]]);export{l as default};

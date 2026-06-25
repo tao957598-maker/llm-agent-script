@@ -1,0 +1,72 @@
+/*{
+	"title":"Gen testcase by KB (Auto Mixed Root)",
+	"description":"Mixed-mode orchestration: split pages to web/api and execute both pipelines",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"resultPlan":"status,n_combined_result,n_doc_mind_map,web_pages,api_pages",
+	"version":1
+}*/
+assign("status", "Agent is running")
+assign("n_combined_result", "")
+assign("n_doc_mind_map", "")
+assign("documentId", "{{kbSpaceFileId}}")
+assign("effectiveDocumentId", "{{kbSpaceFileId}}")
+
+// detect page-level source type
+n_page_type,agt_detect_source_type_by_page?kbSpaceFileId={{kbSpaceFileId}}&pages={{pages}}
+assign("web_pages", "{{n_page_type.web_pages}}")
+assign("api_pages", "{{n_page_type.api_pages}}")
+
+assign("web_result", "{}")
+assign("api_result", "{}")
+
+// auto mixed mode: delete once before sub-pipelines run
+act_kb.selectBy?sql='delete from kb_gen_test_module where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
+on_failure({
+	act_flow.success
+})
+act_kb.selectBy?sql='delete from kb_gen_test_module_design where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
+on_failure({
+	act_flow.success
+})
+act_kb.selectBy?sql='delete from kb_gen_test_case where version = "{{version}}" and document_id in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
+on_failure({
+	act_flow.success
+})
+
+// run web flow for web pages
+when('fn.hasValue(web_pages)', {
+    n_web_result,agt_test_doc_summary?kbSpaceFileId={{kbSpaceFileId}}&pages={{web_pages}}&version={{version}}&source_type=web&skip_delete=true
+    assign("web_result", "{{n_web_result}}")
+})
+
+// run api flow for api pages
+when('fn.hasValue(api_pages)', {
+    n_api_result,agt_gen_test_case_api_root?kbSpaceFileId={{kbSpaceFileId}}&pages={{api_pages}}&version={{version}}&skip_delete=true
+    assign("api_result", "{{n_api_result}}")
+})
+
+// compose display outputs for entry
+act_func?script='''
+    def w = web_result
+    def a = api_result
+    def wMd = ""
+    def aMd = ""
+    try { if (w instanceof Map && w.get("n_combined_result") != null) wMd = w.get("n_combined_result").toString() } catch (Throwable ignore) {}
+    try { if (a instanceof Map && a.get("n_combined_result") != null) aMd = a.get("n_combined_result").toString() } catch (Throwable ignore) {}
+    fn.put("n_combined_result", [wMd, aMd].findAll { it != null && it.toString().trim().length() > 0 }.join("\\n\\n"))
+'''

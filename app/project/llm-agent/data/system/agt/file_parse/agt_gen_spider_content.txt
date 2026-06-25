@@ -1,0 +1,147 @@
+/*
+{
+	"title":"Generate Spider Content",
+	"description":"Generate spider content",
+	"parameter":[
+		{
+			"name":"system_name",
+			"label":"系统名称"
+		},
+        {
+			"name":"version",
+			"label":"版本号"
+		}
+	],
+  "uiEntrance":"graph",
+	"resultPlan":"n_features_data,n_stories_data,n_tasks_data,n_graph_data,",
+	"life":1000,
+	"version":1
+}
+*/
+
+// get n_kb_spiderdeep_directory_data
+n_kb_spiderdeep_directory_data, act_kb.selectBy?sql='SELECT directory_id, biz_id, current_uri, target_uri, run_steps FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" and version = "{{version}}" and run_success = "1" and directory_id is not NULL'
+
+// foreach n_kb_spiderdeep_directory_data
+foreach('n_data', 'n_kb_spiderdeep_directory_data', {
+    assign('z_spiderdeep_directory_item', '{{n_data.item}}')
+    // z_current_uri
+    assign('z_current_uri', '{{z_spiderdeep_directory_item.current_uri}}')
+    assign('z_directory_id', '{{z_spiderdeep_directory_item.directory_id}}')
+    // z_target_uri
+    assign('z_target_uri', '{{z_spiderdeep_directory_item.target_uri}}')
+    assign('z_run_steps', '{{z_spiderdeep_directory_item.run_steps}}')
+    assign('z_biz_id', '{{z_spiderdeep_directory_item.biz_id}}')
+
+    when('z_current_uri!=z_target_uri',{
+
+      // 查找父节点, 用子节点的current_uri查找父节点的target_uri
+      n_select_data, act_kb.selectBy?sql='SELECT directory_id, current_uri, target_uri, run_steps FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" and version = "{{version}}" and target_uri = "{{z_current_uri}}" and run_success = "1" and directory_id is not NULL'
+
+      when('{{(n_select_data![])?size == 0}}',{
+          // 没有查到数据，则当前数据为顶级节点
+          n_data_item, act_func?script='''
+            def variable = [
+                properties: [
+                    current_uri: "{{z_target_uri}}",
+                    directory_id: "{{z_directory_id}}",
+                    relationKey: "directory_id"
+                ]
+            ]
+            return variable
+            '''
+      },{
+        n_data_item, act_func?script='''
+        def variable = n_select_data[0]
+        return variable
+        '''
+        // f_data_item
+        assign('f_data_item', '{{n_data_item}}')
+
+        assign('f_directory_id', '{{f_data_item.directory_id}}')
+        assign('f_current_uri', '{{f_data_item.current_uri}}')
+        assign('f_target_uri', '{{f_data_item.target_uri}}')
+
+        n_data_item, act_func?script='''
+          def variable = [
+              properties: [
+                  directory_id: "{{f_directory_id}}",
+                  current_uri: "{{f_target_uri}}",
+                  relationKey: "directory_id"
+              ],
+              subNode: [
+                  [
+                      properties: [
+                          directory_id: "{{z_directory_id}}",
+                          current_uri: "{{z_target_uri}}",
+                          relationKey: "directory_id"
+                      ],
+                      "relationProps":[
+                        current_uri: "{{z_current_uri}}",
+                        target_uri: "{{z_target_uri}}",
+                        "run_steps": z_run_steps.toString(),
+                        "relationType" :"inherit"
+                      ]
+                  ]
+              ]
+          ]
+          return variable
+          '''
+      })
+      // data_item
+      assign('a_data_item', '{{n_data_item}}')
+      //# Update2
+      act_kb.update?name=kb_spiderdeep_directory&columnValues="{'graph_content':'{{a_data_item}}'}"&where='{"biz_id":"{{z_biz_id}}"}'
+
+    })
+
+})
+
+
+
+
+
+
+
+define('tpl_graph_prompt','''
+  你是一位专业的 JSON 数据结构生成专家，任务是根据给定的数据生成树形结构的 JSON
+
+要求：
+1、内容表与执行表做映射，由内容表作为根节点，执行表为子节点
+2、只允许调整结构，不允许对原有的数据进行修改
+3、父节点的key为：properties，子节点的key为"subNode"
+4、每个节点必须包含relationKey字段, 根节点relationKey字段的值固定为"directory_id", 子节点固定为"directory_id"字符串
+5、子节点的directory_id必须是通过子节点的current_uri去所有父节点的节点ID列表中查找出来的directory_id
+
+输出案例：
+{
+    "properties": {
+        "current_uri": "/index",  # 当前路由，一般由内容表决定
+        "directory_id": "",  # 内容表的唯一ID
+        "relationKey": "directory_id",  # 根节点为固定值"directory_id"
+    },
+    "subNode": [  # 子节点，由执行表映射到内容表
+        {
+            "properties": {
+                "directory_id": "", # 父节点的关联ID, 通过子节点中的current_uri去所有父节点的节点ID列表中查找对应的directory_id
+                "biz_id": "",  # 执行表的唯一ID
+                "current_uri": "",  # 当前界面的uri
+                "run_steps": [  # 执行步骤，执行完后由当前uri变成目标uri
+                    ...
+                ],
+                "target_uri": "",  # 执行表的目标uri对应内容表的当前uri
+                "relationKey": "directory_id"  # 根节点为固定值"directory_id"
+            }
+        }
+    ]
+}
+
+# 下面为内容表：
+{{spiderdeep_content_item}}
+
+# 下面为执行表：
+{{kb_spiderdeep_directory_data}}
+
+# 所有父节点的节点ID
+{{n_spiderdeep_content_data}}
+''')

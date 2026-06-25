@@ -1,0 +1,80 @@
+/*
+{
+	"title":"Generate test report",
+	"description":"Generate and manage automated test reports",
+	"parameter":"test_no=测试用例编号&current_step=可选的测试步骤",
+	"resultPlan":"n_report",
+	"version":1
+}
+*/
+/
+// Check requirement
+when('!fn.hasValue(test_no)', {
+	assign('test_no', 'deposit_and_transfer_funds_find')
+	assign('current_step', "10. Check if today's transaction of deposit “2580” to primary Account is successful")
+})
+
+when('!fn.hasValue(run_agent_name)', {
+	assign('run_agent_name', 'agt_test_wordreport')
+})
+
+// Get execution information
+n_req,act_func?name='ReportData.data()'
+assign('RequestId', "{{n_req[0]['request_id']}}",
+	'TaskName', "{{n_req[0]['task_name']}}",
+	'StartTime', "{{n_req[0]['start_time']}}",
+	'EndTime', "{{n_req[0]['end_time']}}",
+	'DurationSeconds', "{{n_req[0]['duration_hms']}}",
+	'TestResult', "{{n_req[0]['test_result']}}",
+	'StatusName', "{{n_req[0]['status_name']}}",
+	'AgentName', "{{n_req[0]['agent_name']}}",
+	'AgentTitle', "{{n_req[0]['agent_title']}}",
+	'parameters', "{{n_req[0]['parameters']}}",
+	'Steps', "{{parameters['steps']}}",
+	'ExpectedResult', "{{parameters['expected_result']}}")
+
+
+//# Query test result from KB
+n_success, act_kb.select?name=kb_testcase&column=test_result&where={{fn.json('test_no, test_no')}}
+assign('success', '{{n_success}}')
+
+
+// Query test step result from KB
+n_images, act_kb.select?name=kb_testcase_step&column='result,step'&where={{fn.json('test_no, test_no, step, current_step!')}}
+
+
+// Prepare images list
+act_func?script='''
+	def image_list = []
+	def step_list = []
+	
+	def n_images = fn.list(n_images)
+	for (n_image in n_images) {
+		def image = n_image?.result
+		def step = n_image?.step
+		image_list.add(image)
+		step_list.add(step)
+	}
+
+	fn.put('image_list', image_list)
+	fn.put('step_list', step_list)
+
+	def images = fn.list(fn.filepath(image_list))
+	fn.put('images', images)
+	fn.put('result_list', [])
+
+	def result = []
+    def len = images.size()
+	for (i in 0..<len) {
+		def item = [
+			"images": images[i],
+			"step": step_list[i]
+		]
+		result.add(item)
+	}
+	fn.put('result', result)
+'''
+
+
+//# Generate test report
+n_report, act_kb.word?template='test report.docx'&output='selenium/result/{{test_no}}/report_{{test_no}}.docx'

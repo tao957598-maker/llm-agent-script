@@ -1,0 +1,94 @@
+---
+description: Cursor IDE Agent 开发规则索引
+alwaysApply: true
+---
+
+# Agent 开发规则索引
+
+---
+
+## 规则文件
+
+| 文件 | 适用场景 |
+|---|---|
+| `agent_feedback_rules.mdc` | Agent 开发使用反馈（DSL语法、路径转义、Shell执行等） |
+| `create-agent-script.mdc` | Agent 创建规范（命名、存储路径、语法参考、act/agt/fn语法说明） |
+| `agent_comment_tags_rules.mdc` | **注释标签规则** - `//#`、`//##`、`//^`、`//$` 前端展示与折叠 |
+| `agent_file_encoding_rules.mdc` | **文件编码规范** - 必须使用 UTF-8 without BOM |
+| `windows-shell-rules.mdc` | **Windows Shell 规则** - 优先使用 Git Bash 执行命令 |
+| `llm-agent-logs.mdc` | **日志分析规则** - 日志目录、核心概念、过滤方法 |
+| `mysql_ddl_rules.mdc` | **MySQL DDL 规范** - mysql_upgrade.sql 编写规范 |
+| `java_code_edit_rules.mdc` | **Java 代码修改规范** - 修改代码时保持原有编码 |
+| `java-development-rules.mdc` | **Java 开发规范** - DateUtil、Entity、注释、GenericService+QLInfo 查询 |
+
+---
+
+## 触发关键词
+
+**创建/编写 agent 时**：创建 agent、新建脚本、命名、存储路径、act_xxx、fn.xxx
+
+**遇到问题时**：when()、assign()、foreach、terminal_command、`?:`、`?.size():`、路径转义、Unexpected character、Git Bash
+
+**注释标签相关**：`//#`、`//##`、`//^`、`//$`、前端展示、折叠
+
+**SQL 相关**：mysql_upgrade、DDL、ALTER TABLE、CREATE TABLE、升级脚本
+
+**Java 开发相关**：DateUtil、BaseEntity、GenericService、QLInfo、andClause、分页查询、setDisablePermissionFilter、块字符串 SQL
+
+---
+
+## 核心规则摘要
+
+### 1. Agent 调用语法（重要！）
+
+**错误写法**：
+```groovy
+// ❌ 使用 / 分隔路径
+smart_build_deploy/agt_check_git?os={{n_os}}
+```
+
+**正确写法**：
+```groovy
+// ✅ 直接调用（同一目录下）
+agt_hello?user={{name}}
+
+// ✅ 带包名调用（推荐，可避免名称冲突）
+agt_check_git.smart_build_deploy?os={{n_os}}
+
+// ✅ 多级包名
+agt_xx.a.b.c?参数=值
+```
+
+**包名对应规则**：
+| 文件路径 | 包名 | 调用语法 |
+|---------|------|---------|
+| `.../agt/assistant/agt_xx.txt` | `assistant` | `agt_xx.assistant?参数` |
+| `.../agt/chatdoc/demo/agt_xx.txt` | `chatdoc.demo` | `agt_xx.chatdoc.demo?参数` |
+
+### 2. when() 条件中不能用方法调用
+先 `act_func?script='''...'''` 计算布尔值，再 `when('n_xxx', {...})`
+
+### 3. 三元运算符要用 `?:` 或 `? :`（有空格）
+```groovy
+// ✅ 
+def len = n_data?.size() ?: 0
+def len = n_data ? n_data.size() : 0
+```
+
+### 4. 含 `|` 命令要用 assign 变量
+```groovy
+assign('n_cmd', 'where bash | findstr /i "Git"')
+terminal_command={{n_cmd}}
+```
+
+### 5. script 块内反斜杠写 `\\\\`
+```groovy
+path.replace('\\\\', '/')  // 要表示一个反斜杠
+```
+
+### 6. Windows 路径统一转正斜杠
+```groovy
+path.replace('\\\\', '/')  // 在 Groovy 里转换
+```
+
+### 7. Windows 下用 Git Bash，不用 PowerShell

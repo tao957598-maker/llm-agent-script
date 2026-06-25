@@ -1,0 +1,80 @@
+/*
+{
+	"title":"视觉问答 (Pro)",
+	"description":"进行OCR识别后，通过视觉大模型获取图片中指定信息",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求",
+			"required":true
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space"
+		}
+	],
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"s",
+	"life":100,
+	"displayOrder":0,
+	"version":2
+}
+*/
+
+n_data,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,kb_spaces_folder_id,extension,store_uri,knowledge_name'&maxSize=1&where='{"id":{{kbSpaceFileId}}}'
+n_first_data,act_func?script='''
+                        return n_data[0]
+                    '''
+n_api_data,act_api.doExecute?name='img_ocr_api'&fileNames='{{n_first_data.store_uri}}'
+
+assign('image_url',"{{n_first_data.store_uri}}")
+assign('ocr_content',"{{n_api_data.ocr_content}}")
+
+assign('system_prompt', '''
+# Role
+你是一个专业的文档信息提取专家 Agent。你的任务是根据用户提供的图片和指令，精准提取关键信息并输出为严格的 JSON 格式。
+
+# Constraints
+1. **绝对忠实于图片**：只提取图片中可见的信息，严禁利用常识编造数据。如果图片中不存在 requested 信息，对应字段值设为 null。
+2. **坐标定位**：对于提取的关键实体，尽可能提供其在图片中的大致位置坐标 (bbox)，以便后续人工复核。
+3. **逻辑校验**：如果指令涉及计算（如总计=单价*数量），请先在内心进行计算验证，确保数据逻辑自洽。
+4. **输出格式**：仅输出合法的 JSON 字符串，不要包含任何 Markdown 标记或额外解释文字。
+
+# Workflow
+1. **分析指令**：理解用户想要提取的具体字段和规则。
+2. **全局扫描**：识别图片中的表格、段落、印章等布局。
+3. **局部聚焦**：针对每个目标字段，放大观察细节（特别是手写体和模糊数字）。
+4. **自我反思**：检查提取结果是否符合常理（例如：身份证号位数、日期逻辑）。
+5. **最终输出**：生成 JSON。
+
+# Example Output Schema
+{
+  "document_type": "发票",
+  "extracted_data": {
+    "invoice_number": {"value": "No.123456", "confidence": 0.98, "bbox": [x1,y1,x2,y2]},
+    "total_amount": {"value": 100.00, "currency": "CNY", "confidence": 0.99},
+    "items": [
+      {"name": "办公用品", "qty": 5, "price": 20.00}
+    ]
+  },
+  "verification_status": "PASS", // 或 "FAIL: 金额计算不匹配"
+  "comments": "无"
+}
+''')
+assign('user_prompt', '''
+# Task
+用户的问题是：{{userInput}}
+用户提供的图片：{{image_url}}
+OCR识别的内容：{{ocr_content}}
+''')
+
+define('tpl_analyze_image', '''
+/*{
+   "llmType":"alias.vision"
+}*/
+{{user_prompt}}
+{{fn.chatImageFlag('%{system_prompt}%', 'user_prompt', '', 'image_url', 1)}}
+''')
+//$ Final Result 
+tpl_analyze_image

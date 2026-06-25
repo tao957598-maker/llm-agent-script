@@ -1,0 +1,446 @@
+/*
+{
+	"title":"Report PDF Generator Agent",
+	"description":"Generate report PDF and report-with-rationale PDF from reportJsonData",
+	"parameter":[
+		{
+			"name":"reportName",
+			"label":"Report Name",
+			"required":true
+		},
+		{
+			"name":"reportJsonData",
+			"label":"Report JSON Data",
+			"required":true
+		},
+		{
+			"name":"caseId",
+			"label":"Case ID",
+			"required":false
+		},
+		{
+			"name":"userInput",
+			"label":"Additional Requirement",
+			"required":false
+		}
+	],
+	"displayOrder":0,
+	"version":15
+}
+*/
+// =====================================================
+// Report PDF Generator Agent
+//
+// Purpose:
+// 1. Receive reportJsonData from business agent
+// 2. Generate two markdown payloads:
+//    - business report markdown
+//    - report-with-rationale markdown
+// 3. Call PDF generation API twice
+// 4. Return markdown + pdf results
+//
+// Notes:
+// - reportName will be used as the page title
+// - Replace the PDF API name below if needed:
+//   okp_generate_pdf
+// =====================================================
+
+assign('n_agent_name', 'agt_report_pdf_generator')
+assign('n_user_input', '{{userInput}}')
+assign('n_report_markdown', '')
+assign('n_pdf_result', '{}')
+assign('n_final_result', '{}')
+assign('n_base_url','http://172.18.3.11:5171/api/agent-instance/download-result-file?fileName=')
+log('Start {{n_agent_name}}, caseId={{caseId}}, reportName={{reportName}}')
+
+// ---------- Step 1: normalize input ----------
+n_report_obj,act_func?script='''
+    def obj = fn.map(reportJsonData)
+    if(obj == null){
+        obj = [:]
+    }
+    return obj
+'''
+log('n_report_obj={{n_report_obj}}')
+
+n_clean_json,act_func?script='''
+    import com.alibaba.fastjson2.JSON
+
+    // ===== 递归删除指定字段 =====
+    def removeFields(obj, keysToRemove){
+        if(obj instanceof Map){
+            keysToRemove.each { obj.remove(it) }
+            obj.each { k, v ->
+                removeFields(v, keysToRemove)
+            }
+        }else if(obj instanceof List){
+            obj.each {
+                removeFields(it, keysToRemove)
+            }
+        }
+    }
+
+    // ===== 判断是否为空�? =====
+    def isEmptyValue
+    isEmptyValue = { v ->
+        if(v == null){
+            return true
+        }
+        if(v instanceof String){
+            return v.trim() == ""
+        }
+        if(v instanceof List){
+            return v.isEmpty()
+        }
+        if(v instanceof Map){
+            return v.isEmpty()
+        }
+        return false
+    }
+
+    // ===== 递归清理空�?�节�? =====
+    def pruneEmpty
+    pruneEmpty = { node ->
+        if(node instanceof Map){
+            def keys = new ArrayList(node.keySet())
+            for(def k : keys){
+                def cleaned = pruneEmpty(node[k])
+                if(cleaned == null){
+                    node.remove(k)
+                }else{
+                    node[k] = cleaned
+                }
+            }
+
+            // 特殊规则：仅包含 value 且为�? �? 删除整个节点
+            if(node.size() == 1 && node.containsKey("value") && isEmptyValue(node["value"])){
+                return null
+            }
+
+            return node.isEmpty() ? null : node
+        }
+
+        if(node instanceof List){
+            def out = []
+            node.each { item ->
+                def cleaned = pruneEmpty(item)
+                if(cleaned != null){
+                    out.add(cleaned)
+                }
+            }
+            return out.isEmpty() ? null : out
+        }
+
+        return isEmptyValue(node) ? null : node
+    }
+
+    // ===== 初始�? JSON =====
+    def json = n_report_obj
+    if(json == null){
+        json = [:]
+    }else{
+        // 深拷贝，避免修改原对�?
+        json = JSON.parse(JSON.toJSONString(json))
+    }
+
+    // ===== 要删除的字段 =====
+    def keysToRemove = ["aiRationale", "knowledgeBaseUsed", "dataSource"]
+
+    // ===== 执行清理 =====
+    removeFields(json, keysToRemove)
+    json = pruneEmpty(json)
+
+    if(json == null){
+        json = [:]
+    }
+
+    // ===== 返回结果 =====
+    return json
+'''
+
+// ---------- Step 3: generate markdown ----------
+n_report_markdown,tpl_report_markdown,psr_all
+log('n_report_markdown={{n_report_markdown}}')
+
+n_report_notational_markdown,tpl_report_no_rational_markdown,psr_all
+log('n_report_notational={{n_report_notational}}')
+
+//n_pdf_result,act_api.doExecuteDynamic?name="okp_generate_pdf"&dynamicParamData='{{n_standard_pdf_payload}}'
+//log('n_pdf_result={{n_pdf_result}}')
+
+// ---------- Step 5: generate rationale pdf ----------
+// Step 6：生成最终文件名（若用户没传 fileName 就自动生成）
+n_md_file_info, act_func?script='''
+    import java.text.SimpleDateFormat
+    def tempNameNoRational = reportName+".md"
+    def tempNameWithRational = reportName+"_rationale.md"
+    //生成到tmp目录下（会被定时清理
+    def baseDir ="/appdata/template"
+    // 兼容 Windows / Linux 
+    def sep = baseDir.contains("\\\\") ? "\\\\" : "/"
+    def fullPathNoRational = baseDir.endsWith(sep) ? (baseDir + tempNameNoRational) : (baseDir + sep + tempNameNoRational)
+    def fullPathWithRational = baseDir.endsWith(sep) ? (baseDir + tempNameWithRational) : (baseDir + sep + tempNameWithRational)
+    def info = [:]
+    info.put("dir", baseDir)
+    info.put("mdFilePathNoRational", fullPathNoRational)
+    info.put("mdFilePathWithRational", fullPathWithRational)
+    return info
+'''
+log("MD file paths: noRationale={{n_md_file_info.mdFilePathNoRational}}, withRationale={{n_md_file_info.mdFilePathWithRational}}")
+
+// Step 7：写�? Markdown 文件
+n_write_result, act_func.write?filename="{{n_md_file_info.mdFilePathNoRational}}"&data="{{n_report_notational_markdown}}"
+
+n_write_result_with_rational, act_func.write?filename="{{n_md_file_info.mdFilePathWithRational}}"&data="{{n_report_markdown}}"
+//## Call  Api to convert Md to Word
+assign("n_converter_type",'{"converter_type":"md_to_word"}')
+n_word_url,act_api.doExecute?name='report_word_to_pdf'&fileNames='{{n_md_file_info.mdFilePathNoRational}}'&params='{{n_converter_type}}'
+when('n_word_url.code=="200"',{
+  n_word_url_path,act_func?script='''
+    def wordUrl = n_word_url.relativePath
+    return  wordUrl.replace("/app/data/", "/")
+  '''
+
+    // Step 10：word转pdf(复用report_word_to_pdf)
+    assign("n_converter_type",'''{"converter_type":"word_to_pdf"}''')
+    //## Call  Api to convert Md to Word
+    n_pdf_url,act_api.doExecute?name='report_word_to_pdf'&fileNames='{{n_word_url_path}}'&params='{{n_converter_type}}'
+    when('n_pdf_url.code=="200"',{
+        n_pdf_url_path,act_func?script='''
+            def pdfUrl = n_pdf_url.relativePath
+            return  pdfUrl.replace("/app/data/", "/")
+        '''
+        log('****n_word_url=={{n_word_url}}*********n_pdf_url_path=={{n_pdf_url_path}}')
+        //##Step 11 将word文件上传到用户空间的template目录�?
+        n_store_pdf_path,act_api.doExecute?name='report_kbs_upload_user_file'&fileNames="{{n_pdf_url_path}}"&params='{"folderName":"report"}'
+        //n_kbs,act_kbs.fileSyncKbSpace?filePath='system/tmp/api/hello_test_report_template_20260112101109.docx'
+        log('-----n_store_pdf_path====={{n_store_pdf_path}}')
+        n_pdf_id,act_func?script='''
+            if(n_store_pdf_path.code==200){
+            def pdfMap=n_store_pdf_path.data[0]
+            def pdfFileName = pdfMap.keySet().iterator().next()
+            def pdfFileId = pdfMap.get(pdfFileName)  
+            return pdfFileId
+            }
+        '''
+        n_knowledge_info,act_api.doExecuteDynamic?name='kbs_knowledge_info'&dynamicParamData='{"knowledgeId":"{{n_pdf_id}}"}'
+        when('n_knowledge_info.code==200',{
+            n_store_uri,act_func?script='''
+                def data=n_knowledge_info.data
+                def storeUri = data.storeUri
+                return storeUri  
+            '''
+            assign('n_pdf_no_rational','{{n_store_uri}}')
+        },{
+            assign('n_pdf_no_rational','')
+        })
+    })
+})
+
+// Step 9：Md转word(复用report_word_to_pdf)
+assign("n_converter_type",'''{"converter_type":"md_to_word"}''')
+//## Call  Api to convert Md to Word
+n_word_url_rational,act_api.doExecute?name='report_word_to_pdf'&fileNames='{{n_md_file_info.mdFilePathWithRational}}'&params='{{n_converter_type}}'
+when('n_word_url_rational.code=="200"',{
+  n_word_url_path,act_func?script='''
+    def wordUrl = n_word_url_rational.relativePath
+    return  wordUrl.replace("/app/data/", "/")
+  '''
+
+    // Step 10：word转pdf(复用report_word_to_pdf)
+    assign("n_converter_type",'''{"converter_type":"word_to_pdf"}''')
+    //## Call  Api to convert Md to Word
+    n_pdf_url,act_api.doExecute?name='report_word_to_pdf'&fileNames='{{n_word_url_path}}'&params='{{n_converter_type}}'
+    when('n_pdf_url.code=="200"',{
+        n_pdf_url_path,act_func?script='''
+            def pdfUrl = n_pdf_url.relativePath
+            return  pdfUrl.replace("/app/data/", "/")
+        '''
+        log('****n_word_url=={{n_word_url}}*********n_pdf_url_path=={{n_pdf_url_path}}')
+        //##Step 11 将word文件上传到用户空间的template目录
+        n_store_pdf_path,act_api.doExecute?name='report_kbs_upload_user_file'&fileNames="{{n_pdf_url_path}}"&params='{"folderName":"report"}'
+        //n_kbs,act_kbs.fileSyncKbSpace?filePath='system/tmp/api/hello_test_report_template_20260112101109.docx'
+        log('-----n_store_pdf_path====={{n_store_pdf_path}}')
+        n_pdf_id,act_func?script='''
+            if(n_store_pdf_path.code==200){
+            def pdfMap=n_store_pdf_path.data[0]
+            def pdfFileName = pdfMap.keySet().iterator().next()
+            def pdfFileId = pdfMap.get(pdfFileName)  
+            return pdfFileId
+            }
+        '''
+        n_knowledge_info,act_api.doExecuteDynamic?name='kbs_knowledge_info'&dynamicParamData='{"knowledgeId":"{{n_pdf_id}}"}'
+        when('n_knowledge_info.code==200',{
+            n_store_uri,act_func?script='''
+                def data=n_knowledge_info.data
+                def storeUri = data.storeUri
+                return storeUri  
+            '''
+            assign('n_pdf_with_rational','{{n_store_uri}}')
+        },{
+            assign('n_pdf_with_rational','')
+        })
+    })
+})
+
+
+// ---------- Failure Handling ----------
+on_failure({
+    assign('n_final_result','{"caseId":"{{caseId}}","reportName":"{{reportName}}","status":"fail","message":"report pdf generation failed"}')
+    log('agt_report_pdf_generator execution failed')
+    act_flow.go?plan=end
+})
+//return final result
+assign('result','''{
+    "n_url_with_rational":"{{n_base_url}}{{n_pdf_with_rational}}",
+    "n_url_no_rational":"{{n_base_url}}{{n_pdf_no_rational}}"
+}
+    
+''')
+
+// ---------- Step 2: define markdown generation prompts ----------
+define('tpl_report_markdown', '''
+You are a professional banking and compliance report formatter.
+
+Your task is to transform reportJsonData into a clean, reviewer-friendly markdown report.
+
+# Input
+
+## reportName
+{{reportName}}
+
+## caseId
+{{caseId}}
+
+## reportJsonData
+{{n_report_obj}}
+
+## additional requirement
+{{n_user_input}}
+
+--------------------------------------------------
+# STRICT OUTPUT RULES (MUST FOLLOW)
+--------------------------------------------------
+
+1. Output MUST be pure Markdown content only.
+2. DO NOT output JSON.
+3. DO NOT output explanations or any extra text.
+4. DO NOT wrap the output with ``` or ```md.
+5. The FIRST line MUST be exactly:
+   # {{reportName}}
+6. The SECOND line MUST be exactly:
+   > Case ID: {{caseId}}
+7. All sections MUST appear in the exact order defined below.
+8. If any section has no data, still keep the section title and write "N/A".
+9. Use clean spacing (one blank line between sections).
+10. Use markdown tables for summary metrics if available.
+11. Keep formatting consistent and suitable for PDF rendering.
+
+--------------------------------------------------
+# REQUIRED MARKDOWN STRUCTURE (STRICT)
+--------------------------------------------------
+
+# {{reportName}}
+
+> Case ID: {{caseId}}
+
+## Executive Summary
+(Provide a concise summary of key conclusions)
+
+## Summary Metrics
+| Metric | Value |
+|---|---|
+| ... | ... |
+
+## Key Findings
+- ...
+- ...
+
+## Detailed Analysis
+
+### Section 1
+...
+
+### Section 2
+...
+
+## Recommendation
+- ...
+''')
+
+// ---------- Step 2: define markdown generation prompts ----------
+define('tpl_report_no_rational_markdown', '''
+You are a professional banking and compliance report formatter.
+
+Your task is to transform reportJsonData into a clean, reviewer-friendly markdown report.
+
+# Input
+
+## reportName
+{{reportName}}
+
+## caseId
+{{caseId}}
+
+## reportJsonData
+{{n_clean_json}}
+
+## additional requirement
+{{n_user_input}}
+
+--------------------------------------------------
+# STRICT OUTPUT RULES (MUST FOLLOW)
+--------------------------------------------------
+
+1. Output MUST be pure Markdown content only.
+2. DO NOT output JSON.
+3. DO NOT output explanations or any extra text.
+4. DO NOT wrap the output with ``` or ```md.
+5. The FIRST line MUST be exactly:
+   # {{reportName}}
+6. The SECOND line MUST be exactly:
+   > Case ID: {{caseId}}
+7. Sections with no meaningful data MAY be omitted instead of rendering "N/A".
+8. Omit empty fields, empty URLs, empty tables, and empty bullet items.
+9. Use clean spacing (one blank line between rendered sections).
+10. Use markdown tables for summary metrics if available.
+11. Keep formatting consistent and suitable for PDF rendering.
+
+Additional no-rationale rendering rules:
+- Do not render fields whose value is empty, null, or missing.
+- Do not render URL fields when the URL is empty.
+- If an entire subsection has no remaining content after cleanup, omit that subsection title.
+- If an entire section has no remaining content after cleanup, omit that section title.
+- Keep false and 0 as valid values and render them normally.
+
+--------------------------------------------------
+# REQUIRED MARKDOWN STRUCTURE (STRICT)
+--------------------------------------------------
+
+# {{reportName}}
+
+> Case ID: {{caseId}}
+
+## Executive Summary
+(Provide a concise summary of key conclusions)
+
+## Summary Metrics
+| Metric | Value |
+|---|---|
+| ... | ... |
+
+## Key Findings
+- ...
+- ...
+
+## Detailed Analysis
+
+### Section 1
+...
+
+### Section 2
+...
+
+## Recommendation
+- ...
+''')

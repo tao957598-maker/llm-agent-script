@@ -1,0 +1,152 @@
+/*
+{
+	"title":"API Test Data Execute With Single Task",
+	"description":"API Test Data Execute With Single Task",
+	"parameter":[
+		{
+			"name":"argMapping",
+			"label":"参数映射",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"kbList",
+			"label":"数据参数",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"test_no",
+			"label":"任务名称",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"base_url",
+			"label":"Base Url",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"Automated Testing",
+	"displayOrder":99,
+	"version":1
+}
+*/
+// Get argMapping
+assign('n_argMapping', '{{argMapping}}')
+
+// Get kbList
+assign("n_kbList", "{{kbList}}")
+
+// baseUrl
+n_base_url, act_func.run?js='''
+	let arr = {{n_argMapping}};
+	let baseUrl = arr.find(i => i.agentCol === "base_url")?.value;
+	baseUrl;
+'''
+
+// taskName
+n_task_name, act_func.run?js='''
+	let arr = {{n_argMapping}};
+	let taskName = arr.find(i => i.agentCol === "test_no")?.value;
+	taskName;
+'''
+
+// Get application
+n_application, act_func.run?script="return kbList? kbList[0].application : null"
+
+// Get data
+n_datas,act_func?js='''
+	(function() {
+		return JSON.stringify({{n_kbList}});
+	})();
+'''
+ 
+// Get  all api
+n_all_api, act_func?script='''
+    def data = n_datas
+    def result = data.collect { it.name }.join(",")
+    return result
+'''
+
+// Get hash suffix 
+n_suffix,act_func?js='''
+	(function() {
+		let str = '{{n_all_api}}'
+		let hash = 0;
+		for (let i = 0; i < str.length; i++) {
+			const char = str.charCodeAt(i);
+			hash = ((hash << 5) - hash) + char;
+			hash = hash & hash;
+		}
+		return Math.abs(hash).toString(16);
+	})();
+'''
+
+// 返回title_list
+n_test_title, act_func.run?script='''
+	def result = []
+	n_datas.each { item ->
+		if (item.function_data) {
+			def item_list = fn.list(item.function_data)
+          	item_list.each{dict_data->
+              def bb = dict_data.title
+          		result << bb
+            }
+		}
+	}
+	return result
+'''
+ 
+// Do Execute: url, name, method, description, para, verify
+n_result_data, act_api.doExecuteDynamic?name="api_test_0725"&dynamicParamData='{{fn.json("task, n_task_name, url, n_base_url, datas, n_datas")}}'
+n_result_data_map, act_func?script='''
+	return fn.map(n_result_data)
+'''
+
+// Write test report
+when('n_result_data_map.success == "true"',{
+	n_data,act_func?script='''
+		def result_data = n_result_data_map
+		return result_data.data
+	'''
+	n_current_timestamp,act_func?script='''
+		def now = new Date()
+		def millis = now.time % 1000
+
+		def timestamp = String.format(
+			"%04d%02d%02d%02d%02d%02d%03d",
+			now.year + 1900,
+			now.month + 1,
+			now.date,
+			now.hours,
+			now.minutes,
+			now.seconds,
+			millis
+		)
+		return timestamp
+	'''
+	assign('report_file', 'appdata/api_report/{{n_application}}/{{task_name}}_{{n_current_timestamp}}_{{n_suffix}}.html')
+	act_func.write?filename='{{report_file}}'&data='{{n_data}}'&syncKbs=true
+
+    // Test Result
+    assign('report', 'API test completed, report file: {{report_file}}')
+},
+{
+    n_msg,act_func?script='''
+		def result_data = n_result_data_map
+		return result_data.data
+	'''
+    // Test Result
+    assign('report', '{{n_msg}}')
+
+})

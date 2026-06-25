@@ -1,0 +1,138 @@
+/*
+{
+	"title":"agt_bug_test_runplan",
+	"description":"测试paln设置executor性能问题-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_test_step",
+	"version":1
+}
+*/
+
+assign('executor','agt_test_selenium.test') 
+
+assign("parameters","test_no=harvey_hsbc_1025&steps=[\"1. Open homepage: https://quartz.treasury-factory.com/user/login.\",\"2. Input Username \"KEVIN_HKUAT\".\",\"3. Input Customer Code \"HKHSCFUAT\".\",\"4. Input Password \"Hsbc123456@2\".\",\"5. Click Login in button.\",\"6. Click Trade Solution on the left panel.\",\"7. Click Payables Finance on the left panel.\",\"8. Click \"INVOICE FILE UPLOAD CSV\" button.\",\"9. Click \"Standard form\" button.\",\"10. Upload file \"KyribaInvoice-DC2_fund_AI testing_demo06.csv\" from local.\",\"11. Click \"Upload\" button.\",\"12. Click \"Save\" button.\",\"13. Click the \"information\" icon corresponding to \"Integration of uploaded SC document file\".\",\"14. Verify the 'Log of task \"Integration of uploaded SC document file\" based on template \"Automatic\" ' window pop up.\",\"15. Verify the pop up window contain this information: \"Total: 4 Created: 4\".\",\"16. Click \"Close\" button in the pop up window.\",\"17. Select Documents from Maintain dropdown list.\",\"18. Verify Documents page display.\",\"19. Click the Update icon in the last row whose template value is Documents.\",\"20. Verify \"Documents-Documents \" page display.\",\"21. Click … icon beside Buyer.\",\"22. Verify the Buyer window pop up.\",\"23. Input \"YAO_BUYER\" in the first text box.\",\"24. Click \"Apply\" button.\",\"25. Select \"YAO_BUYER_AI\" in the gridview.\",\"26. Click Approve button.\",\"27. Input \"10/22/2025\" in the Start date field.\",\"28. Select \"Ceation date\" in Date type dropdown list.\",\"29. Click Go button.\",\"30. Verify \"Documents-(Documents) \" page display.\",\"31. Verify there are 4 items in the gridview.\",\"32. Verify the value under Reference column contain value \"YAOinvoice25\".\",\"33. Verify the value under Reference column contain value \"YAOinvoice26\".\",\"34. Verify the value under Reference column contain value \"YAOinvoice27\".\",\"35. Verify the value under Reference column contain value \"YAOinvoice28\".\",\"36. Verify the values under Status columns are \"To be approved\".\",\"37. Check the checkbox below \"Selected\".\",\"38. Verify all the checkboxs are checked.\",\"39. Click Approve button in top right.\",\"40. Verify a \"Question\" window pop up.\",\"41. Click \"Yes\" in the \"Question\" window.\",\"42. Verify a window pop up.\",\"43. Verify the content in pop up window contains \"4 data were approved\".\",\"44. Click Ok button.\",\"45. Verify the values under Status columns are \"Approved\".\",\"46. Select \"Apply standalone credit notes to multiple invoices\" in the \"Process\" dropdown list.\",\"47. Verify \"Apply standalone credit notes to multiple invoices\" page display.\"]&step_index=0&current_step=1. Open homepage: https://quartz.treasury-factory.com/user/login.&system=HSBC&version=1&envinfo=[\"home page : https://quartz.treasury-factory.com/user/login\"]")
+// act_plan.runPlan?executor={{executor}}&parameters='test_no={{test_no}}&steps={{n_test_step.items}}&step_index={{n_test_step.index}}&current_step={{current_step}}&application={{system}}&version={{version}}&envinfo={{n_envinfo.envinfo}}&agentCallNames={{n_agentCallNames}}'
+// act_plan.runPlan?executor={{executor}}&parameters='{{parameters}}'
+
+
+
+assign('sub_test_no','harvey_hsbc_1025') 
+assign('system','harvey_hsbc_1025') 
+assign('n_python_file','{{}}') 
+
+// Check script type
+when("n_python_file.jsonFile", {
+	//## Call new Agent to run subtasks
+	agt_test_steps_run?test_no={{sub_test_no}}&system={{system}}
+}, {
+	// Check if script is generated
+	when("!n_python_file.hasFilename()", {
+		//## Check similiar file, score similar 0 is perfectly matched
+		n_similar_file, act_python.readSimilar?pythonType={{pythonType}}&requirement={{current_step}}&subfolder={{subfolder}}&score='0.05'
+		// resultCode: 0:不匹配  1:完全匹配  2:三元组 3:向量库匹配 4:移除序号和标点符号后的完全匹配
+		// Check if it is reusable
+		when('n_similar_file.resultCode>0', {
+			//# Collect page information
+			n_collect_page, act_rpa.send?command=CollectPageInfo\
+				act_func?name=StepTestInfo
+				
+			// Check the similarity metric
+			when('n_similar_file.resultCode==2', {
+				//## Reuse code directly
+				agt_run?python_file={{n_similar_file.filename}}&parameter={{n_similar_file.parameter}}&current_step={{current_step}}
+				
+				//## Write selenium script to the artifact repository
+				n_python_file_2, act_python.write?requirement={{current_step}}&pythonCode={{fn.readFile(n_similar_file.fullFilename)}}
+			})
+			when('n_similar_file.resultCode==3', {
+				// 目前向量库代码没有审核，直接当做没有代码
+				// Anounce no reusable code found
+				act_flow.fail?result='No reusable code'&message=true
+			})
+			when('n_similar_file.resultCode==4', {
+				// Rerun python code 
+				agt_run?python_file={{n_similar_file.fullFilename}}
+
+				//## Write selenium script to the artifact repository 4
+				n_python_file_4, act_python.write?requirement={{current_step}}&pythonCode={{fn.readFile(n_similar_file.fullFilename)}}
+				
+			})
+			//# Collect page information again
+			n_collect_page_again, act_rpa.send?command=CollectPageInfo
+
+			//# Check and compare the execution result
+			n_cmp1, tpl_cmp_pageresult, vrf_flag?value='fn.str(sys_last_result.thought.re_reasoning)=="false" || sys_last_result.hasDialog',\
+				agt_save_explorer?columns='page_change,tpl_cmp_pageresult.thought.change,reasoning,tpl_cmp_pageresult.thought.reasoning'
+
+			// Check if page doesnot change
+			when('fn.not(n_cmp1.run_success)', {
+				// 基于现有代码生成失败，直接返回，让后续步骤生成新代码
+				// Anounce no valid code
+				act_flow.fail?result='No valid code'
+			}, {
+				// When the page changes and no dialog appears
+				when('fn.hasValue(n_cmp1.change_element) && n_cmp1.change_behavior=="add" && !fn.bool(n_cmp1.hasDialog)', {
+					// Add page verify element
+					tpl_self_add_wait, psr_python, act_memory.assign?var=python_code
+					
+					n_gen_file, act_python.writeTmp?requirement={{current_step}}&pythonCode={{sys_last_result}}
+				})
+			})
+
+			//# Write selenium script to the artifact repository
+			n_python_file_3, act_python.write?requirement={{current_step}}
+			
+			// Result
+			assign('result', '{{n_python_file_3.fullFilename}}')
+		},
+		{
+			// Obtain the main body of the test step
+			n_tmp_step, act_func?script='''
+				def cleaned = current_step.replaceAll(/^(?:\\d+[\\.\\)]|第[一二三四五六七八九十\\d]+[步章节]|Step\\s*\\d+)\\s*/, '').replaceAll(/[.!;:，。！？、，；：]+$/, '')
+				return cleaned
+			'''
+
+			// Matching similarity test step
+			n_result, act_kb.selectBy?sql='SELECT * FROM kb_testcase_step WHERE application = "{{system}}" and (version = "{{version}}" or version is null ) and step LIKE "%{{n_tmp_step}}%" and result is not null '
+
+			when('n_result?size>0', {
+				// Check if similar test step exist
+				n_test_no, act_func?script='''
+					def testno = n_result[0].test_no
+					return testno
+				'''
+				n_step, act_func?script='''
+					def step = n_result[0].step
+					return step
+				'''
+				// Get python file of similar test step
+				n_python_file, act_python.read?pythonType={{pythonType}}&requirement={{n_step}}&subfolder={{n_test_no}}
+
+				when("n_python_file.hasFilename()", {
+					// python file exist and run
+					agt_run?python_file={{n_python_file.filename}}&parameter={{n_python_file.parameter}}&current_step={{current_step}}
+
+					//## Write selenium script to the artifact repository
+					n_python_file_5, act_python.write?requirement={{current_step}}&pythonCode={{fn.readFile(n_python_file.fullFilename)}}
+
+				},{
+					// Anounce no code found
+					act_flow.fail?result='No reusable code'&message=true
+				})
+
+			},{
+				// Anounce no code found
+				act_flow.fail?result='No reusable code'&message=true
+			})
+
+		})
+	}, {
+		// Load test data
+		n_testdata, act_kb.select?name=kb_testcase_data&where={{fn.json('test_no,test_no,name,system')}}
+		
+		//## Run selenium code
+		agt_run?python_file={{n_python_file.filename}}&parameter={{n_testdata.data}}
+	})
+})

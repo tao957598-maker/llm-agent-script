@@ -1,0 +1,80 @@
+/*
+{
+	"title": "OpsClaw 通用助手",
+	"description": "OpsClaw 通用助手，基于长期记忆、任务规划与受控工具编排的通用助手骨架。",
+	"parameter": [
+		{
+			"name":"userInput",
+			"label":"用户输入",
+			"required":true
+		}
+	],
+	"resultPlan": "n_final_result",
+	"uiEntrance": "chatDoc",
+	"discoverable": true,
+	"tag": "opsclaw",
+	"life": "100"
+}
+*/
+
+//## 获取当前系统信息（名称、高风险开关、登录用户等）
+n_system,act_ac.describe?acName={{contextSystem!}}
+
+// ==================== 组合器：INIT / PLAN / LOOP / END ====================
+assign('opsclaw_root', '',
+	'allow_high_risk_action_safe', 'false',
+	'react_status', 'running',
+	'react_last_observation', '',
+	'react_last_thought', '',
+	'n_final_result', '',
+	'react_max_steps', '{{fn.raw(4)}}')
+
+// 由入口参数直接计算顶层关键上下文（避免依赖 init->mapping 的时序/形态差异）
+when('fn.hasValue(n_system.highRiskActionAllowed)', {
+	assign('allow_high_risk_action_safe', '{{n_system.highRiskActionAllowed}}')
+})
+when('fn.hasValue(n_system.username)', {
+	assign('opsclaw_root', '/user/{{username!}}/appdata/opsclaw')
+})
+// 是否启动本地AC且可用状态
+when("n_system.type == 'LOCAL' && n_system.status == 'AVAILABLE'", {
+	act_memory.assign?var=n_g_localAcFlag&value=true&global=true
+},{
+    act_memory.assign?var=n_g_localAcFlag&value=false&global=true
+})
+act_memory.assign?var=n_g_contextSystem&value={{n_system.name}}&global=true
+// INIT：在同一上下文中直接初始化 opsclaw_root / 记忆 / 工具提示等变量
+n_init_result, agt_opsclaw_init.opsclaw?userInput={{userInput}}&loginUserName={{n_system.username}}&allowHighRiskAction={{allow_high_risk_action_safe}}&loginUserId={{n_system.userId}}
+assign('n_load_memory_result', '{{n_init_result.n_load_memory_result}}',
+	'n_api_candidates', '{{n_init_result.n_api_candidates}}',
+	'n_dynamic_toolset_guide', '{{n_init_result.n_dynamic_toolset_guide}}',
+	'n_tool_routing_guide', '{{n_init_result.n_tool_routing_guide}}')
+
+// PLAN
+n_plan_tasks, agt_opsclaw_plan.opsclaw?userInput={{userInput}}&loginUserName={{n_system.username}}&contextSystem={{n_system.name}}&contextEnv='dev'&\
+	n_load_memory_result={{n_load_memory_result}}&n_api_candidates={{n_api_candidates}}&\
+	n_dynamic_toolset_guide={{n_dynamic_toolset_guide}}&n_tool_routing_guide={{n_tool_routing_guide}}
+
+// LOOP
+n_loop_result, agt_opsclaw_loop.opsclaw?userInput={{userInput}}&loginUserName={{n_system.username}}&contextSystem={{n_system.name}}&contextEnv='dev'&\
+	opsclaw_root={{opsclaw_root}}&allow_high_risk_action_safe={{allow_high_risk_action_safe}}&react_max_steps={{react_max_steps}}&\
+	n_load_memory_result={{n_load_memory_result}}&n_api_candidates={{n_api_candidates}}&\
+	n_dynamic_toolset_guide={{n_dynamic_toolset_guide}}&n_tool_routing_guide={{n_tool_routing_guide}}&n_plan_tasks={{n_plan_tasks}}
+
+assign('react_status', '{{n_loop_result.react_status}}',
+	'react_last_observation', '{{n_loop_result.react_last_observation}}',
+	'react_last_thought', '{{n_loop_result.react_last_thought}}',
+	'n_final_result', '{{n_loop_result.n_final_result}}')
+
+// END：若循环耗尽但未产出 finalResult，这里兜底生成最终回答
+when('!fn.hasValue(n_final_result)', {
+	n_final_answer, agt_opsclaw_finalize.opsclaw?userInput={{userInput}}&n_plan_tasks_summary={{n_plan_tasks.validSummary!}}&\
+		n_load_memory_result={{n_load_memory_result}}&react_last_observation={{react_last_observation}}
+	assign('n_final_result', '{{n_final_answer}}')
+	assign('react_status', 'done')
+})
+
+on_failure({
+	assign('n_final_result', 'opsclaw_assistant 执行失败：{{sys_failure_task.result}}')
+	assign('react_status', 'done')
+})

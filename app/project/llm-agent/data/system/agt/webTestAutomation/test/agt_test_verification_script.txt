@@ -1,0 +1,95 @@
+/*
+{
+	"title":"Verify result",
+	"description":"Verify test result",
+	"parameter":"current_step=当前测试步骤",
+	"version":1
+}
+*/
+// Init variable for action type
+assign('current_step',"{{current_step}}")
+//# Collect page information
+n_collect_page, act_rpa.send?command=CollectPageInfo
+n_history_memory, act_rpa.send?command=ReadHistoryData
+
+assign('collect_page',"{{n_collect_page}}")
+assign('history_memory',"{{n_history_memory}}")
+
+
+
+// tpl_verify_data_script
+tpl_verify_data_script, psr_json_python
+assign('python_code','{{sys_last_result}}')
+
+n_isMap,act_func?script='''
+def isMap  // 定义一个变量存储 true/false
+if (python_code instanceof java.util.Map) {
+    isMap = true
+} else {
+    isMap = false
+}
+return isMap'''
+
+when('n_isMap==true',{
+   act_flow.fail
+},{
+  // Write selenium script to the artifact repository
+  // n_python_file, act_python.write?requirement={{current_step}}&pythonType='selenium'
+  // send py file
+  // n_rpa_test,act_rpa.send?name={{python_file}}&current_step={{current_step}}
+
+  assign('result','true')
+  assign('result','{{fn.json("result,result,python_code,python_code")}}')
+
+})
+
+
+
+
+
+define('tpl_verify_data_script',"""
+请你根据下面信息生成校验步骤是否执行成功的代码
+其中
+1、必须使用`autotest`库中封装的方法 writeResult(success, desc),使用英文记录执行结果,success为测试是否成功的true/false标志,desc为结果的说明
+2、涉及到计算的内容，尽可能使用decimal方法进行高精度的计算，尽可能避免出现误差
+3、本代码仅仅涉及数据计算，不涉及任何的额外代码
+- Examples:
+  - 例子1：
+    # 当前测试步骤：判断Savings Balance的数据是否正确修改
+
+    # 所有的步骤：
+    1.记录当前Savings Balance的数据
+    2.Click Go to Deposit
+    3.Select `Savings` Account
+    4.Enter amount `1080` for the deposit
+    5.Click the deposit button.
+    6.判断Savings Balance的数据是否正确修改
+
+    # 历史记忆信息
+    [{'children': None, 'id': 'id_4049119883', 'isOption': False, 'name': '100.00', 'tag': 'text', 'type': 'SPAN', 'xpath': '/html/body/div[2]/div[2]/div[1]/div[2]/div/div/div[2]/h1/span', "msg":"1.记录当前Savings Balance的数据"}]
+  ```python
+  # -*- coding: utf-8 -*-
+  from autotest import *
+  
+  def run():
+  success = (100 + 1080 == 1180)
+  if not success:
+    writeResult(False, "verify script is False")
+    return
+  else:
+    writeResult(True, "verify script is success")
+    return
+  ```
+
+# 当前测试步骤
+{{current_step}}
+
+所有的步骤：
+{{StepTestInfo.steps}}
+
+# 历史记忆信息
+{{history_memory}}
+
+当前页面元素信息：
+{{collect_page}}
+""")

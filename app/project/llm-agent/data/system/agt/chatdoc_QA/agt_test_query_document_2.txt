@@ -1,0 +1,97 @@
+/*{
+	"title":"Document Search and Analysis Agent",
+	"parameter":[
+		{
+			"name":"userInput",
+			 "label":"User Question", 
+			 "required":true
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"required":true,
+			"type":"knowledge_space"
+		}
+	],
+	"resultPlan":"ducoment_query_answer",
+	"llmType": "",
+  	"life": "100"
+  	"uiEntrance": "chatdoc_QA"
+}*/
+
+// OKP.pdf
+// assign("kbSpaceFileId", '252801563954216960')
+when('{{fn.isArray(kbSpaceFileId)}}', {
+	assign('ducoment_query_answer', '')
+})
+// Initialize variables
+assign("page_content", '[]')
+assign("n_source_table", 'kbs_doc_page_parse')
+
+// Step 1: Query document metadata by kbSpaceFileId
+n_metadata, act_kb.select?name='kb_doc_req_metadata'&column='page,description'&where='{"documentId":"{{kbSpaceFileId}}"}'&orderBy='page asc'
+
+// Step 2: Use LLM to judge relevance and return relevant page numbers
+n_relevant_pages,tpl_check_description, psr_json
+
+assign("pages", '{{n_relevant_pages.pages}}')
+
+// Step 3: Get page content based on relevant page numbers and filename
+foreach('n_page_num', 'pages', {
+
+	assign('page_num', '{{n_page_num.item}}')
+
+    n_page_content, act_kb.select?name='kbs_doc_page_parse'&column='id,content'&where='{"documentId":"{{kbSpaceFileId}}","page":"{{page_num}}"}'
+
+	// Get page id from kb
+	n_id,act_func?script='''return n_page_content[0].id.toString()'''
+	// Get page content from kb
+  	n_content,act_func?script='''return n_page_content[0].content'''
+
+	// Set page content
+	assign("page_content", '{{fn.json("page,page_num,id,n_id,documentId,kbSpaceFileId,source_table,n_source_table,content,n_content")}}')
+
+})
+
+
+// The finally result of document query
+assign("ducoment_query_answer", '{{page_content}}')
+
+
+
+// Check if the answer meets the question
+define('tpl_check_description', '''
+- Role: 你是“文档页码过滤器”
+- Goals：依据每页描述判断其是否可能与用户问题相关，不得翻阅或臆测正文内容
+
+- Constrains:（必须严格遵守）：  
+ 1. 接收用户问题 + 一份“页码-描述”清单（JSON 数组）。
+ 2. 逐页独立判断：该页描述是否可能包含回答问题的信息。
+返回要求：
+若 ≥1 页相关：返回 JSON {"pages": [相关页码, ...]}，页码升序、去重。
+若全部不相关：返回  {"pages": []}。
+禁止解释、禁止摘要、禁止输出任何额外文字。 
+
+- OutputFormat
+ - 若存在相关：  
+   {  
+     "pages": [页码1, 页码2, …]                //相关页码，页码升序、去重。
+   }  
+
+ - 若不存在相关：：  
+   {    
+     "pages": []  
+   }  
+
+
+# 当前问题:
+{{userInput}}
+
+#页面以及描述:
+{{n_metadata}}
+
+''')
+
+
+
+

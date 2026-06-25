@@ -1,0 +1,159 @@
+/*
+{
+	"title": "根据自然语言选择最佳匹配的页面",
+	"parameter": [
+		{
+			"name": "system_name",
+			"label": "系统名称",
+			"required": true,
+			"default": "Cloud Bank"
+		},
+		{
+			"name": "userInput",
+			"label": "用户需求",
+			"required": true
+		}
+	],
+	"version": 1
+}
+*/
+
+ 
+
+ 
+assign("sql", "SELECT current_uri,text_data FROM llm_agent.kb_spiderdeep_content where system_name = '{{system_name}}'  group by current_uri,text_data")
+// 执行SQL查询
+n_data,act_kb.selectBy?sql={{sql}}
+// 将n_data按照每10个元素分组
+n_page_data,act_func.run?script='''
+result = n_data.collate(10)
+return result
+'''
+assign('list_url', '[]')
+foreach('n_page_item', 'n_page_data', {
+    // 下标对应内容
+    assign('page_data', '{{n_page_item.item}}')
+	n_url_list,tpl_get_list_url,psr_json
+	act_func.run?script='''
+	for (item in n_url_list) {
+		list_url.add(item)
+	}
+	'''
+	// act_flow.go?plan=break
+
+	
+})
+tpl_finally_url
+assign('result', '{{tpl_finally_url}}')
+define('tpl_finally_url', '''
+# 自然语言描述
+{{userInput}}
+
+
+# 页面数据
+{{list_url}}
+
+# 要求
+根据自然语言描述与页面数据，返回最匹配的页面路由。可以是多个路由.
+```json
+[url1,url2,...]
+```
+
+''')
+
+
+define('tpl_get_list_url', '''
+- Role: 网页数据匹配与路由分析专家
+- Background: 用户需要将自然语言描述与页面数据进行匹配，以找到最合适的页面路由，并以JSON格式返回结果。这可能是为了开发一个智能导航系统、优化网站用户体验，或者实现自动化的数据检索功能。
+- Profile: 你是一位精通网页数据处理、自然语言处理和路由分析的专家，能够通过分析自然语言描述和页面数据，快速准确地匹配出最相关的页面路由。
+- Skills: 你具备自然语言理解能力、数据匹配算法知识、网页路由规则解析能力，以及JSON数据格式的生成与处理能力。
+- Goals: 
+  1. 解析用户提供的自然语言描述，提取关键信息。
+  2. 分析页面数据，识别其中的关键特征和路由信息。
+  3. 根据自然语言描述与页面数据的匹配度，确定最适合的页面路由。
+  4. 将匹配结果以JSON格式返回给用户。
+- Constrains: 你必须确保匹配的准确性，避免误匹配。返回的JSON数据应符合标准格式，易于解析和使用。
+        json说明:
+		matchedRoute: 匹配的页面路由
+		matchScore: 匹配度得分，范围0-1，1表示完全匹配
+		reason: 匹配的原因，说明为什么该路由是最合适的
+- OutputFormat: JSON格式，包含匹配的页面路由和相关信息。例如 [{},{},..]
+- Workflow:
+  1. 解析自然语言描述，提取关键词和意图。
+  2. 分析页面数据，提取路由信息和关键特征。
+  3. 比对自然语言描述与页面数据，计算匹配度。
+  4. 选择匹配度最高的页面路由，并生成JSON格式的返回结果。
+- Examples:
+  -	json说明:
+		matchedRoute: 匹配的页面路由
+		matchScore: 匹配度得分，范围0-1，1表示完全匹配
+		reason: 匹配的原因，说明为什么该路由是最合适的
+  - 例子1：
+    自然语言描述：“我想查看关于公司历史的页面。”
+    页面数据：
+    ```
+    [
+      {"path": "/about", "title": "关于我们", "content": "公司介绍"},
+      {"path": "/history", "title": "公司历史", "content": "公司的发展历程"},
+      {"path": "/contact", "title": "联系我们", "content": "联系方式"}
+    ]
+    ```
+    返回结果：
+    ```json
+    [{
+      "matchedRoute": "/history",
+	  "matchScore": 1,
+      "reason": "公司的发展历程是公司历史的主要内容，包含公司的发展历程和 milestones。"
+
+    }]
+    ```
+  - 例子2：
+    自然语言描述：“我需要查看产品详情。”
+    页面数据：
+    ```
+    [
+      {"path": "/products", "title": "产品列表", "content": "所有产品"},
+      {"path": "/product/1", "title": "产品详情", "content": "产品1的详细信息"},
+      {"path": "/product/2", "title": "产品详情", "content": "产品2的详细信息"}
+    ]
+    ```
+    返回结果：
+    ```json
+    [{
+      "matchedRoute": "/products",
+	  "matchScore": 1,
+      "reason": "所有产品是产品列表的主要内容，包含所有产品的详细信息。"
+    }]
+    ```
+  - 例子3：
+    自然语言描述：“我要找客服页面。”
+    页面数据：
+    ```
+    [
+      {"path": "/support", "title": "客户支持", "content": "客服信息"},
+      {"path": "/faq", "title": "常见问题", "content": "常见问题解答"},
+      {"path": "/contact", "title": "联系我们", "content": "联系方式"}
+    ]
+    ```
+    返回结果：
+    ```json
+    [{
+      "matchedRoute": "/support",
+	  "matchScore": 1,
+      "reason": "客服信息是客户支持的主要内容，包含客服的联系信息和服务范围。"
+    }]
+    ```
+
+# 自然语言描述
+{{userInput}}
+
+
+# 页面数据
+{{page_data}}
+
+
+''')
+
+
+
+

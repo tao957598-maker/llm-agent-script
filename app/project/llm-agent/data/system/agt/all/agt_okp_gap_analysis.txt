@@ -1,0 +1,195 @@
+/*
+{
+	"title":"agt_okp_gap_analysis",
+	"description":"Risk Factors Map、Page 2 的結構風險 + 漂移清單、Page 3 的 Per-Party Verdicts、Page 4 的紅旗報告。動作:扁平化為統一清單,每條含 source_page、source_system、field、value。輸出:Unified Flag List。",
+	"parameter":[
+		{
+			"name":"customerProfile",
+			"required":true,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"companySearchData",
+			"required":false,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"transactionReportData",
+			"required":false,
+			"maxLength":20000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"nameScreeningReportData",
+			"required":false,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"caseId",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		}
+	],
+	"tag":"all",
+	"displayOrder":0,
+	"version":5
+}
+*/
+assign('n_agent_name', 'agt_customer_gap_analysis')
+assign('n_case_id', '{{caseId}}')
+assign('n_kb_query', '{{kbQuery}}')
+
+log('Start {{n_agent_name}}, caseId={{n_case_id}}')
+
+// ---------- Step 1: normalize four inputs ----------
+n_customer,act_func?script=''' return fn.map(customerProfile) ?: [:] '''
+n_company,act_func?script=''' return fn.map(companySearchData) ?: [:] '''
+n_txn,act_func?script=''' return fn.map(transactionReportData) ?: [:] '''
+n_screen,act_func?script=''' return fn.map(nameScreeningReportData) ?: [:] '''
+
+log('Inputs normalized')
+
+
+// ---------- Step 3: query knowledge base by agt_test_kb_argus.chatdoc_QA agent begin----------
+n_test_kb_argus_result,agt_test_kb_argus.chatdoc_QA?userInput="The Hong Kong Association of Banks Frequently Asked Questions in relation to Anti-Money Laundering and Counter-Financing of Terrorism"&kbSpaceId="273100032240091136"&kbSpaceFileId="273100032245334016,273100120520753152,273100121353322496,273100121980370944"
+
+log('n_kb_api_result={{n_test_kb_argus_result}}')
+
+// ---------- Step 7: gap analysis prompt ----------
+define('tpl_gap_analysis_json', '''
+   You are a senior AML / KYC Gap Analysis Decision Engine. Your task is to generate a structured and regulatory-aligned gap analysis report based on the provided Customer Profile, Company Search Data, Transaction Report, Name Screening Report, and optional Knowledge Search Results. The objective is to identify concrete compliance gaps, assess their severity and risk impact, and provide actionable remediation steps.
+
+IMPORTANT:
+- Return JSON only. No explanation, no extra text.
+- All keys must strictly follow the predefined structure. Do not add, remove, or rename any fields.
+- Every field object must include all four attributes: value, aiRationale, knowledgeBaseUsed, dataSource.
+- All outputs must be specific, verifiable, and actionable. Avoid vague wording such as “may”, “potentially”, or “consider”.
+
+FIELD DEFINITIONS:
+1. value:
+The final conclusion, issue description, or recommendation. It must be precise, concrete, and operationally actionable.
+
+2. aiRationale:
+Explain the reasoning behind the conclusion. The explanation must be grounded in input data and reflect professional compliance analysis logic such as anomaly detection, inconsistency checks, risk pattern identification, or regulatory interpretation. Do not mention “AI” or “model”.
+
+3. knowledgeBaseUsed:
+List only the actual regulatory references, policies, or knowledge bases used (e.g., HKMA AML Guideline Section XX, FATF Recommendation XX). If none is used, return "".
+
+4. dataSource:
+Indicate which input data supports the conclusion. Allowed values:
+Customer Profile, Company Search Data, Transaction Report, Name Screening Report, Knowledge Search Result.
+Multiple sources should be separated by commas.
+
+caseId={{n_case_id}}
+
+ANALYSIS REQUIREMENTS:
+- Each gap item must be specific, testable, and remediable.
+- Clearly identify the nature of the issue (e.g., missing information, inconsistency, abnormal behavior, regulatory breach).
+- Ensure alignment with AML/KYC regulatory expectations (e.g., HKMA, FATF where applicable).
+- Severity must reflect risk level (e.g., Low, Medium, High, Critical).
+- Risk impact should describe the potential compliance, regulatory, or financial consequences.
+- Pending actions must be concrete and executable (e.g., request document, perform enhanced due diligence, escalate for review).
+- Avoid duplication across items. Each item should represent a distinct gap.
+
+OUTPUT JSON STRUCTURE:
+{
+  "data": {
+    "caseId": "",
+    "reportUrl": "",
+    "reportUrlWithRationale": "",
+    "items": [
+      {
+        "flaggedItem": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "source": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "severity": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "riskImpact": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "completedByAi": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "pendingActions": [
+          {
+            "actionLabel": "",
+            "actionTarget": "",
+            "sortOrder": 0
+          }
+        ],
+        "sortOrder": 0
+      }
+    ]
+  }
+}
+''')
+
+// ---------- Step 8: run gap analysis ----------
+n_gap_analysis_result,tpl_gap_analysis_json,psr_json
+log('n_gap_analysis_result={{n_gap_analysis_result}}')
+
+//Step 11: Call report pdf generator agent
+n_pdf_url,agt_report_pdf_generator_okp?reportName='NSR1{{n_random_3}}'&reportJsonData='{{n_gap_analysis_result}}'&caseId='{{caseId}}'&userInput='样式设计要求简约清晰、视觉美观，优先使用表格呈现结构化信息'
+log('******n_pdf_url=={{n_pdf_url}}')
+n_update_url_json,act_func?script='''
+    def reportJson = n_gap_analysis_result
+    // 1. 确保 reportJson 存在
+    if(reportJson == null){
+        return [:]
+    }
+    // 2. 确保 data 存在
+    if(reportJson.data == null){
+        reportJson.data = [:]
+    }
+    // 3. 只在有 URL 时才更新
+    if(n_pdf_url != null && n_pdf_url.toString().trim() != ""){
+        reportJson.data.put("reportUrlWithRationale", n_pdf_url)
+        reportJson.data.put("reportUrl", n_pdf_url)
+    }
+    // 4. 返回最终结果
+    return reportJson
+'''
+log('-------n_update_url_json===={{n_update_url_json}}')
+
+
+// save gap analysis data
+n_report_callback, act_api.doExecute?name='okp_agent_tool_save_gap_analysis'&params='{{n_update_url_json}}'
+
+// ---------- Failure Handling ----------
+on_failure({
+    log('agt_customer_gap_analysis execution failed')
+    act_flow.go?plan=end
+})

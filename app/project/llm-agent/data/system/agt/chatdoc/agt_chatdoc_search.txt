@@ -1,0 +1,208 @@
+/*
+ {
+	 "title": "Deep search",
+	 "description": "Comprehensive userInput analysis",
+	 "parameter": [
+		 {
+			"name":"userInput",
+			"label":"User question"
+		 },
+		 {
+			"name":"kbSpaceId",
+			"label":"目录ID（支持多个）",
+			"type":"textarea"
+		 },
+		 {
+	         "name":"kbSpaceFileId",
+	         "label":"文件ID（支持多个）",
+	         "type":"textarea"
+	     }
+	 ],
+     "uiEntrance": "chatDoc",
+     "tag":"chatdoc"
+ }
+*/
+assign('react_system_prompt', '''
+	你是一个智能文档分析专家，熟悉面对复杂文档的假设性文档嵌入，逆向思维检索，多跳推理检索，因果推理增强，混合索引设计等方法，能够通过思考-计划或行动-观察(由工具在下一轮对话时给于反馈)逐步解决问题。如果没有合适方案，返回finish，让后续chat任务自行处理。可用工具：
+	{
+	  "tools": [
+		{
+			"name": "agt_embedding_assumption",
+			"description": "假设性文档嵌入，生成假设性答案",
+			"parameters": {
+			  "question": "用户问题",
+			}
+		},
+		{
+			"name": "agt_query_routing",
+			"description": "企业知识库定向检索、多数据源分流",
+			"parameters": {
+			  "question": "需要检索的问题文本"
+			}
+		},
+		{
+		  "name": "agt_vector_search",
+		  "description": "基于问题语义的向量数据库检索，适合初步获取相关段落",
+		  "parameters": {
+			"question": "需要检索的问题文本",
+			"top_k": "返回结果数量（默认5）"
+		  }
+		},
+		{
+		  "name": "finish",
+		  "description": "任务完成后，使用finish立即结束",
+		  "parameters": {
+			"success": "完成结果是否成功"
+		  }
+		}
+	  ]
+	}
+
+	按以下格式响应：
+	{{fn.task().thought('思考当前问题和可用工具').result(' {"name":xxx, "parameters": xxx} ')}}
+''')
+
+//# {{(kbSpaceId!''?trim?has_content || kbSpaceFileId!''?trim?has_content)?then('knowledge base selected', 'No knowledge base selected')}}
+log("---kbSpaceId---{{kbSpaceId}} ---kbSpaceFileId---{{kbSpaceFileId}}")
+
+foreach('n_plan_analysis', 'fn.get("tpl_react.name")! != "finish" && n_plan_analysis.index < 5', {
+	//# Starting analysis round {{n_plan_analysis.index + 1}}: Analyse user question
+	tpl_react
+
+    // 保存结果
+	when('fn.get("tpl_react.name")! != "finish"', {
+		//# Choose solution: {{tpl_react.name!}}
+	    n_analysis_result, act_plan.run?code={{tpl_react.name}}&parameters={{tpl_react.parameters}}
+
+	    assign('n_plan_result', '{{tpl_react.name}}执行结果： {{n_analysis_result!}}')
+	})
+})
+
+log("---kbSpaceId,n_analysis_result=---{{kbSpaceId}} , {{n_analysis_result!}}")
+//# Search the answer from chatdoc
+agt_chatdoc_qa?userInput={{userInput}}&kbData={{n_analysis_result!}}
+
+
+define('tpl_react', '''
+	请根据当前状态，您的下一步行动是什么？
+	
+	当前问题：{{userInput}}
+	
+	开始！
+	
+	{{fn.chatFlag('%{react_system_prompt}%', 'n_plan_result', '', '', 10)}}
+''')
+
+agent('agt_embedding_assumption', {
+	/*{
+	 	"responseFormat":"json_object"
+	 }*/
+	
+	//## Make search plan
+	tpl_hyde_prompt
+	
+	//## Find hypothetical answer
+	foreach('n_assumption', 'tpl_hyde_prompt', {
+		// assign('searchQuestion', 'answer123')
+        //### Analysis attempt {{n_assumption.index +1}}, Search hypothetical answer: {{n_assumption.item!}}
+        n_kb_data, act_kbs.searchQuestion?paramData={{fn.json('question, n_assumption.item, folderIds, kbSpaceId!, knowledgeIds, kbSpaceFileId!')}}&similarity='0.5'&combine=true
+
+		log('-----agt_embedding_assumption: {{n_assumption.index}}--->{{n_assumption.item!}}')
+	    assign('n_kb_data_result', '{{fn.str(n_kb_data, "content")}}')
+	})
+
+	// n_rerank_data, act_api?name='siliconflow_rerank'&params={{fn.json('query, userInput, documents, n_assumption.summaryNotBlank, top_n, "5"')}}
+	//## Rerank
+	n_rerank_data,act_kbs.searchRerankData?params={{fn.json('query, userInput, documents, n_assumption.summaryNotBlank, top_n, "5"')}}
+
+	log('n_rerank_data: {{n_rerank_data}}')
+
+    //## show rerank result
+	assign('n_rerank_result', '{{fn.str(n_rerank_data, "results.document.text")}}')
+})
+
+// 向量检索， 参数：question, kbSpaceId, kbSpaceFileId
+agent('agt_vector_search', {
+    //## Search answer from local document, the question : {{question}}
+    act_kbs.searchQuestion?paramData={{fn.json('question, question, folderIds, kbSpaceId!, knowledgeIds, kbSpaceFileId!')}}&similarity='0.5'&combine=true
+})
+
+// 向量库文件定位，参数：kbSpaceId
+agent('agt_query_routing', {
+	//## Read all summaries of files in the specified directory
+	n_doc_summary, act_kb.select?name='kb_spaces_folder_knowledge'&column='id,document_summary'&maxSize=10&where='{"kb_spaces_folder_id":"{{kbSpaceId}}"}'
+	
+	//## Query Routing
+	tpl_metadata_filter
+	
+	assign('kbSpaceFileId', '{{tpl_metadata_filter.selected_doc_ids}}')
+})
+
+// Hypothetical Document Embeddings (注：目前无需传参，也可考虑使用react_system_prompt生成的question)
+define('tpl_hyde_prompt', '''
+	You are a compliance expert specializing in SFC regulations. Given a user's question about financial compliance, generate 5 hypothetical document fragments that:
+	1. Contain core regulatory requirements from SFC Code of Conduct/AML Guidelines 
+	2. Include specific paragraph references (e.g., "para. 5.4(a)", "4.1.9 of AML Guidelines")
+	3. Use varied phrasing while maintaining regulatory accuracy
+	4. Embed key terms like "licensed corporation", "CDD measures", "beneficial owner", etc.
+	5. Maintain consistent document structure: [Regulatory Basis] + [Key Requirements] + [Implementation Notes]
+	
+	# 当前问题：
+	{{userInput}}
+	
+	# 生成示列（严格JSON格式）：
+	["Per SFC AML Guidelines Section 4.2.3, when onboarding legal entities, licensed corporations must verify: (a) Certificate of Incorporation validity, (b) Business Registration Number, (c) List of directors with ID copies, and (d) Ultimate Beneficial Ownership structure exceeding 10% shares. Corporate registry checks should be conducted within 30 days of account opening.",
+	"For legal person verification (para. 6.5, Code of Conduct), required elements include: 1) Official incorporation documents 2) Current Certificate of Good Standing 3) Organizational chart showing ownership hierarchy 4) Government-issued business registration proof. Digital copies from company registry portals are acceptable.",
+	"SFC requires licensed firms to obtain: • Legal entity name & registration number • Principal business address • List of authorized signatories (with ID verification) • Beneficial ownership declarations. Supporting documents must be dated within 3 months per 2023 AML/CFT Amendment.",
+	...]
+''')
+
+// Query Routing - Metadata filter
+define('tpl_metadata_filter', '''
+	你是一个金融文档检索助手，请根据用户问题，从以下文档列表中直接选择最相关的文档ID（可多选）。  
+	若没有匹配项，返回“无相关文档”。  
+	
+	# 文档信息列表
+	{{n_doc_summary}}
+	
+	# 用户问题：
+	{{userInput}}
+	
+	# 输出要求：
+	- 只返回JSON格式，包含字段：
+	  - "selected_doc_ids" (多个值用英文逗号拼接，文档ID列表；如果不存在时，显示空字符)
+	  - "reason" (选择理由，20字内)
+	
+	# 示例：  
+	用户问题：“阿里2024年电商市场份额数据”  
+	输出：  
+	```json
+	{
+	  "selected_doc_ids": "2,3",
+	  "reason": "匹配公司、年份、电商标签"
+	}```
+''')
+
+// 未启用, Step-back Prompting, 回推提示
+define('tpl_step_back', '''
+	你是一名金融顾问助手，需从用户具体问题中提取金融领域的高层主题：
+	识别问题涉及的金融细分领域（如股票投资、基金理财、保险规划、银行业务、外汇市场等）；
+	生成抽象问题，指向该领域的核心原理、监管政策或典型产品分析；
+	
+	# 特别规范
+	抽象问题需包含至少两个专业分析维度
+	
+	# JSON输出格式：
+	{
+		"original_question": "问题",
+		"financial_field": "分类结果",
+		"abstract_question": "生成结果"
+	}
+	
+	# 示例：
+	{
+		"original_question": "每月定投指数基金真的能降低风险吗？",
+		"financial_field": "基金投资",
+		"abstract_question": "指数基金定投的运作机制、风险收益特征及市场周期适应性分析"
+	}
+''')

@@ -1,0 +1,50 @@
+/*
+{
+	"title":"Send API Data to SERVER",
+	"description":"Send api data to server",
+	"parameter":[
+		{
+			"name":"api_test_task_name",
+			"label":"api_test_task_name"
+		},
+		{
+			"name":"base_url",
+			"label":"base_url"
+		},
+		{
+			"name":"api_data",
+			"label":"api_data",
+			"type":"textarea"
+		}
+	],
+	"resultPlan":"result",
+	"life":100,
+	"version":1
+}
+*/
+// Tip
+assign("result", 'Agent is running')
+
+// Get api paras
+assign("openapi_json", '{{api_data}}')
+
+// python code
+n_python_code, agt_test_api_demo_v2?openapi_json={{openapi_json}}&base_url={{base_url}}
+assign("n_instance_name", '{{api_test_task_name}}')
+
+// Json to string
+n_code,act_func?js='''
+	(function() {
+    	return JSON.stringify({{n_python_code}});
+	})();
+'''
+
+// Do Execute
+n_result_data, act_api.doExecuteDynamic?name="api_test_0722"&dynamicParamData='{{fn.json("instance_name,n_instance_name,code,n_code")}}'
+
+
+// End
+assign("result", '{{n_result_data}}')
+
+// n_result_data, act_api.doExecuteDynamic?name="api_test_0722"&dynamicParamData='{{fn.json("instance_name,n_python_code.classname,code,n_python_code.code")}}'
+// n_result_data, act_api.doExecuteDynamic?name="api_test_0722"&dynamicParamData='{{fn.json("instance_name,n_instance_name,code,n_python_code")}}'

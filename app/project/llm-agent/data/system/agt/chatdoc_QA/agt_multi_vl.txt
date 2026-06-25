@@ -1,0 +1,158 @@
+/*
+{
+	"title":"视觉问答(Multi)",
+	"description":"通过视觉大模型获取图片/PDF中指定信息",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求",
+			"required":true
+		},
+        {
+			"name":"kbSpaceFileId",
+			"label":"多文件ID",
+			"required":true
+		},
+        {
+            "name":"pages",
+            "label":"页码数组",
+            "required":false
+        },
+        {
+            "name":"ConcurrencyNum",
+            "label":"并发数",
+            "required":false,
+            "defaultValue":1
+        }
+	],
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"n_final_answer",
+	"life":100,
+	"displayOrder":0,
+	"version":2
+}
+*/
+// 处理pdf和图片，如果不是官方支持的图片类型丢出去
+n_tmp_ids,act_func?script='''
+    def input = kbSpaceFileId
+    if (input instanceof List) {
+        return input 
+    } else if (input instanceof String) {
+        return input.split(',').collect { it.trim() }.findAll { it }
+    } else {
+        return []
+    }
+'''
+// 获取参数
+assign('kbSpaceFileIds', '{{n_tmp_ids}}')
+when('!fn.hasValue(kbSpaceFileIds)',{
+	//$ n_final_answer
+	assign('n_final_answer', '未上传图片或PDF文件')
+})
+// 区分 pdf 和 image
+assign('n_image_file_ids', '[]')
+assign('n_pdf_file_ids', '[]')
+
+foreach('currentId','kbSpaceFileIds',{
+  assign('n_result', '-1')
+  assign('n_current_file_status', '[]')
+    n_current_file_status,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,store_uri'&where='{"id":{{currentId.item}}}'
+    when('fn.hasValue(n_current_file_status)',{
+		n_tmp_1,act_func?script='''
+          def arr = n_image_file_ids
+          def tmp_item = n_current_file_status[0]
+          if (tmp_item.store_uri.endsWith(".png") || tmp_item.store_uri.endsWith(".jpg") || tmp_item.store_uri.endsWith(".bmp")){
+            	arr.add(tmp_item.store_uri)
+          }
+		  return arr
+		'''
+		assign('n_image_file_ids', '{{n_tmp_1}}')
+
+		n_tmp_2,act_func?script='''
+          def arr = n_pdf_file_ids
+          def tmp_item = n_current_file_status[0]
+          if (tmp_item.store_uri.endsWith(".pdf")){
+            	arr.add(tmp_item.id)
+          }
+		  return arr
+		'''
+		assign('n_pdf_file_ids', '{{n_tmp_2}}')
+	})
+})
+log('{{n_image_file_ids}}')
+log('{{n_pdf_file_ids}}')
+
+agent('agt_async_pipeline',{
+    assign('async_list_pipeline', '[]')
+    assign('answer_summary_list_pipeline', '[]')
+    assign('answer_summary_pipeline', '[]')
+    assign('n_tmp_answers_pipeline', '[]')
+
+    // 执行image pipeline
+    foreach('item_image_url', 'n_image_file_ids', {
+        assign('image_url','{{item_image_url.item}}')
+        n_image_result,agt_image_pipeline?userInput={{userInput}}&image_url={{image_url}}&async=true
+        n_image_result_temp,act_func?script='''
+            def expert = n_image_result
+            async_list_pipeline.add([n_pipeline_result:expert])
+            return expert
+        '''
+    })
+    // 执行pdf pipeline
+    n_pdf_result,agt_pdf_pipeline?userInput={{userInput}}&kbSpaceFileIds={{n_pdf_file_ids}}&pages={{pages}}&async=true
+    n_pdf_result_temp,act_func?script='''
+        def expert = n_pdf_result
+        async_list_pipeline.add([n_pipeline_result:expert])
+        return expert
+    '''
+    
+    foreach('n_item', 'async_list_pipeline', {
+        assign('async_map', '{{n_item.item}}')
+        assign('answer_summary_pipeline', '[]')
+        n_key,act_func?script='''
+        def data = async_map
+        def entry = data.entrySet().first()  
+        def key = entry.key
+        return key
+        '''
+
+        n_value,act_func?script='''
+        def data = async_map
+        def entry = data.entrySet().first()  
+        def value = entry.value
+        return value
+        '''
+        // answer_summary_pipeline answer_summary_pipeline 1
+        assign('answer_summary_pipeline', '{{fn.hasValue(n_value,"value") ? n_value.value : "[]"}}')
+
+        // n_tmp_answern_tmp_answer 1
+        n_tmp_answers_pipeline,act_func?script='''
+        def newList = answer_summary_pipeline
+        answer_summary_list_pipeline.addAll([
+            key: n_key,
+            value: newList
+        ])
+        return newList
+        '''
+    })
+
+    act_memory.assign?var=agt_async_pipeline_answer&value={{answer_summary_list_pipeline}}&global=true
+
+})
+
+// 运行 知识ids数组个数的异步agent：
+//       每个agent里 
+//             PDF：根据id串行查状态。状态成功后，运行 图片数组个数的 视觉问答agent
+//             IMAGE：视觉问答agent
+agt_async_pipeline?userInput={{userInput}}&maxConcurrent={{ConcurrencyNum}}
+n_tmp_answers_pipeline,act_memory.retrieve?var=agt_async_pipeline_answer&global=true
+n_pipeline_result,act_func?script='''
+    def data = n_tmp_answers_pipeline
+    return data.collect { it.value }.findAll { it != null && it != "" && it != "[]" && !(it instanceof List && it.isEmpty()) }
+'''
+//# End
+log(' ')
+//$ n_final_answer
+assign('n_final_answer', '{{n_pipeline_result}}')
+
+

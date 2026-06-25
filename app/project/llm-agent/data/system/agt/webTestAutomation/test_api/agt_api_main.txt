@@ -1,0 +1,184 @@
+/*
+{
+	"title":"Test Step Generation and Run",
+	"description":"Generate test steps and scripts",
+	"parameter":[
+		{
+			"name":"platform",
+			"label":"系统名称",
+			"required":true
+		},
+		{
+			"name":"module_name",
+			"label":"module_name",
+			"defaultValue":"def_module",
+			"required":true,
+			"description":"module_name"
+		},
+		{
+			"name":"test_no",
+			"label":"测试编号",
+			"required":true
+		},
+		{
+			"name":"steps",
+			"label":"测试步骤",
+			"type":"textarea"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"defaultValue":"1",
+			"required":true
+		},
+		{
+			"name":"expected_result",
+			"label":"Expect Result",
+			"type":"textarea"
+		},
+		{
+			"name":"dependent_test_no",
+			"label":"Dependent Test No"
+		},
+		{
+			"name":"restart_browser",
+			"label":"Restart Browser",
+			"defaultValue":"1",
+			"required":true
+		},
+		{
+			"name":"explore_mode",
+			"label":"Running Mode",
+			"args":[
+				{
+					"label":"开发模式",
+					"value":"开发模式"
+				},
+				{
+					"label":"生产模式",
+					"value":"生产模式"
+				}
+			],
+			"defaultValue":"开发模式",
+			"type":"select",
+			"required":true
+		},
+		{
+			"name":"programming_language",
+			"label":"Programming Language",
+			"args":[
+				{
+					"label":"selenium",
+					"value":"selenium"
+				},
+				{
+					"label":"java",
+					"value":"java"
+				}
+			],
+			"defaultValue":"selenium",
+			"type":"select",
+			"required":true
+		},
+		{
+			"name":"step_supplement",
+			"label":"Step Supplement Required",
+			"args":[
+				{
+					"label":"False",
+					"value":"false"
+				},
+				{
+					"label":"True",
+					"value":"true"
+				}
+			],
+			"defaultValue":"false",
+			"type":"select",
+			"required":true
+		}
+	],
+	"tag":"Automated Testing",
+	"uiEntrance":"?isFullScreen=true",
+	"dependency":"ac",
+	"displayOrder":40,
+	"version":2
+}
+*/
+assign("system", "{{platform}}")
+assign("module", "{{main_module_name}}")
+
+// Use selenium
+assign('explore_mode_data', '{{fn.optional(explore_mode, 1)}}')
+
+when('fn.hasValue(restart_browser)&restart_browser=1', {
+	//# Send product mode information to RPA
+	act_rpa.send?command=SwitchExploreMode&name={{fn.json('explore_mode,explore_mode_data,test_system,system,test_no,test_no')}}
+},{
+	assign('msg', 'Not restart Browser')
+})
+
+
+when('fn.hasValue(dependent_test_no)', {
+	// Send the dependent test number
+	n_rpa_test, act_rpa.send?command=dependOn&parameters='{{fn.json("test_no,dependent_test_no")}}'
+	
+	// Result of dependent
+  	on_failure({
+		act_flow.go?plan=end
+	})
+	
+})
+	
+when('!fn.hasValue(module)', {
+	assign("n_module","def_module")
+},
+{
+	assign("n_module","{{module}}")
+})
+
+when('!fn.hasValue(draft_tests)', {
+	assign("n_draft_tests","draft_steps")
+},
+{
+	assign("n_draft_tests","{{draft_tests}}")
+})
+
+when('!fn.hasValue(programming_language)', {
+	assign("n_programming_language","selenium")
+},
+{
+	assign("n_programming_language","{{programming_language}}")
+})
+
+when("n_programming_language=='selenium'", {
+	assign("file_type",".py")
+})
+when("n_programming_language=='python'", {
+	assign("file_type",".py")
+})
+when("n_programming_language=='java'", {
+	assign("file_type",".java")
+})
+// script subfolder
+assign("script_subfolder","/{{system}}/{{n_programming_language}}/workflows/{{n_module}}/{{n_draft_tests}}/{{test_no}}")
+// script tmp subfolder
+assign("script_subfolder_tmp","/{{system}}/{{n_programming_language}}/tmp/{{test_no}}")
+
+// feature subfolder
+assign("feature_subfolder_main_code","/{{system}}/features/{{n_module}}/{{test_no}}{{file_type}}")
+assign("feature_subfolder_main_steps","/{{system}}/features/{{n_module}}/{{test_no}}_steps.txt")
+// global variable
+assign("global_variable","{{fn.json('system,system,programming_language,n_programming_language,module,n_module,draft_tests,n_draft_tests,test_no,test_no,script_subfolder,script_subfolder,script_subfolder_tmp,script_subfolder_tmp,file_type,file_type,feature_subfolder_main_code,feature_subfolder_main_code,feature_subfolder_main_steps,feature_subfolder_main_steps')}}")
+
+
+act_memory.assign?var=global_variable&value={{global_variable}}&global=true
+
+assign("page_code_info","[]")
+act_memory.assign?var=global_variable_page_code_info&value={{page_code_info}}&global=true
+
+// Call agent to generate test steps
+agt_api_steps_gen?system={{system}}&test_no={{test_no}}&version={{version}}&steps={{steps}}&expected_result={{expected_result}}&force_update=false&step_supplement={{step_supplement}}
+
+// Call agent to run test steps
+// agt_api_steps_run?system={{system}}&test_no={{test_no}}&explore_mode={{explore_mode}}&version={{version}}

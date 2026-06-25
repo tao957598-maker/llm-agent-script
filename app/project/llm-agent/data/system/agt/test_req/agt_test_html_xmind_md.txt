@@ -1,0 +1,80 @@
+/*
+{
+	"title": "html&xmind&markdown_test",
+	"description": "HTML 提取测试",
+	"parameter": "url=test url",
+	"llm_type": "qwen2.5-32b-coder-instruction-8bit",
+	"life": "100",
+	"modified_by": "lht",
+	"modified_time": "2024-11-28",
+	"resultPlan": "n_html, n_xmind,n_markdown"
+	"version": "1"
+}
+*/
+ 
+  
+//# html 提取测试
+n_html,tpl_gen_html,psr_html
+
+// ** html测试功能模块划分 **
+define('tpl_gen_html', '''
+	你是专业测试人员，要输出一个测试用例，内容只需要列出功能测试、异常测试、安全测试、总结这四个方面，关于金融方面的。 
+	输出格式必须为纯 HTML 内容，并使用 Markdown 的代码块包裹，格式如下：
+
+	```html
+	<!-- html 内容开始 -->
+	<h2>功能测试</h2>
+	<ul>
+	<li>...</li>
+	</ul>
+	<h2>异常测试</h2>
+	...
+	<!-- html 内容结束 -->
+		```
+''')
+
+
+//# xmind 提取测试
+n_xmind,tpl_gen_xmind,psr_mmd
+
+// ** xmind测试功能模块划分 **
+define('tpl_gen_xmind', '''
+	你是一位熟悉 Mermaid 语法的可视化图表专家，要输出一个测试用例，内容只需要列出功能测试、异常测试、安全测试、总结这四个方面，关于金融方面的。 
+	输出格式为标准 Mermaid 语法，必须包裹在 Markdown 代码块中，如下格式：
+		```mermaid
+		graph TD
+		root[金融测试用例]
+		root --> 功能测试
+		功能测试 --> A1[...]
+		root --> 异常测试
+		...
+			```
+''')
+
+
+//# markdown 提取测试
+n_markdown,tpl_gen_markdown,psr_md
+
+// ** markdown测试功能模块划分 **
+define('tpl_gen_markdown', '''
+	你你是专业测试人员，要输出一个测试用例，内容只需要列出功能测试、异常测试、安全测试、总结这四个方面，关于金融方面的。
+	输出格式为纯 Markdown，包裹在 Markdown 代码块中，格式如下：
+
+	```markdown
+	## 功能测试
+	- 用例 1: ...
+	- 用例 2: ...
+
+	## 异常测试
+	...
+
+	## 总结
+	... 
+		```
+''')
+
+
+
+
+
+

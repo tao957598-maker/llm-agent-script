@@ -1,0 +1,354 @@
+/*
+{
+	"title":"舆情分析Agent",
+	"parameter":[
+		{
+			"name":"analysisType",
+			"label":"分析类型",
+			"required":true,
+			"type":"select",
+			"options":[
+				"实时监控",
+				"历史分析",
+				"主题报告",
+				"统计可视化"
+			]
+		},
+		{
+			"name":"keywords",
+			"label":"关键词",
+			"required":true,
+			"maxLength":1000,
+			"type":"text"
+		},
+		{
+			"name":"timeRange",
+			"label":"时间范围",
+			"required":false,
+			"type":"daterange"
+		},
+		{
+			"name":"sources",
+			"label":"数据源",
+			"required":false,
+			"type":"multiselect",
+			"options":[
+				"新闻网站",
+				"社交媒体",
+				"论坛",
+				"博客",
+				"RSS订阅"
+			]
+		},
+		{
+			"name":"reportFormat",
+			"label":"报告格式",
+			"required":false,
+			"type":"select",
+			"options":[
+				"Word",
+				"PDF",
+				"HTML",
+				"JSON"
+			]
+		}
+	],
+	"tag":"public_opinion",
+	"displayOrder":1,
+	"version":1
+}
+*/
+// Module 1: Multi-channel information collection configuration
+assign('collection_config', '{"sources":{{sources}}, "keywords":"{{keywords}}", "timeRange":"{{timeRange}}"}')
+
+// Define collection job based on analysis type
+when('{{analysisType == "实时监控"}}', {
+    // Create periodic monitoring job
+    assign('jobData', '{"agentName":"agt_opinion_collector","jobDesc":"舆情实时监控-{{keywords}}","cron":"0 */30 * * * ?","executorTargetType":"AGENT","executorParamJson":{{collection_config}},"notifyStrategy":"异常通知"}')
+    n_job_result, act_job.createAndTrigger?data={{jobData}}&isOneOffTask=false
+})
+
+when('{{analysisType == "历史分析"}}', {
+    // Create one-time collection job
+    assign('jobData', '{"agentName":"agt_opinion_collector","jobDesc":"舆情历史分析-{{keywords}}","executorTargetType":"AGENT","executorParamJson":{{collection_config}},"notifyStrategy":"全部通知"}')
+    n_job_result, act_job.createAndTrigger?data={{jobData}}&isOneOffTask=true
+})
+
+// Module 2: Intelligent content processing and analysis
+agent('agt_opinion_collector', {
+    // Collect data from multiple sources
+    n_raw_data, act_api?name="get_gientech_retrieval"&params='{"query":"{{keywords}}","timeRange":"{{timeRange}}"}'
+    
+    // Process and analyze collected data
+    foreach('n_processing_item', '{{n_raw_data}}', {
+        // Text cleaning and extraction
+        tpl_text_clean, psr_text
+        assign('cleaned_text', '{{tpl_text_clean}}')
+        
+        // Entity recognition and sentiment analysis
+        tpl_entity_sentiment, psr_json
+        assign('analysis_result', '{{tpl_entity_sentiment}}')
+        
+        // Add dynamic tags
+        tpl_tag_generation, psr_json
+        assign('tags', '{{tpl_tag_generation}}')
+        
+        // Vectorize and store in vector database
+        n_vector_id, act_kb.search?requirement='{{cleaned_text}}'&name='kb_opinion_vectors'
+        when('{{n_vector_id == null}}', {
+            act_kb.importData?name='kb_opinion_vectors'&data='[{"content":"{{cleaned_text}}","vector":"待生成","tags":{{tags}},"sentiment":"{{analysis_result.sentiment}}"}]'
+        })
+    })
+})
+
+// Module 3: Entity search and traceability
+agent('agt_opinion_search', {
+    // Search in vector database
+    n_search_results, act_kb.search?requirement='{{keywords}}'&name='kb_opinion_vectors'&maxSize=50
+    
+    // Filter by time and sentiment
+    when('{{timeRange != null}}', {
+        assign('filtered_results', '{{fn.filter(n_search_results, "item.publish_time >= timeRange.start && item.publish_time <= timeRange.end")}}')
+    }, {
+        assign('filtered_results', '{{n_search_results}}')
+    })
+    
+    // Format results for display
+    tpl_result_formatting, psr_json
+    assign('formatted_results', '{{tpl_result_formatting}}')
+})
+
+// Module 4: Multi-dimensional statistics and visualization
+agent('agt_opinion_statistics', {
+    // Query data for statistics
+    n_stat_data, act_kb.select?name='kb_opinion_vectors'&where='{"tags":["contains","{{keywords}}"]}'
+    
+    // Generate statistics
+    tpl_statistics_generation, psr_json
+    assign('statistics', '{{tpl_statistics_generation}}')
+    
+    // Create visualizations
+    tpl_chart_generation, psr_json
+    assign('charts', '{{tpl_chart_generation}}')
+    
+    // Store chart data
+    act_api?name="report_chart_data_save"&params='{"charts":{{charts}},"statistics":{{statistics}}}'
+})
+
+// Module 5: High-precision intelligent report generation
+agent('agt_report_generator', {
+    // Generate report using LLM
+    tpl_report_generation, psr_md
+    assign('report_content', '{{tpl_report_generation}}')
+    
+    // Fact verification and source linking
+    tpl_fact_verification, psr_json
+    assign('verified_report', '{{tpl_fact_verification}}')
+    
+    // Convert to requested format
+    when('{{reportFormat == "Word"}}', {
+        n_report_file, act_api?name="ink_upload_api_word"&params='{"content":"{{verified_report}}"}'
+    })
+    when('{{reportFormat == "PDF"}}', {
+        n_report_file, act_api?name="report_word_to_pdf"&params='{"content":"{{verified_report}}"}'
+    })
+    when('{{reportFormat == "HTML"}}', {
+        n_report_file, act_api?name="ink_upload_api_html"&params='{"content":"{{verified_report}}"}'
+    })
+    
+    // Optional: Send via API/email
+    when('{{uiEntrance.sendNotification == true}}', {
+        act_api?name="Report_download_api"&params='{"fileId":"{{n_report_file.id}}","recipients":"{{uiEntrance.recipients}}"}'
+    })
+})
+
+// Module 6: Thematic report generation
+agent('agt_thematic_report', {
+    // Aggregate similar news by theme
+    n_thematic_data, act_kb.search?requirement='{{keywords}}'&name='kb_opinion_vectors'&similarity='0.7'
+    
+    // Generate daily/monthly reports
+    tpl_thematic_analysis, psr_md
+    assign('thematic_report', '{{tpl_thematic_analysis}}')
+    
+    // Extract core tags
+    tpl_tag_extraction, psr_json
+    assign('core_tags', '{{tpl_tag_extraction}}')
+    
+    // Store thematic report
+    act_api?name="report_data_save"&params='{"content":"{{thematic_report}}","tags":{{core_tags}},"type":"thematic"}'
+})
+
+// Main execution flow based on analysis type
+when('{{analysisType == "主题报告"}}', {
+    agt_thematic_report?keywords={{keywords}}&timeRange={{timeRange}}
+}, {
+    when('{{analysisType == "统计可视化"}}', {
+        agt_opinion_statistics?keywords={{keywords}}&timeRange={{timeRange}}
+    }, {
+        when('{{analysisType == "实时监控"}}', {
+            // Start monitoring and show initial results
+            agt_opinion_search?keywords={{keywords}}
+            assign('monitoring_status', 'active')
+            log('实时监控已启动，关键词：{{keywords}}')
+        }, {
+            // Default: historical analysis with report
+            agt_opinion_search?keywords={{keywords}}&timeRange={{timeRange}}
+            agt_report_generator?keywords={{keywords}}&timeRange={{timeRange}}&reportFormat={{reportFormat}}
+        })
+    })
+})
+
+// Error handling
+on_failure({
+    assign('error_message', '{{sys_last_error}}')
+    log('舆情分析失败：{{error_message}}')
+    act_flow.go?plan=end
+})
+
+// Define prompts for LLM processing
+define('tpl_text_clean', '''
+Clean the following text by removing advertisements, navigation content, and irrelevant information:
+
+Original text: {{n_processing_item.content}}
+
+Return only the cleaned text without any explanations.
+''')
+
+define('tpl_entity_sentiment', '''
+Analyze the following text and identify entities (person, company, location, product) along with sentiment analysis (positive/negative/neutral):
+
+Text: {{cleaned_text}}
+
+Return JSON format:
+{
+  "entities": [
+    {"type": "person/company/location/product", "name": "entity_name", "confidence": 0.95}
+  ],
+  "sentiment": "positive/negative/neutral",
+  "sentiment_score": 0.85
+}
+''')
+
+define('tpl_tag_generation', '''
+Generate relevant tags for the following analyzed content. Include both predefined tags (#财务造假, #产品发布, #政策影响) and dynamic tags based on content:
+
+Analysis: {{analysis_result}}
+Content: {{cleaned_text}}
+
+Return JSON array of tags:
+["#tag1", "#tag2", "#动态标签"]
+''')
+
+define('tpl_result_formatting', '''
+Format the search results for display. Each result should include:
+- Title
+- Source
+- Publish time
+- Sentiment tags
+- Key snippet
+- Direct link to original source
+
+Results: {{filtered_results}}
+
+Return JSON array:
+[
+  {
+    "title": "result_title",
+    "source": "source_name",
+    "time": "2024-01-01 10:00:00",
+    "tags": ["#tag1", "#tag2"],
+    "snippet": "key content...",
+    "link": "https://original.source/link"
+  }
+]
+''')
+
+define('tpl_statistics_generation', '''
+Generate statistics from the following opinion data:
+
+Data: {{n_stat_data}}
+
+Calculate:
+1. Volume trend over time
+2. Sentiment distribution (positive/negative/neutral percentages)
+3. Main source media distribution
+4. Website distribution
+
+Return JSON:
+{
+  "volume_trend": {"2024-01-01": 150, "2024-01-02": 180},
+  "sentiment_distribution": {"positive": 40, "negative": 30, "neutral": 30},
+  "top_sources": ["Source1", "Source2", "Source3"],
+  "top_websites": ["Website1", "Website2"]
+}
+''')
+
+define('tpl_chart_generation', '''
+Create chart configurations based on statistics:
+
+Statistics: {{statistics}}
+
+Generate configurations for:
+1. Time series line chart for volume trend
+2. Bar chart for sentiment distribution
+3. Pie chart for source distribution
+
+Return JSON for chart configurations.
+''')
+
+define('tpl_report_generation', '''
+Generate a comprehensive public opinion report based on the following data:
+
+Analysis Type: {{analysisType}}
+Keywords: {{keywords}}
+Time Range: {{timeRange}}
+Search Results: {{formatted_results}}
+Statistics: {{statistics}}
+
+Report structure:
+1. Executive Summary (200 words)
+2. Public Opinion Overview
+3. Volume Analysis
+4. Sentiment Analysis
+5. Source Analysis
+6. Key Findings
+7. Recommendations
+
+Ensure the report is approximately 1000 words and maintains coherence.
+''')
+
+define('tpl_fact_verification', '''
+Verify facts in the report and link them to source information:
+
+Report: {{report_content}}
+Source Data: {{formatted_results}}
+
+For each key conclusion in the report, identify supporting sources and add citations.
+Return the verified report with source links.
+''')
+
+define('tpl_thematic_analysis', '''
+Generate a thematic report by aggregating similar news:
+
+Theme/Keywords: {{keywords}}
+Time Period: {{timeRange}}
+Aggregated Data: {{n_thematic_data}}
+
+Create a daily/monthly thematic report that:
+1. Summarizes similar news from different sources
+2. Identifies patterns and trends
+3. Highlights key events
+4. Provides insights and implications
+
+Format the report with clear sections and bullet points.
+''')
+
+define('tpl_tag_extraction', '''
+Extract core tags from the thematic report:
+
+Thematic Report: {{thematic_report}}
+
+Identify the most relevant and frequent tags that represent the core themes.
+Return JSON array of core tags.
+''')

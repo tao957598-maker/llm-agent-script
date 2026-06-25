@@ -1,0 +1,238 @@
+/*
+{
+	"title":"API Test Data Generation Platform",
+	"description":"AI-enhanced testing solution based on OpenAPI 3.0 specification, automating API metadata collection to provide foundational support for test case and documentation generation",
+	"parameter":[
+		{
+			"name":"kbList",
+			"label":"数据参数",
+			"required":false
+		},
+		{
+			"name":"argMapping",
+			"label":"参数映射",
+			"required":false
+		},
+        {
+			"name":"application",
+			"label":"System Name",
+            "required":true
+		},
+        {
+			"name":"is_need_performance",
+			"label":"Generate Performance Test Data",
+			"args":[
+				{
+					"label":"Yes",
+					"value":"1"
+				},
+				{
+					"label":"No",
+					"value":"0"
+				}
+			],
+			"defaultValue":"1",
+			"type":"select",
+			"required":true
+		},
+        {
+			"name":"version",
+			"label":"version",
+			"required":true,
+			"defaultValue":"V1.0",
+		}
+	],
+	"tag":"Automated Testing",
+	"resultPlan":"status,n_kb_list,test_script",
+	"displayOrder":71,
+	"life":1000
+}
+*/ 
+//# Agent status
+assign("status", 'Agent is running')
+log('n_kb_list：{{kbList}}')
+// 传入的agr_mapping参数映射
+assign('n_agr_mapping', '{{argMapping}}')
+// 传入的kbList数据参数
+assign('n_kb_list', '{{kbList}}')
+n_kb_list, act_func.run?script='''
+	def raw = fn.list(n_kb_list)
+	def normalized = []
+	if (raw == null) {
+		return normalized
+	}
+	def flattenInto
+	flattenInto = { value ->
+		if (value == null) {
+			return
+		}
+		if (value instanceof Collection) {
+			value.each { item ->
+				flattenInto(item)
+			}
+		} else {
+			normalized.add(value)
+		}
+	}
+	flattenInto(raw)
+	return normalized
+'''
+
+// test_no
+assign('n_test_no', '{{n_kb_list[0]["test_no"]}}')
+
+// application
+assign('n_application', '{{n_kb_list[0]["application"]}}')
+log('n_agr_mapping：{{n_agr_mapping}}')
+// is_need_performance
+log('is_need_performance：{{is_need_performance}}')
+
+n_is_need_performance, act_func.run?js='''
+	let arr = {{n_agr_mapping}};
+	let is_need_performance = arr.find(i => i.agentCol === "is_need_performance")?.value;
+	is_need_performance;
+'''
+// version
+n_version, act_func.run?js='''
+	let arr = {{n_agr_mapping}};
+	let version = arr.find(i => i.agentCol === "version")?.value;
+	version;
+'''
+
+// 循环处理
+foreach('n_kb_data','n_kb_list', {
+    // 单个api接口数据
+    assign('api_json_data', '{{n_kb_data.item["content"]}}')
+    // 拆分API接口文档
+    n_api_list, act_func?js='''
+    (function() {
+        // 原始OpenAPI文档
+        let openApiDoc = {{api_json_data}};
+        if (typeof openApiDoc === 'string' && openApiDoc.trim()) {
+            openApiDoc = JSON.parse(openApiDoc);
+        }
+
+        // 拆分函数
+        function splitOpenApiDoc(doc) {
+            const result = [];
+            const baseInfo = {
+                openapi: doc.openapi,
+                info: doc.info,
+                components: {
+                    schemas: {
+                        HTTPValidationError: doc.components.schemas.HTTPValidationError,
+                        ValidationError: doc.components.schemas.ValidationError
+                    }
+                }
+            };
+
+            for (const [path, methods] of Object.entries(doc.paths)) {
+                for (const [method, operation] of Object.entries(methods)) {
+                    const singleEndpoint = JSON.parse(JSON.stringify(baseInfo));
+                    // 添加路径和操作
+                    singleEndpoint.paths = {
+                        [path]: {
+                            [method]: operation
+                        }
+                    };
+                    
+                    // 添加相关的schema
+                    const refs = findSchemaRefs(operation);
+                    for (const ref of refs) {
+                        const schemaName = ref.split('/').pop();
+                        if (doc.components.schemas[schemaName]) {
+                            singleEndpoint.components.schemas[schemaName] = doc.components.schemas[schemaName];
+                        }
+                    }
+                    result.push(JSON.stringify(singleEndpoint));
+                }
+            }
+            return JSON.stringify(result);
+        }
+
+        // 辅助函数：查找schema引用
+        function findSchemaRefs(obj, refs = new Set()) {
+            if (typeof obj !== 'object' || obj === null) return refs;
+            
+            for (const [key, value] of Object.entries(obj)) {
+                if (key === '$ref') {
+                    refs.add(value);
+                } else if (typeof value === 'object') {
+                    findSchemaRefs(value, refs);
+                }
+            }
+            return refs;
+        }
+
+        // 执行拆分
+        const splitApis = splitOpenApiDoc(openApiDoc);
+
+        // 返回拆分结果
+        return splitApis;
+    })();
+    '''
+    assign('async_list', '[]')
+    // fileName
+    assign('n_file_name', '{{n_kb_data.item["file_name"]}}')
+
+    // Generate the data for api test
+    foreach('n_api','n_api_list', {
+        // 单个api接口数据
+        assign('api_json_data', '{{n_api.item}}')
+        // 返回gen_task
+    	n_gen_task,agt_gen_api_test_data?application={{n_application}}&test_no={{n_test_no}}&file_name={{n_file_name}}&openapi_data={{api_json_data}}&performance={{n_is_need_performance}}&version={{n_version}}&async=true
+    	n_gen_task_tmp,act_func?script='''
+			def var_tmp = n_gen_task
+			async_list.add(var_tmp)
+			return var_tmp
+    	'''
+    })
+
+    // 对数据生成结果进行循环处理并分类
+    foreach('n_item', 'async_list', {
+        assign('async_summary', '{{n_item.item}}')
+        // Current async result
+        assign('api_test_data', '{{async_summary.value}}')
+        // n_python_code
+        n_python_code,act_func?js='''
+            (function() {
+                // 测试数据
+                let api_test_data = {{api_test_data}};
+                // 格式化并转为字符串
+                const formattedJson = JSON.stringify(api_test_data, null, 4);
+
+                // 拼接Python代码字符串
+                const pythonCode = `# -*- coding: utf-8 -*-
+json_data = ${formattedJson}
+from apit_test_sdk import *
+def run(json_data):
+    for i in json_data:
+        test_api(i)
+    write_report_file('html')`;
+
+    return pythonCode;
+            })();
+            '''
+       
+        assign('api_application', '{{api_test_data[0]["application"]}}')
+        assign('api_name', '{{api_test_data[0]["name"]}}')
+        // Write file name
+        assign('write_file_name', '{{api_application}}/api{{api_name}}/api_test.py')
+      
+        n_file_msg, act_python.write?path='{{api_application}}/api{{api_name}}'&requirement='api_test.py'&sourceCode={{n_python_code}}
+
+        // Time sleep
+        act_flow.wait?seconds=3
+        
+        // select Knowledge dic_id
+        n_knowledge_data,act_kb.selectBy?sql="select * from kb_spaces_folder_knowledge where store_uri = '{{n_file_msg.kbspath}}';"
+        
+        // get dic_id
+        n_dic_id,act_func?script=''' n_knowledge_data[0].kb_spaces_folder_id '''
+
+        assign('test_script', 'Python file: <a href="/chat-knowledge-base?dic_id={{n_dic_id}}">{{n_file_msg.kbspath}}')
+
+
+        
+    })
+})

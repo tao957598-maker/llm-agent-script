@@ -1,0 +1,35 @@
+/*
+{
+	"title":"For KB Test Data Generation",
+	"description":"Generate test data from file input",
+	"parameter":"{\"name\":\"tableName\",\"label\":\"数据库名\"}",
+	"resultPlan":"Applicant_metadata,Appl_Card_metadata,Applicant_data,Appl_Card_data",
+	"life":10000,
+	"version":1
+}
+*/
+/
+
+// 1. 获取建表语句（metadata）
+assign("sql_get_ddl", "{{tableName}}")
+n_ddl_result, act_kb.selectBy?sql='SHOW CREATE TABLE {{sql_get_ddl}}'
+n_metadata,agt_metadata_information?input="{{n_ddl_result}}"&other="生成表名称{{tableName}}"
+
+// 2. 表数据返回
+n_table_data,agt_tpl_gen_data?metadata="{{n_metadata}}"&information="[]"
+
+// 3. 组装返回格式
+n_final_result,act_func?script='''
+  def result = [:]          
+  result.table_name = tableName 
+  result.metadata = n_metadata 
+  result.columns = n_table_data.columns.toString()
+  result.data = n_table_data.data.toString()
+  return result
+'''
+
+// 最后输出
+assign("final_result_json", "{{n_final_result}}")
+
+// 保存数据库
+act_kb.defineAndImportData?tableName='kb_test_data_market'&data='{{n_final_result}}'

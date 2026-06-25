@@ -1,0 +1,292 @@
+/*
+{
+	"title":"信息提取(Concurrency Json)",
+	"description":"通过视觉大模型获取图片/PDF中指定信息",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求",
+			"required":true
+		},
+        {
+			"name":"kbSpaceFileId",
+			"label":"多文件ID",
+			"required":true
+		},
+        {
+            "name":"concurrency",
+            "label":"并发数",
+            "required":false,
+            "defaultValue":"1"
+        }
+	],
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"n_final_answer",
+	"life":100,
+	"displayOrder":0,
+	"version":2
+}
+*/
+assign('pages', '[]')
+//并发数
+assign('concurrency', '{{fn.raw(concurrency)}}')
+// 区分 pdf 和 image
+assign('n_image_file_ids', '[]')
+assign('n_pdf_file_ids', '[]')
+
+// 区分 pdf 和 image
+// 处理pdf和图片，如果不是官方支持的图片类型丢出去
+n_tmp_ids,act_func?script='''
+    def input = kbSpaceFileId
+    if (input instanceof List) {
+        return input 
+    } else if (input instanceof String) {
+        if (input.contains(',')) {
+            return input.split(',').collect { it.trim() }.findAll { it }
+        } else {
+            return input.trim() ? [input.trim()] : []
+        }
+    } else {
+        return []
+    }
+'''
+// 获取参数
+assign('kbSpaceFileIds', '{{n_tmp_ids}}')
+when('!fn.hasValue(kbSpaceFileIds)',{
+	//$ n_final_answer
+	assign('n_final_answer', '未上传图片或PDF文件')
+})
+
+// 获取文件名
+assign('n_properties', '[]')
+foreach('currentId','kbSpaceFileIds',{
+  assign('n_result', '-1')
+  assign('n_current_file_status', '[]')
+    n_current_file_status,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,store_uri,file_name'&where='{"id":{{currentId.item}}}'
+    when('fn.hasValue(n_current_file_status)',{
+
+        n_tmp_properties,act_func?script='''
+            def arr = n_properties
+            def tmp_item = n_current_file_status[0]
+            def tmp_dict = [documentId : tmp_item.id, store_uri: tmp_item.store_uri, file_name: tmp_item.file_name]
+            arr.add(tmp_dict)
+            return arr
+        '''
+        assign('n_properties', '{{n_tmp_properties}}')
+        // file_name
+        log('{{n_properties}}')
+		
+        n_tmp_1,act_func?script='''
+          def arr = n_image_file_ids
+          def tmp_item = n_current_file_status[0]
+          if (tmp_item.store_uri.endsWith(".png") || tmp_item.store_uri.endsWith(".jpg") || tmp_item.store_uri.endsWith(".bmp")){
+            	arr.add(tmp_item.store_uri)
+          }
+		  return arr
+		'''
+		assign('n_image_file_ids', '{{n_tmp_1}}')
+
+		n_tmp_2,act_func?script='''
+          def arr = n_pdf_file_ids
+          def tmp_item = n_current_file_status[0]
+          if (tmp_item.store_uri.endsWith(".pdf")){
+            	arr.add(tmp_item.id)
+          }
+		  return arr
+		'''
+		assign('n_pdf_file_ids', '{{n_tmp_2}}')
+	})
+})
+
+
+
+
+assign('n_image_paths_first', '[]')
+assign('n_image_paths_second', '[]')
+foreach('currentId','n_pdf_file_ids',{ 
+    assign('n_result', '-1')
+
+    assign('n_current_file_status', '[]')
+    // 当前PDF的运行状态
+    n_current_file_status,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,store_uri,workflow'&where='{"id":{{currentId.item}}}'
+    n_run_status,act_func?script='''
+    return n_current_file_status[0].workflow
+    '''
+
+    n_result,act_func?script='''
+    def list = n_run_status
+    if (n_run_status instanceof List && n_run_status) {
+        for (int i = 0; i < list.size(); i++) {
+        if(list[i].containsKey("nodeName") && list[0].nodeName=="parse" && list[i].containsKey("result")){
+            return list[i].result
+        }
+        }
+    }
+    return -1
+    '''
+    log('状态检查   {{n_result}}')
+    // 如果是-1，需要睡眠2秒，再次判断
+    // 如果是0，说明失败，结束该轮流程
+    // 如果是2，说明成功，ming，继续
+
+    // 获取PDF的所有图片，执行 image pipeline
+    n_image_pipeline,act_kb.select?name='kbs_doc_page_parse'&column='documentId,imagePath,page'&where='{"documentId":{{currentId.item}}}'
+    assign('tmp_id','{{currentId.item}}')
+    // 获取页码
+    n_properties_page,act_func?script='''
+    def doc_id = tmp_id
+    def arr = n_image_pipeline
+    def data = n_properties
+    def target = data.find { it.documentId == doc_id }
+
+    def storeUriValue = null
+    if (target) {
+        storeUriValue = target.store_uri
+        data.remove(target)
+    }
+
+    arr.each { item ->
+        if (storeUriValue != null) {
+            item.file_name = storeUriValue
+        }
+    }
+
+    data.addAll(arr)
+    return data
+    '''
+    // 添加pdf页码
+    assign('n_properties', '{{n_properties_page}}')
+
+    // 文件或者图片对应的所有路径
+    n_image_paths_first,act_func?script='''
+    def tmp_data = n_image_pipeline
+    def pages_tmp = pages
+    tmp_data = pages_tmp.isEmpty() ? tmp_data : tmp_data.findAll { it.page in pages_tmp }
+    tmp_data = tmp_data.findAll { it?.imagePath }.collect { it.imagePath }
+    return tmp_data
+    '''
+})
+// 结果
+log('{{n_image_paths_first}}')
+
+
+// 用n_properties 替换 images_paths
+n_properties_tmp, act_func?script='''
+def ids = n_properties
+def num = concurrency.toInteger() 
+def resultList = new ArrayList()
+for (int i = 0; i < ids.size(); i++) {
+    int rowIndex = i / num
+    int colIndex = i % num
+    if (resultList.size() <= rowIndex) {
+        resultList.add(new ArrayList())
+    }
+    def targetRow = resultList.get(rowIndex)
+    targetRow.add(ids.get(i))
+}
+return resultList
+'''
+assign('n_properties', '{{n_properties_tmp}}')
+
+
+assign('n_vl_concurrency', '[]')
+foreach('second_list','n_properties',{
+    // 根据并发数获取图片路径
+    assign('n_image_paths','{{second_list.item}}')
+    agent('agt_async_vl',{
+        assign('async_list_vl', '[]')
+        assign('answer_summay_list_vl', '[]')
+        assign('answer_summay_vl', '[]')
+        assign('n_image_result', '[]')
+
+        foreach('image_item','n_image_paths',{
+            // 图片路径
+            assign('image_url', '{{fn.hasValue(image_item.item.imagePath) ? image_item.item.imagePath : image_item.item.store_uri}}')
+            assign('image_id', '{{image_item.item.documentId}}')
+            assign('image_page', '{{fn.hasValue(image_item.item.page) ? image_item.item.page : -1}}')
+            n_tmp_name,act_func?script='''
+            def path = image_item.item.file_name
+            if (path && path.contains('/')) {
+                return path.substring(path.lastIndexOf('/') + 1)
+            }
+            return path
+            '''
+            assign('image_name', '{{n_tmp_name}}')
+            // 异步启动 image pipeline
+            n_vl_result,agt_image_pipeline_json?userInput={{userInput}}&image_url={{image_url}}&image_id={{image_id}}&image_page={{image_page}}&image_name={{image_name}}&async=true
+            n_vl_result_temp,act_func?script='''
+                def expert = n_vl_result
+                async_list_vl.add([n_vl_result:expert])
+                return expert
+            '''
+        })
+        // 异步数组
+        foreach('n_item', 'async_list_vl', {
+            assign('async_map', '{{n_item.item}}')
+            assign('answer_summay_vl', '[]')
+            n_key,act_func?script='''
+                def data = async_map
+                def entry = data.entrySet().first()  
+                def key = entry.key
+                return key
+            '''
+
+            n_value,act_func?script='''
+                def data = async_map
+                def entry = data.entrySet().first()  
+                def value = entry.value
+                return value
+            '''
+            // answer_summay_vl answer_summay_vl 1
+            assign('answer_summay_vl', '{{fn.hasValue(n_value,"value") ? n_value.value : "{}"}}')
+
+            // n_tmp_answern_tmp_answer 1
+            n_image_result,act_func?script='''
+                def newList = answer_summay_vl
+                answer_summay_list_vl.addAll([
+                key: n_key,
+                value: newList
+                ])
+                return newList
+            '''
+        })
+
+        act_memory.assign?var=agt_async_vl_answer&value={{answer_summay_list_vl}}&global=true
+
+    })
+
+    agt_async_vl?userInput={{userInput}}
+    n_vl_tmp_result,act_memory.retrieve?var=agt_async_vl_answer&global=true
+    append('n_vl_concurrency', '{{n_vl_tmp_result}}')
+})
+
+
+
+
+// 洗数据
+n_vl_result, act_func?script='''
+def data = n_vl_concurrency
+
+def cleanAndParseJson(str) {
+    if (!(str instanceof String)) return str
+    
+    def cleaned = str.replaceAll('(?s)^```(?:json)?\s*', '')
+                    .replaceAll('\s*```$', '')
+    
+    return cleaned
+}
+
+def flattenedData = []
+data.each { item ->
+    if (item instanceof Collection) {
+        flattenedData.addAll(item)
+    } else {
+        flattenedData.add(item)
+    }
+}
+
+def mid_data = flattenedData.collect { it.collect { cleanAndParseJson(it.value ?: it) } }
+return mid_data.findResults { it[1] }
+'''
+//$ final_answer
+assign('n_final_answer', '{{n_vl_result}}')

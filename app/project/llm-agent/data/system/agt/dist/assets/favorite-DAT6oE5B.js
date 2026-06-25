@@ -1,0 +1,1 @@
+import{r as t}from"./index-DHIO0Zt0.js";const o={TOOL_SET:1,HINT:2},r=e=>t({url:"/api/favorite/save",data:e,method:"POST"}),s=e=>t({url:"/api/favorite/cancel",data:e,method:"POST"}),i=e=>t({url:"/api/favorite/page-list",data:e,method:"POST"}),v=e=>t({url:`/api/favorite/delete/${e}`,method:"POST"});export{o as F,v as a,s as d,i as g,r as s};

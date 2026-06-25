@@ -1,0 +1,292 @@
+## AgentFlow 基础语法（基于简洁的groovy语法）
+// 用途：编写Agent流程脚本，由引擎解析执行。脚本内变量可自定义或来自顶部Agent定义块 /*{ "parameter":[...] }*/，如 userInput。
+// 术语：Plan=一条expression或等价链；n_xxx=步骤位置标记(用于 act_flow.go?plan=n_xxx 跳转)；tpl_xxx用于调用define定义的LLM模板；sys_=系统内置变量。assign/expression/append/when 等均为引擎提供，脚本中无需定义。
+// 参数解析：URL 中可用 plainProperty=key1,key2（逗号分隔的参数字段名）指定这些字段按字面量传入、不做模板解析；须指定具体字段名。
+### 变量与数据结构
+// 注释为//开头的行
+// 字符串
+assign('var', 'num')
+// 引用变量
+assign('referenced_value', '{{var}}')
+// 数字/布尔等字面量：用 fn.raw 保持类型写入，否则按字符串解析
+assign('num', '{{fn.raw(100)}}')
+// 嵌套模板使用%{}%语法
+assign('nested_template', "{{fn.when('condition', '今天是2024-10-03', '今天是%{fn.today()}%')}}")
+// 列表
+assign('list', '["a","b"]')
+// JSON/Map对象
+assign('json', '{"name":"jack"}')
+// 链式定义(变量1,值1,变量2,值2)
+assign("product", "oa",
+		"requirement", '''无
+		''',
+		"requirement_score", ">=7")
+// 给对象的属性赋值（map 语法）
+assign("user.name", "user1")
+// 计划表达式：rag(检索)→tpl(LLM模板)→psr(解析)→vrf(校验)→act(执行)
+expression('rag_xxx', 'tpl_xxx', 'psr_xxx', 'vrf_xxx', 'act_xxx', 'act_xxx2')
+// 简写：一行仅含 rag_/tpl_/psr_/vrf_/act_/n_ 逗号列表时可省略 expression(...)
+rag_xxx, tpl_xxx, psr_xxx, vrf_xxx, act_xxx, act_xxx2
+// 通过memory工具赋值（简写语法)
+act_memory.assign?var=result&value=xxx
+// 拼接值val1,val2...给到变量var
+append('var', 'val1', 'val2'...)
+// 记录日志
+log('log info {{var}}')
+
+### 计划表达式
+// vrf_xxx可接任意工具，如果tpl_xxx中有配置sys_hint，将激活自动修正，最多尝试3次
+// 完整的Plan事务调用：读取知识库，调用LLM输出数据，抽取markdown内容，并检查LLM输出是否符合要求，最终保存为md_data变量，并在界面中的显示格式为markdown(注：最后的\为换行转义字符)
+rag_kb.select?name=kb_md_example, tpl_md_output, psr_md, vrf_flag?value='{{fn.when(fn.hasValue(sys_last_result,"optional_sub_property_name"),"true","false")}}',\
+	act_memory.assign?var=md_data&value={{tpl_md_output}}&type=md
+
+### 控制流
+when('条件', { ... })
+elsewhen('条件', { ... })
+foreach ('var_name', 'list', { ... })
+loop('var_name', '条件', { ... })
+// 异常处理
+on_failure({ ... })
+// 条件判断，{{}}中为freemarker表达式
+when('{{product_id == compared_product_id}}', {
+	assign("score", "9")
+})
+// when支持if-else（省略{{}}不推荐）
+when('list?size gt 0',{
+	assign("score", "9")
+},{
+	assign("score", "10")
+})
+elsewhen('{{condition}}', {
+	assign("score", "11")
+})
+// elsewhen支持else（无参数时）
+elsewhen({
+	assign("fallback_score", "12")
+})
+// for 循环，基于普通list数据，或task list数据. n_plan_tasks为json结构, 包含属性：index, item, size
+foreach('n_plan_tasks', 'llm_data', {
+    // index 下标
+    assign('loop_task_index', '{{n_plan_tasks.index}}')
+    // 下标对应内容
+    assign('loop_task_item', '{{n_plan_tasks.item}}')
+})
+// 结合条件判断的for循环，构建ReAct思维链
+foreach('n_plan_analysis', 'fn.get("tpl_react.name")! != "finish" && n_plan_analysis.index < 5', {
+	// tpl_react选择工具(api, agent etc)，交给plan运行
+	tpl_react, act_plan.run?code={{tpl_react.name}}&parameters={{tpl_react.parameters}}
+})
+// 获取汇总的非空List结果
+assign('n_summary', '{{n_plan_analysis.validSummary}}')
+
+### 函数工具及文件工具
+// 函数
+// 执行groovy脚本（可读取文件内容或LLM生成内容后，执行脚本）. 可读取agent中的变量，可使用fn函数 (fn.write可写入agent的变量)
+act_func.run?script='''
+	list.add('val3')
+	map.put('key2', 'value2')
+	fn.write('list2', new java.util.ArrayList<>())	// 将list2写入到agent
+	fn.get('list2')
+'''
+// 调用javascript. 可直接操作agent中的变量
+act_func.run?js='''
+	console.log("Hello, World");
+'''
+// 文件写入（注：data可以为{{sys_self}}表示agent自己，也可结合LLM生成agent、python、groovy、js等内容，写入到文件后，交给act_plan.run或act_python.run或act_func.run执行）
+act_func.write?filename="{{file_path}}"&data="{{file_content}}"
+// 读取文件内容（version可选）
+n_text_content, act_func.read?filename='agt/agt_core_test.txt'&version=1
+// 文件搜索（全文检索）：在指定目录下按字符串或正则搜索，返回命中行及前后上下文
+n_search_result, act_func.search?query='keyword'&filepath='agt/'&maxResults=50&ignoreCase=true&contextLinesBefore=2&contextLinesAfter=2
+// 按行读取文件：返回指定行范围内容；Excel(.xlsx/.xls) 时返回对应行范围的 JSON
+n_lines, act_func.readLines?filename='agt/agt_core_test.txt'&startLine=1&endLine=10
+// 列出目录下的文件/子目录路径
+n_file_list, act_func.list?filepath='agt/'&maxDepth=2
+
+### Python工具
+// python临时文件写入
+n_file_info, act_python.writeTmp?requirement='python文件实现的需求'&pythonCode='{{tpl_llm_gen_code}}'
+// python正式文件写入（可选：subfolder, 如需指定文件名，参考act_func.write）
+n_file_info, act_python.write?requirement='python文件实现的需求'&pythonCode='{{tpl_llm_gen_code}}'&subfolder='agt_core_code'
+// python文件的执行
+act_python.run?filepath='{{n_file_info.kbspath}}'&argument='optional ArgumentParser parameter'
+
+### 流程工具
+// 跳转指定位置标记，同时支持内置标记：this(重新执行当前步骤)，next(下一步)，break，continue，end(跳转到agent的结束位置)
+act_flow.go?plan=next
+// 等待3秒
+act_flow.wait?second=3
+// 人与Agent的交互，展示UI页面(name来自UI模块的定义)，并暂停流程等待用户的输入
+n_expense_form, act_flow.page?pageCode='expense_form'&params=
+// LLM通过task()示范结构告诉引擎跳转节点（等价于tpl_plan_selector+act_flow.go）
+define('tpl_plan_selector', '''
+用户输入为：{{userInput}}
+直接进入下一步，JSON格式返回：{{fn.task().plan('next')}}
+需要回到之前读文件的步骤，JSON格式返回：{{fn.task().plan('n_file_info')}}
+结果错误，需要重新思考当前步骤，JSON格式返回：{{fn.task().rerun(true)}}
+{{fn.chatFlag(5)}}
+''')
+// 捕捉所有前序异常,将当前流程转为正常状态。（可使用act_flow.fail再次将流程转为异常状态）
+on_failure({
+	assign("result", "{{sys_failure_task.result}}")
+	// goto语句，跳转到代码结尾
+	act_flow.go?plan=end
+})
+
+### 计划工具
+// 将markdown格式的任务列表转换为plan list. (可通过define prompte, 让LLM思考，生成任务，再转换为plan list，然后使用agent执行plan)
+n_plan_tasks, act_plan.parse?task='
+# markdown格式的任务规划，可多层级嵌套
+- [x] 已经完成的任务
+- [ ] 待完成的任务
+'
+// 将变量转换为 plan list，供 foreach 使用。必填：var=变量名。可选：maxConcurrent=同时未完成的异步任务数上限（≤0 不限制）；maxWaitSeconds=为单个任务的最大等待秒数（≤0 用系统默认）
+n_plan_steps, act_plan.convert?var=steps&maxConcurrent=5&maxWaitSeconds=60
+// 设置对指定plan(var+index)进行解释执行的agent名称
+act_plan.assignAgent?var=n_plan_tasks&index=1&executor=agt_findelement
+// 获取对当前plan进行解释执行的agent名称
+n_executor_agent, act_plan.agent?var=n_plan_tasks&index={{n_plan_tasks.index}}
+// 使用agent执行plan: 使用agt_test_selenium执行plan, 注意此处的parameter的参数引用，它采用{},而非{{}}，由run方法内部自解析
+act_plan.runPlan?executor=agt_test_selenium&parameters='test_no={test_no}&step_index={n_plan_tasks.index}'
+// 执行临时的agent脚本(可使用LLM生成agent script)
+act_plan.runAgent?script='agent script'&parameters='optional parameters'
+// 动态调整plan list中的内容，operation包括：add/update/remove/switch
+act_plan.change?var=n_plan_tasks&plan={{tpl_screenshot_react.step}}&operation={{tpl_screenshot_react.operation}}&index={{n_plan_tasks.index}}
+// 执行指定的工具(toolType包括：API,AGENT,PYTHON,GROOVY,JS,FUNCTION,UI,REPORT,TABLE，code为工具名称或编码，parameters可选,可传suppressFailure=true避免走on_failure)
+act_plan.run?toolType=API&code={{tpl_choose_tool.apiCode}}&parameters={{tpl_choose_tool.parameters}}
+// 记录经验，供模板中 {{sys_hint_agt}} 使用。参数：feedback 必填；success/thought 可选
+act_memory.addAgentHint?feedback='xxx'
+// 读取变量，与{{xxx}}效果等价
+act_memory.retrieve?var='xxx'
+// tpl_gen_script 为带 {{sys_hint}} 的模板。流程：执行 tpl→checkAgent 校验；通过则结束；不通过则错误写入 sys_hint 并回到 tpl 重试，最多 3 次。checkAgent：type=groovy 做语法检查，checkTool=true 校验工具/模板/agent 是否存在；默认失败走 on_failure，若需在 plan 内用 when('{{n_xxx.success}}') 自行判断则传 suppressFailure=true。
+tpl_gen_script, psr_groovy, vrf_plan.checkAgent?type=groovy&script={{sys_last_result}}&checkTool=true
+
+### 知识库及知识空间工具
+// 表结构可参见defineKB?tableInfo中的json字段
+// 判断表是否存在
+act_kb.hasKB?name='kb_user_table'
+// 定义表结构，已经存在则更新
+act_kb.defineKB?tableInfo='{"schema":"auto_test","tableName":"kb_user_profile","comment":"用户信息表","columnInfos":[{"name":"user_id"}]}'
+// 获取知识库的全部表结构（schema,tableName,comment），可传schema=xxx&name=xxx过滤
+act_kb.getKBCatalog
+// 获取知识库的详细表结构（需schema+name，可结合getKBCatalog）
+act_kb.getKBDefinition?schema='auto_test'&name='kb_user_table'
+
+// 关于默认schema：自动化测试使用auto_test，知识库使用：knowledgebase，平台库使用：llm_agent
+// 数据转换为List格式：将step_list这个List<String>转换为List<Map>.可选参数storeColumn的含义为:step_list中的元素转存到key为step的map上, 可选参数paraeters的含义为：给每个map添加固定key和value，即test_no和system_name
+n_map_list, act_kb.convert?data={{step_list}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}","system_name":"{{system}}"}'
+// 批量导入数据到知识库,data为List<Map>结构
+act_kb.importData?name='kb_user_table'&data='[{"user_id":"101"}]'
+// 更新知识库的数据
+act_kb.update?name='kb_user_table'&columnValues='{"user_id":"3"}'&where='{"id":"1"}'
+// 更新知识库数据
+act_kb.merge?name='kb_user_table'&columnValues='{"user_id":"30"}'&where='{"id":"1"}'
+// 删除知识库数据
+act_kb.delete?name='kb_user_table'&where='{"id":"1"}'
+
+// 结构化查询指定知识库的数据
+n_data,act_kb.select?name='kb_user_table'&column='id,user_id'&maxSize=1&where='{"id":"1"}'
+// 结构化sql查询，解析到知识库中的数据（注：所有用户提交的文档,URL数据，都会被立即解析并被分页存储到kbs_doc_page_parse表中）
+n_data,act_kb.selectBy?sql='SELECT COALESCE(analysis_content, content) AS content FROM kbs_doc_page_parse WHERE documentId IN ({{kbSpaceFileId}}) order by page asc'
+// 基于向量库，查询requirement(知识库的name与返回的column可选，默认name为kb_spaces_knowledge_section)
+act_kb.search?requirement="xxx"&name='kb_user_table'
+// 基于QA向量库，查询requirement，返回匹配的答案(kb_qa_test必须为含有字段question和answer的QA表)
+act_kb.searchQA?requirement="xxx"&name='kb_qa_test'
+
+// 获取系统定义配置的环境变量
+n_jira_token, act_kb.readCfg?type='jira.token'&key='token_key'
+
+// 读取知识空间，question为用户问题(来自agent参数userInput), folderPath为知识空间的文件夹路径(静态字符串)
+n_kb_code, act_kbs.searchQuestion?paramData={{fn.json('question, userInput, folderPath, "/Coding/agent"')}}&similarity='0.5'
+
+### API工具(系统提供大量API，更多API请使用act_api.search查询)
+// 调用API: name是API名称,params是json格式的api参数，复杂json可使用{{fn.json('逗号分隔的key refValue')}}构造
+n_result_issue_data, act_api?name="jira_create_issues"&params='{"jira_config":{{jiraConfig}},"issues_data":{{issuesData}}}'
+// 查询与问题相关的可用api列表(名称及参数定义). 可结合define，由LLM选择工具(agent也被视为一种工具,toolType=AGENT)，并动态调用工具(参见：act_plan.run)
+n_api_list, act_api.search?query='用户问题'&size=5
+
+### RPA工具
+// 获取客户端浏览器的页面信息（其他指令包括：RunScript, SaveScreenshot, HighlightElements, Inject）
+n_collect_page, act_rpa.send?command=CollectPageInfo
+// 运行动态脚本
+act_rpa.send?command=RunDynamicScript&name='mvn install'
+
+### JOB工具
+// 构建JOB参数
+assign('jobData','{"agentName":"{{n_param_confirm.name}}","jobDesc":"ChatDocJob","notifyStrategy":"全部通知","executorParam":{{n_param_confirm.confirmedParams}}}')
+// 新增一次性调用的job
+n_tool_exec, act_job.createAndTrigger?data={{jobData}}&isOneOffTask=true&isOnlyAdd=true
+
+### LLM提示词的定义（模板名称唯一）与调用（与定义完全一致）
+// psr_xxx(解析)：从 LLM 输出提取代码块或全文，底层工具 psr_codeblock。psr_json/psr_md/psr_all 等即 flag=类型 的语法糖；多类型用下划线(psr_json_python)依次提取，合并到 JSON 用 combine_类型=属性。可选校验：required=逗号分隔的必填字段，复杂校验建议直接使用 vrf_func.run?script=xxx 实现。可选配置：xmlFlag=xml标签名，用于增强识别标记
+tpl_json_list, psr_json
+// psr_ref：RAG 场景，将输出中的 ref（<div id="a" type="1" num="n"/>格式）标签转为 UI 引用块
+tpl_rag_answer, psr_ref
+// 定义大模型提示词：被调用时，解析变量。将来自agent参数userInput（用户需求）解析为json list格式
+define('tpl_json_list', '''
+#分析用户问题: 
+{{userInput}}
+
+#补充信息
+当前时间为：{{fn.now()}}
+
+#避免前几轮错误
+{{sys_hint}}
+
+直接返回json list数据,不要解释
+```json
+["a","b","c"]
+```
+''')
+// 变量加!表示可为空，不告警
+// 定义大模型提示词(单轮模式)：其中sys_hint是系统的自我学习变量(表达式级别的历史经验），sys_hint_agt(agent级别的历史经验)
+// 提示词配置：模板开头可用 /*{ "key": "value" }*/ 的 JSON 块配置属性。常用项：stream(流式输出，默认true)、llmType（逗号分隔的大模型类型）、scheduleMode（vote=并行投票/fallback=顺序后备链，默认 vote）、temperature、responseFormat 等；未配置时使用agent配置或系统默认。
+define('tpl_md_output', '''
+/*{
+	"scheduleMode": "fallback",
+	"llmType":"alias.code,alias.highquality,deepseek-chat"
+}*/
+返回markdown结果(```markdown xxx ```)，不要解释
+{{python_code!}}
+
+#案例数据
+{{sys_last_result}}
+
+#避免常见的转换问题
+{{sys_hint}}
+{{sys_hint_agt}}
+''')
+// 定义大模型提示词(激活多轮对话模式):最后一行的fn.chatFlag转为对话模式，基于var/plan历史日志构建消息列表；userPromptVar指定每轮user内容来源，assistantPlanName空=自己的输出否则=指定Plan，toolsetName为可选MCP工具集
+// 注：图文对话模式使用：fn.chatImageFlag(...)
+define('tpl_chat_bot', '''
+用户的输入为：
+{{userPromptVar}}
+
+{{fn.chatFlag(systemPromptVar,userPromptVar,assistantPlanName,toolsetName,maxLength)}}
+''')
+
+### Agent 元信息与 Inner Agent
+// agent=方法：无状态，状态在框架可分离 memory。主 agent 脚本体即入口。调用 agt_xxx?p1=v1；定义 agent('agt_inner',{...})，inner 可读主 agent 变量。
+// 参数来源：脚本顶部的 /*{ "parameter":[{"name":"userInput",...}] }*/ 中 name 即脚本内变量名，如 {{userInput}}。
+/*{
+	"title":"Agent Demo",
+	"parameter":[
+		{"name":"userInput", "label":"需求", "required":true, "description":"用户输入的需求"},
+		{"name":"docContent", "label":"内容", "description":"待修改的内容"},
+		{"name":"kbSpaceId", "label":"知识空间ID", "description":"文件夹id"},
+		{"name":"kbSpaceFileId", "label":"知识空间文件ID"}
+	],
+	"version":1,
+	"resultPlan":"n_generated_result"	// plan的位置标记，格式为n_xxx，可选，默认最后一条plan
+}*/
+// 调用agent(存在同名inner agent时，优先调用Inner agent)： 后缀".test"为可选包名，它将查找test文件夹下的agt_test_steps.txt
+agt_test_steps.test?p1=v1
+// 异步调用Inner agent，返回异步结果
+agt_inner_agent?p1="{{test_item}}_{{test_item2}}"&async=true
+
+// 获取异步结果（.value），它会触发主线程的自动等待，直到子线程运行完成。特定场景可结合when('{{agt_inner_agent.done}}',{ xxx })，避免`.value`触发主线程的等待
+assign("n_generated_result", '{{agt_inner_agent.value}}')
+// 定义Inner agent，可传入参数p1
+agent('agt_inner_agent', {
+	assign('var1', '{{p1}}')
+})

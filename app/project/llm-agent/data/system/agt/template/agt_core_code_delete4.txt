@@ -1,0 +1,46 @@
+/*
+{
+	"title":"test demo tmp",
+	"description":"test demo tmp",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求",
+			"required":true
+		},
+		{
+			"name":"docContent",
+			"label":"待修改的内容"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space"
+		}
+	],
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"s",
+	"life":100,
+	"displayOrder":0,
+	"version":2
+}
+*/
+assign('parameter',"验证搜索结果页面内容是否包含与元")
+
+assign('userInput22',"{{userInput}}")
+assign('docContent22',"{{kbSpaceFileId}}")
+
+
+assign('docContent22',"chufa")
+
+
+n_data,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,kb_spaces_folder_id,extension,store_uri,knowledge_name'&maxSize=1&where='{"id":{{kbSpaceFileId}}}'
+n_first_data,act_func?script='''
+                        return n_data[0]
+                    '''
+ 
+// 6.调用ocr的接口，将知识进行解析
+n_api_data,act_api.doExecute?name='img_ocr_api'&fileNames='{{n_first_data.store_uri}}'
+
+// ocr_content
+assign('ocr_content',"{{n_api_data.ocr_content}}")

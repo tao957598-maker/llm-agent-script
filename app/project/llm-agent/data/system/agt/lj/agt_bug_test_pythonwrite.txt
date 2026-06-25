@@ -1,0 +1,31 @@
+/*
+{
+	"title":"agt_bug_test_pythonwrite",
+	"description":"测试agt_bug_test_pythonwrite相关异常-lj",
+	"parameter":"{\"current_step\":\"12222\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"result",
+	"version":1
+}
+*/
+//# writeText 
+// act_python.writeText?outputFilePath="/Faap/features/user/Faap1_steps.txt"&content="1. Open the URL http://172.18.2.14:5171/ in a web browser.2.input user name a"&append=true
+
+//# mergeFiles 
+//act_python.mergeFiles?type='selenium'&outputFilePath="/Faap/features/user/Faap1_steps.txt"&inputSubfolder="LJ-20251229"
+
+
+
+assign("page_code_info", "{\"type\":\"selenium\",\"requirement\":\"1. Open the URL http://172.18.2.14:5171/ in a web browser.\",\"application\":\"Faap\",\"pythonCode\":\"# -*- coding: utf-8 -*- \\n'''{\\\"requirement\\\":\\\"1. Open the URL http://172.18.2.14:5171/ in a web browser.\\\",\\\"url\\\":\\\"http://172.18.2.14:5171/\\\",\\\"agentName\\\":\\\"agt_test_step_to_triple.test\\\",\\\"current_step\\\":\\\"1. Open the URL http://172.18.2.14:5171/ in a web browser.\\\"}'''\\n\\nfrom autotest import *\\n\\n\\ndef run(browser, url=\\\"http://172.18.2.14:5171/\\\", **kwargs):\\n    # 使用gotoPage跳转到指定URL，并验证跳转成功\\n    try:\\n        success = gotoPage(browser,'',url)\\n        if not success:\\n            writeResult(False, f\\\"Failed to navigate to {url}\\\")\\n            return \\n        writeResult(success, f\\\"Successfully navigated to {url}\\\")\\n    except Exception as e:\\n        writeResult(False, \\\"An error occurred while opening the URL: \\\" + str(e))\",\"filename\":\"login.py\",\"subfolder\":\"/Faap/selenium/pages/login\",\"is_page_code\":\"1\"}")
+
+act_python.writeCode?type={{page_code_info.type}}&requirement={{page_code_info.requirement}}&application={{page_code_info.application}}&code={{page_code_info.pythonCode}}&filename={{page_code_info.filename}}&subfolder={{page_code_info.subfolder}}
+
+
+
+assign('result', 'success')
+
+
+act_python.writeText?outputFilePath="/Faap/features/user/Faap1_steps.txt"&content="1. Open the URL http://172.18.2.14:5171/ in a web browser.2.input user name a"&append=true
+
+act_python.mergeFiles?ty

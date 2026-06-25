@@ -1,0 +1,348 @@
+/*
+{
+	"title":"ChatDoc Q&A",
+	"description":"Answer user question",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceId",
+			"label":"目录ID（支持多个）",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"seek_mode",
+			"label":"搜索模式",
+			"args":[
+				{
+					"label":"快速模式",
+					"value":"1"
+				},
+				{
+					"label":"深度模式",
+					"value":"0"
+				}
+			],
+			"required":true,
+			"defaultValue":"深度模式",
+			"type":"select"
+		}
+	],
+	"tag":"chatdoc_QA",
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"n_qa_answer",
+	"life":100,
+	"displayOrder":0,
+	"version":1
+}
+*/
+// 定义提示词
+assign('system_prompt','''
+    按照以下规则进行回答用户问题:
+    1.如果知识库内容（Contents of the Knowledge Base）存在或者能找得到，则
+      1.1 请结合可行度最高的内部资料（为<div style="display:none;" num="n"/>包裹的介绍），回答用户问题，并请及时的在该内容的边上用<div style="display:none;" id="a" num="n"/>标记,其a是id的值,n是num的值。
+      1.2 并且使用知识库的文字语言答复，无需翻译。
+    2.如果知识库的内容不存在，则
+      2.1 根据原始文件的内容（Contents of the file）进行回答用户问题，且不需要加上<div style="display:none;" num="n"/>标记。
+''')
+
+// 定义异步结果收集器
+assign('async_list', '[]')
+
+
+//# Optimization Question
+n_userInput,tpl_userInput_Optimization,psr_all
+
+
+// 设置问题集合
+assign("kb_list_data", '[]')
+append("kb_list_data", "{{n_userInput}}")
+
+//# Execute Query
+foreach('n_question', 'kb_list_data', {
+  // 获取当前用户输入
+  assign('question', '{{n_question.item}}')
+
+  // 专家知识库查询
+  n_expert_query_answer, agt_test_query_expert_0?userInput={{question}}&async=true
+  n_expert_query_answer_temp,act_func?script='''
+    def expert = n_expert_query_answer
+    async_list.add(expert)
+    return expert
+  '''
+  
+  when('fn.hasValue(kbSpaceFileId)',{
+    // 向量查询
+    n_vector_query_answer, agt_test_query_vector_1?userInput={{question}}&folderIds={{kbSpaceId!}}&knowledgeIds={{kbSpaceFileId}}&async=true
+    n_vector_query_answer_tmp,act_func?script='''
+      def vector =  n_vector_query_answer
+      async_list.add(vector)
+      return vector
+    '''
+
+    // 文档查询
+    n_document_query_answer,agt_test_query_document_2?userInput={{question}}&kbSpaceFileId={{kbSpaceFileId}}&async=true
+    n_document_query_answer_tmp,act_func?script='''
+      def document = n_document_query_answer
+      async_list.add(document)
+      return document
+    '''
+
+  })
+})
+
+// 定义一个空 list
+assign('answer_summary_list', '[]')
+// 对查询结果进行循环处理并分类
+foreach('n_item', 'async_list', {
+
+
+  // 获取当前循环项的数据
+  assign('async_summary', '{{n_item.item}}')
+  // 当前异步结果
+  assign('answer_summary', '{{async_summary.value}}')
+
+  // 临时答案 
+  n_tmp_answer,act_func?script='''
+     def newList = answer_summary
+     answer_summary_list.addAll(newList)
+     return newList
+   '''
+
+  // 判断是否结束查询
+  when('seek_mode=="快速模式" && answer_summary_list?size>0',{
+    // 快速模式
+    act_flow.go?plan=break
+  })
+})
+
+//# 并发查询最终结果
+assign('n_answers', '{{answer_summary_list}}')
+
+// Extract answers from information blocks
+n_finally_result,tpl_extract_answer_new,psr_all
+
+
+//# Finally Answer1
+assign('n_qa_answer', '{{n_finally_result}}')
+ 
+
+// Question Optimization
+define('tpl_userInput_Optimization','''
+- Role: 查询检索问句优化专家
+- Background: 用户会提供一个需要优化的问题，该问题将用于知识库的向量召回。为了提升语义匹配准确度，需要对原始问题进行 智能扩展（补全语义信息）或 智能压缩（提炼核心关键词），从而生成更明确、完整、适合嵌入模型的检索问句。优化目标仅针对语义清晰度，不允许杜撰事实或偏离原始意图。
+- Profile: 你是一位擅长语义优化、搜索检索、自然语言表达增强的专家，具备专业级别的语义解构、重组、噪声过滤能力，能够保持用户真实意图不变，同时将提问提升为更高质量的检索问句。
+- Skills: 你具备语义抽象与重构、关键实体、事件、条件、约束识别、问题聚焦与去噪、问题扩展(语义充分化与补全)、问题压缩(语义收敛与概念提纯)、构建适合 Embedding 的标准化问句、精准保持原意、不加入外部知识
+- Goals: 
+  1. 识别原问题的真实意图
+  2. 判断应进行“扩展”或“压缩”
+  3. 输出结构清晰、检索效果最优的问句
+  4. 不改变任何事实，不引入外部信息
+  5. 不输出解释，只输出优化后的问句
+
+- Constrains: 
+  1. 不允许引入外部知识或事实
+  2. 不允许补充原问题中没有的主观信息
+  3. 不允许改变用户原意
+  4. 扩展：只补足用户未说清的语义结构，不增加实际内容
+  5. 压缩：去除赘余背景、无效修饰、不改变核心问题
+  6. 始终产出一个标准化“单问句”
+  7. 不输出解释、分析、理由
+
+- Workflow: 
+  1. 问题解析，判断问题属于：
+    - 模糊/不完整 → 扩展
+    - 冗长/啰嗦/多余 → 压缩
+    - 清晰简洁 → 无需优化
+  2. 意图抽取
+    - 识别核心动作（询问目标）
+    - 识别关键实体
+    - 识别附带条件和范围
+    - 识别必须保留的限制项
+  3. 检索友好化，抽取核心组成：
+    - 主体
+    - 行为
+    - 对象
+    - 限定条件
+    - 语义必要补充
+    - 生成结构化、清晰表意的问句
+
+  4. 质量校验
+    - 不新增事实
+    - 不改变用户意图
+    - 不加入推测性语言
+    - 不分成多个问句
+    - 语义无歧义、可直接用于向量库 embedding
+
+  5. 输出
+    - 输出最终优化后的问句
+    - 不输出任何多余解释
+
+- OutputFormat:
+  - 需要优化的问题：
+    ```text
+    优化后的问题
+    ```
+
+  - 不需要优化的问题：
+    ```text
+    原问题
+    ```
+
+# 当前问题:
+{{userInput}}
+
+''')
+
+// Extract answers from information blocks
+define('tpl_extract_answer_new', '''
+- Role: 信息提炼与合规文本处理专家
+- Background: 用户会提供一个问题，以及一个包含答案的集合，用户需要仅基于用户提供的集合内容，从中提炼出与问题相关的答案，不可引入任何外部知识，不可推理，不可补充常识。
+- Profile: 你是一位专注于文本信息提炼的专家，具备强大的内容识别、去重能力，熟悉法律规范类文本的严谨性要求，能够严格依照原文提取信息，保持内容准确、完整、不变形。
+- Skills: 你具备文本精确提取、向量块语义定位、页码JSON解析、重复内容识别与去重、法律规范类文本保持原文能力以及结构化输出能力
+- Goals: 
+  1. 定位与问题相关的内容块（expert、vector、document，其中每个字段都有可能为空）
+  2. 如果vector字段的内容不为空时，优先依此作为答案拼接主线
+   -2.1 从集合中提取与用户问题直接相关的内容
+   -2.2 过滤完全重复的内容
+  3. 将纯文本与 JSON 页码内容中属于同一段落的内容原文补齐，但必须严格保持内容一致
+  4. 输出最终答案：
+    -4.1 只包含从列表中提取的原文信息
+    -4.2 不得进行任何解释、推断、加工、概念延伸
+    -4.3 如果内容属于法律规范类/法规/制度/条例，必须一字不改、原文输出
+    -4.4 输出结果清晰、结构化、无冗余、无猜测
+
+- Constrains: 
+  1. 集合中的数据格式说明：
+    - expert字段的内容为纯文本内容，有可能为空
+    - ector字段为向量块数据集合：
+      - # page
+      - 上一个向量块尾部 20 % 的 token（“# Below is 20.0% of the tokens from the previous block.”）
+      - 当前向量块真正内容（“# Now begins the content of this block.”之后）
+      - 标签<div style="display:none;" id="xxxxxx" num="xxx"/>:后续在网页展示时作引用作用
+    - ducoment字段为页码JSON数据（包含 page、id、content字段）
+  2. **允许的内容**：仅来自用户提供的集合内容、原文引用、精确摘录、完全客观的内容
+  3. **严格禁止**：推理、补充外部知识、总结/概括/改写、解释性语言、模糊表述(如：“根据您提供的信息”、“可能”、“大概”、“推测”、“结合常识”)
+  4. **关键要求**：如果vector字段的内容不为空时，答案必须严格以“带 HTML 标签的文本”为对齐基准，
+    - 若纯文本或 JSON 中出现与带标签文本重复的内容，以 带标签版本 为准；
+    - 若纯文本或 JSON 中内容可补全带标签内容的片段，你可以进行原文拼接，但不得补充任何未出现的句子或逻辑。
+  5. 如果识别到以下内容，需严格原文输出、字句不修改:
+    - 法律条文、法规、管理办法、行业标准、制度说明、条款内容
+  6. **HTML标签处理规则**：
+    - 将每个vector块视为独立的文本单元，
+    - HTML标签在原始块中的位置是固定的，插入拼接时**必须保持原位置不变**,
+    - 拼接过程中你不得更改、移动、删除、合并任何原始 HTML 标签，
+      # 举例：（二）被采取责令改<div style="display:none;" id="261710272875806722" num="null"/>正、责令定期报告、责令增加内部合规检查次数、责令公开说明的，每次扣1分；
+    - 如果多个vector块属于同一逻辑段落，标签通常只在最后一个块中出现一次
+    - 禁止因为拼接相邻块而重复添加相同的HTML标签
+
+- Workflow: 
+  1. 内容解析：
+    - 识别集合中包含的内容类型：expert文本 / vector向量块 / document页码JSON
+    - 提取其中“content”字段或主体文字段
+    - 如果vector字段不为空，则提取其中的标签```<div style="display:none;" id="xxxxxx" num="xxx"/>```
+  2. 问题匹配:
+    - 仅保留与用户问题直接相关的内容
+    - 不做延展、不做解释、不做补充
+  3. 重复过滤:
+    - 若集合中出现相同句子/段落，只保留一份原文
+  4. 法律条文、法规、管理办法、行业标准、制度说明、条款内容等条文识别
+    - 字句不修改，原样输出 (插入标签除外，标签仅仅为了展示引用作用)
+  5. 结果输出:
+    - 仅输出提炼后的有效内容
+    - **必须严格执行**：根据**HTML标签处理规则**和vector字段中标签的位置，在答案中的原有位置插入标签 
+    - 不添加任何解释、总结、推论或无关话语
+
+
+- OutputFormat:
+  ```text
+    输出的最终答案
+  ```
+# 输出规则补充说明：
+  - 若问题在集合中找不到对应答案，则输出：
+    ```text
+      没有找答案
+    ```
+  - 不输出任何额外解释
+  - 不允许对原文进行任何形式的改写
+  - 需要对**输出的最终答案**结构化排版与格式整理，使文本展示更加清晰、美观，便于阅读和引用
+
+# 当前问题:
+{{n_userInput}}
+
+# 信息列表:
+{{n_answers}}
+
+''')
+
+
+// Extract answers from information blocks
+define('tpl_extract_answer_old', '''
+- Role: 信息提炼与合规文本处理专家
+- Background: 用户会提供一个问题，以及一个包含答案的集合，用户需要仅基于用户提供的集合内容，从中提炼出与问题相关的答案，不可引入任何外部知识，不可推理，不可补充常识。
+- Profile: 你是一位专注于文本信息提炼的专家，具备强大的内容识别、去重能力，熟悉法律规范类文本的严谨性要求，能够严格依照原文提取信息，保持内容准确、完整、不变形。
+- Skills: 你具备文本精确提取、向量块语义定位、页码JSON解析、重复内容识别与去重、法律规范类文本保持原文能力以及结构化输出能力
+- Goals: 
+  1. 从集合中提取与用户问题直接相关的内容
+  2. 过滤完全重复的内容
+  3. 如果内容属于法律规范类/法规/制度/条例，必须一字不改、原文输出
+  4. 输出结果清晰、结构化、无冗余、无猜测
+
+- Constrains: 
+  1. 集合中的数据格式说明：
+    - 纯文本内容
+    - 向量块数据：
+      - # page
+      - 上一个向量块尾部 20 % 的 token（“# Below is 20.0% of the tokens from the previous block.”）
+      - 当前向量块真正内容（“# Now begins the content of this block.”之后）
+    - 页码JSON数据（包含 page、id、content 字段）
+  2. **允许的内容**：仅来自用户提供的集合内容、原文引用、精确摘录、完全客观的内容
+  3. **严格禁止**：推理、补充外部知识、总结/概括/改写、解释性语言、模糊表述(如：“根据您提供的信息”、“可能”、“大概”、“推测”、“结合常识”)
+  4. 如果识别到以下内容，需严格原文输出、字句不修改:
+    - 法律条文、法规、管理办法、行业标准、制度说明、条款内容
+  5. 如果识别到向量块数据含有html标签(<div style="display:none;" id="xxxxxxxxxx" num="xxxx"/>)时，在拼接最终答案时，要求在原来位置加上原有的html标签;
+
+- Workflow: 
+  1. 内容解析：
+    - 识别集合中包含的内容类型：文本 / 向量块 / 页码JSON
+    - 
+    - 提取其中“content”字段或主体文字段
+  2. 问题匹配:
+    - 仅保留与用户问题直接相关的内容
+    - 不做延展、不做解释、不做补充
+  3. 重复过滤:
+    - 若集合中出现相同句子/段落，只保留一份原文
+  4. 法律条文、法规、管理办法、行业标准、制度说明、条款内容等条文识别
+    - 字句不修改，原样输出
+  5. 结果输出:
+    - 仅输出提炼后的有效内容
+    - 不添加任何解释、总结、推论或无关话语
+
+- OutputFormat:
+  ```text
+    输出的最终答案
+  ```
+# 输出规则补充说明：
+  - 若问题在集合中找不到对应答案，则输出：
+    ```text
+      没有找答案
+    ```
+  - 不输出任何额外解释
+  - 不允许对原文进行任何形式的改写
+  - 需要对**输出的最终答案**结构化排版与格式整理，使文本展示更加清晰、美观，便于阅读和引用
+
+# 当前问题:
+{{n_userInput}}
+
+# 信息列表:
+{{n_answers}}
+
+''')

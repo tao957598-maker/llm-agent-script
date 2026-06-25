@@ -1,0 +1,139 @@
+/*
+{
+	"title":"API Test Data Generation Engine",
+	"description":"AI-driven API Test Data Generation Platform - A cutting-edge solution that utilizes knowledge graph technologies to automatically generate, validate and optimize API test data. Supports intelligent data modeling, multi-source integration, and dynamic validation for comprehensive API testing.",
+	"parameter":[
+		{
+			"name":"platform",
+			"label":"系统名称",
+			"required":true
+		},
+		{
+			"name":"task_name",
+			"label":"任务名称",
+			"required":true
+		},
+		{
+			"name":"base_url",
+			"label":"Base Url",
+			"required":true
+		},
+		{
+			"name":"api",
+			"label":"API",
+			"type":"textarea"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"tag":"Automated Testing",
+	"resultPlan":"n_python_code",
+	"life":1000,
+	"displayOrder":71,
+	"version":1
+}
+*/
+// Get base url
+assign('n_base_url', '{{base_url}}')
+
+// Get version
+assign("n_version", "{{version}}")
+
+// Get task name
+assign("n_task_name", "{{task_name}}")
+
+// Get platform
+assign("n_platform", "{{platform}}")
+
+
+// Get api data
+when('!fn.hasValue(api)', {
+	// Get api data through version
+ 	n_info, act_kb.selectBy?sql='SELECT name, method, description, function_data FROM kb_api_test_data WHERE version="{{n_version}}"'
+
+	// Get  all api
+	n_all_api, act_func?script='''
+		def data = n_info
+		def result = data.collect { it.name }.join(",")
+		return result
+	'''
+
+},
+{
+	// Get  all api
+	assign("n_all_api", "{{api}}")
+	n_apis, act_func?script='''
+		def inputStr = "{{n_all_api}}"
+		def parts = inputStr.split(",")
+		return parts.collect { it.trim() }.findAll { it } 
+	'''
+
+	n_str_apis,act_func?js='''
+	(function() {
+		let str_apis = JSON.stringify({{n_apis}})
+		const res = '(' + JSON.parse(str_apis).map(item => `"${item}"`).join(',') + ')';
+		return res
+	})();
+	'''
+
+	// Get api data through version and api name
+ 	n_info, act_kb.selectBy?sql='SELECT name, method, description, function_data FROM kb_api_test_data WHERE version="{{n_version}}" AND name IN {{n_str_apis}}'
+
+})
+
+// Get hash suffix 
+n_suffix,act_func?js='''
+	(function() {
+		let str = '{{n_all_api}}'
+		let hash = 0;
+		for (let i = 0; i < str.length; i++) {
+			const char = str.charCodeAt(i);
+			hash = ((hash << 5) - hash) + char;
+			hash = hash & hash;
+		}
+		return Math.abs(hash).toString(16);
+	})();
+'''
+
+// datas
+n_datas,act_func?js='''
+	(function() {
+		return JSON.stringify({{n_info}});
+	})();
+'''
+
+// Do Execute: url, name, method, description, para, verify
+n_result_data, act_api.doExecuteDynamic?name="api_test_0725"&dynamicParamData='{{fn.json("task, n_task_name, url, n_base_url, datas, n_datas")}}'
+n_result_data_map, act_func?script='''
+	return fn.map(n_result_data)
+'''
+
+// Write test report
+when('n_result_data_map.success == "true"',{
+	n_data,act_func?script='''
+		def result_data = n_result_data_map
+		return result_data.data
+	'''
+	n_current_timestamp,act_func?script='''
+		def now = new Date()
+		def millis = now.time % 1000
+
+		def timestamp = String.format(
+			"%04d%02d%02d%02d%02d%02d%03d",
+			now.year + 1900,
+			now.month + 1,
+			now.date,
+			now.hours,
+			now.minutes,
+			now.seconds,
+			millis
+		)
+		return timestamp
+	'''
+	assign('report_file', 'appdata/api_report/{{n_platform}}/{{task_name}}_{{n_suffix}}.html')
+	act_func.write?filename='{{report_file}}'&data='{{n_data}}'&syncKbs=true
+})
+

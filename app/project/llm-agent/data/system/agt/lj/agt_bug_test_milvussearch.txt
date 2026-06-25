@@ -1,0 +1,31 @@
+/*
+{
+	"title":"agt_bug_test_milvussearch",
+	"description":"测试向量查询接口searchQuestion无结果-lj",
+	"parameter":"test_no=测试编号&current_step=当前验证步骤&steps=完整验证步骤&system=系统名称&envinfo=environment information&taskType=任务类型",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_result_data",
+	"version":1
+}
+*/
+assign("n_userInput", 'what is The key development in Phase 1B') 
+
+// test_req_poc
+assign("n_kbSpaceId", '252455713598504960') 
+
+// OKP.pdf
+assign("n_kbSpaceFileId", '252801563954216960')
+
+assign('params','{"question":"{{n_userInput}}","folderIds":"{{n_kbSpaceId!}}","knowledgeIds":"{{n_kbSpaceFileId!}}"}')
+
+// 这个会根据配置是否查询ink，如果不是ink，则调用自己向量库（同rag_kbs.search），但相似度过滤，默认返回前5条。只返回几个固定字段
+//n_milvus_result,rag_kbs.searchQuestion?paramData='{{params}}'&top=5&similarity='0.1'&bm25Weight=0.6
+
+// 这个没有相似度，name：表名（默认知识库表kb_spaces_knowledge_section） column（默认content）：查询字段 outputFields：返回的字段
+//n_milvus_result,rag_kb.search?requirement='{{n_userInput}}'&top=5&outputFields=''&bm25Weight=0.6
+
+assign('param', '{"question":"银行有哪些？用bank字段，图表有几个？用num字段，以JSON返回，不要返回任何其他东西。","knowledgeIds":"273573381323751424,273573382488719360","folderIds":""}')
+// Execute vector query
+n_results, rag_kbs.searchQuestion?paramData='{{param}}'&similarity='0.01'&isRerank="true"&bm25Weight="0.3"&top="10"
+log('{{n_results}}')

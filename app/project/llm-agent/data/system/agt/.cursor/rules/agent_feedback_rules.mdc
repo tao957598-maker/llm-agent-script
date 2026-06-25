@@ -1,0 +1,587 @@
+---
+description: Agent 开发使用反馈问题汇总，记录实际开发中遇到的问题和解决方案
+alwaysApply: false
+globs:
+  - data/system/agt/**/*.txt
+  - **/resources/system/agt/**/*.txt
+---
+
+# Agent 开发使用反馈规则
+
+本文档记录 Agent 开发过程中遇到的真实问题及解决方案。
+
+---
+
+## 规则1：when() 条件使用 FreeMarker 语法，不支持 Groovy 安全导航 `?.`
+
+**when() 条件的表达式引擎是 FreeMarker，不是 Groovy**。
+
+关键限制：
+- **不支持** `?.` 安全导航操作符（这是 Groovy 语法）
+- FreeMarker 的 null 安全语法是 `(xxx)!''` 或 `xxx??`
+
+```groovy
+// ❌ 错误：FreeMarker 不支持 ?. 安全导航
+when('n_agt_result?.is_plan_break == "true"', { ... })
+
+// ✅ 正确：用 act_func?script 处理，Groovy 上下文中可直接访问 Map 属性
+n_should_break, act_func?script='''
+  def isBreak = n_agt_result?.is_plan_break == "true"
+  fn.put("n_should_break", isBreak ? "true" : "false")
+  return isBreak
+'''
+when('fn.bool(n_should_break)', {
+  act_flow.go?plan=break
+})
+```
+
+---
+
+## 规则2：when() 条件中不能用方法调用
+
+**报错示例**：`Unexpected input: '():'`
+
+`.toLowerCase()`、`.contains()` 等方法**不能**直接写在 `when('...')` 条件里。
+
+```groovy
+// ❌ 错误
+when('contextSystem.toLowerCase().contains("windows")', { ... })
+
+// ✅ 正确：先用 act_func 计算布尔值
+n_os, act_func?script='''
+  return contextSystem?.toLowerCase()?.contains("windows") ? 'windows' : 'linux'
+'''
+when('n_os == "windows"', { ... })
+```
+
+---
+
+## 规则3：Elvis 操作符 `?:` 和三元运算符 `? :`
+
+**报错示例**：
+```
+Unexpected input: '():' @ line 2, column 41.
+   def len = n_message_data?.size():0
+```
+
+```groovy
+// ❌ 错误：? 紧跟 () 后面写 :0，Groovy 误解
+def len = n_message_data?.size():0
+
+// ✅ 正确：Elvis 操作符（推荐）
+def len = n_message_data?.size() ?: 0
+
+// ✅ 正确：三元运算符（? 和 : 之间必须有空格）
+def len = n_message_data ? n_message_data.size() : 0
+```
+
+---
+
+## 规则4：terminal_command 参数引号规则
+
+**报错原因**：`||`、`|` 在裸值中会被 DSL 解析器识别为运算符。
+
+```groovy
+// ❌ 错误：含 | 的命令会报错
+terminal_command=where bash | findstr /i "Git"
+
+// ✅ 正确：含 | 必须先 assign 再引用
+assign('n_cmd', 'where bash | findstr /i "Git"')
+terminal_command={{n_cmd}}
+
+// ✅ 简单命令可直接裸值
+terminal_command=git --version
+
+// ✅ 含空格/特殊字符必须加引号
+terminal_command='where bash 2>nul'
+```
+
+---
+
+## 规则5：多行内容用三引号英文符号
+
+使用 **英文单三引号** `'''` `'''` 或 **英文双三引号** `"""` `"""`（必须成对出现）。
+
+```groovy
+// ✅ 正确：三单引号多行
+n_steps, act_plan.parse?task='''
+- [ ] find_project
+- [ ] check_git
+'''
+
+// ✅ 正确：三双引号多行
+n_steps, act_plan.parse?task="""
+- [ ] find_project
+- [ ] check_git
+"""
+
+// ❌ 错误：单引号多行（会被解析为普通字符串）
+n_steps, act_plan.parse?task='
+- [ ] find_project
+'
+```
+
+---
+
+## 规则6：每行有效代码必须换行
+
+后端使用 Java 解析 agent 文件，**每一行有效代码必须换行**。
+
+```groovy
+// ✅ 正确：有效代码单独一行
+when('fn.bool(n_should_break)', {
+  act_flow.go?plan=break
+})
+
+// ❌ 错误：有效代码写在一行
+when('fn.bool(n_should_break)', { act_flow.go?plan=break })
+
+// ✅ 正确：多个有效代码分别换行
+when('n_step.item == "find_project"', {
+  n_agt_result, agt_find_project.assistant?...
+  n_should_break, act_func?script='''
+    def result = n_agt_result ?: ""
+    def isBreak = result.contains('"is_plan_break":"true"')
+    fn.put("n_should_break", isBreak ? "true" : "false")
+    return isBreak
+  '''
+  when('fn.bool(n_should_break)', {
+    act_flow.go?plan=break
+  })
+})
+
+// ❌ 错误：多个有效代码写在一行
+when('n_step.item == "find_project"', { n_agt_result, agt_find_project... })
+```
+
+**总结**：
+- `when()` 的条件后，第一个 `{` 和条件在同一行
+- `{ }` 内的有效代码必须换行
+- 不要在一行内写多个有效代码（用分号分隔也不行）
+- 注释和空行可以单独一行
+
+---
+
+## 规则7：script 块内反斜杠需双倍转义
+
+**报错示例**：`Unexpected character: '''`
+
+三引号块内容会经过 DSL 转义预处理（`\\` → `\`），**块内要表示一个 `\` 必须写 `\\\\`**。
+
+```groovy
+// ❌ 错误：'\\' 经过DSL处理变成 '\'，Groovy报 Unexpected character
+path.replace('\\', '/')
+
+// ✅ 正确：'\\\\' 经过DSL处理变成 '\\'，Groovy看到一个反斜杠
+path.replace('\\\\', '/')
+```
+
+---
+
+## 规则8：Windows 路径统一转为正斜杠
+
+**报错原因**：`{{n_path}}` 插入模板时反斜杠会被当成转义序列吃掉，`\g`→`g`。
+
+```groovy
+// ❌ 错误
+F:\project\name → 插入后变成 F:projectname
+
+// ✅ 正确：在 Groovy 脚本里转换
+def forwardSlashPath = path.replace('\\\\', '/')
+fn.put('n_project_root', forwardSlashPath)
+```
+
+---
+
+## 规则9：assign() 字符串里不要用 `\\` 拼路径
+
+**报错原因**：`\\` 会被转义消耗。
+
+```groovy
+// ❌ 错误
+assign('n_cmd', 'deploy\\build.bat')  // 变成 deploybuild.bat
+
+// ✅ 正确：使用正斜杠
+assign('n_cmd', 'deploy/build.bat')
+```
+
+---
+
+## 规则10：含空格路径需要 `\"` 包裹
+
+```groovy
+// ✅ 正确
+assign('n_deploy_cmd', 'cd \"{{n_project_root}}/deploy\" && bash startup.sh')
+```
+
+---
+
+## 规则11：fn.list() 解析 CLI runner 返回值
+
+`agt_local_cli_command_runner` 返回 JSON 数组字符串（如 `["F:/path\n"]`）。
+
+```groovy
+// ✅ 正确
+def list = fn.list(n_result)
+return list ? list[0]?.trim() : null
+
+// ❌ 错误：不要用这个
+fn.jsonObj(n_result)
+```
+
+---
+
+## 规则12：Groovy 脚本内写变量用 fn.put()
+
+在 `act_func?script='''...'''` 里，用 `fn.put('varName', value)` 写入上下文变量。
+
+```groovy
+n_find_ok, act_func?script='''
+  def path = fn.list(n_find_result)?[0]?.trim()
+  if (!path) return false
+  fn.put('n_project_root', path.replace('\\\\', '//'))
+  return true
+'''
+```
+
+---
+
+## 规则13：foreach 内用 act_flow.go?plan=break 提前退出
+
+```groovy
+when('n_find_ok', {
+  // 成功逻辑
+}, {
+  assign('n_deploy_result', '❌ 失败原因')
+  act_flow.go?plan=break   // 中断 foreach
+})
+```
+
+---
+
+## 规则14：减少 when() 嵌套，用提前退出代替
+
+```groovy
+// ❌ 嵌套深
+when('condition', {
+  // 大量主逻辑...
+}, {
+  assign('n_result', '不支持')
+})
+
+// ✅ 提前退出，主逻辑在顶层
+when('!condition', {
+  assign('n_result', '不支持')
+  act_flow.go?plan=end
+})
+// 主逻辑直接写，少一层缩进
+```
+
+---
+
+## 规则15：多层引号嵌套规则
+
+**报错示例**：`Unexpected input` 或解析错误
+
+多层嵌套时，**不能嵌套相同的引号**：
+- 单引号 `'...'` 里面不能再放单引号 `'`
+- 双引号 `"..."` 里面不能再放双引号 `"
+
+```groovy
+// ❌ 错误：双引号里再嵌套双引号
+act_memory.assign?var=n_result&value="{{n_cmd == ""? n_cmd: n_cmd2}}"&type=code
+
+// ✅ 正确：内双外单
+act_memory.assign?var=cmd_executor_result&value="{{n_result.command == ''? n_result.command: n_result.commands}}\n{{n_result.stderr}}"&type=code
+
+// ✅ 正确：内单外双
+act_memory.assign?var=n_result&value='{{n_cmd == ""? n_cmd: n_cmd2}}'&type=code
+```
+
+**`{{}}` 内联表达式的引号规则同样适用：**
+- `{{}}` 内的引号与外面的引号**不能相同**
+- 外部用单引号 `'`，内部字符串用双引号 `""`
+- 外部用双引号 `"`，内部字符串用单引号 `''`
+
+```groovy
+// ✅ 正确：外单内双
+assign('n_has_error', '{{n_output?.contains("error")}}')
+
+// ✅ 正确：外双内单
+assign('n_has_error', "{{n_output?.contains('error')}}")
+
+// ❌ 错误：外单内单
+assign('n_has_error', '{{n_output?.contains('error')}}')  // 会解析错误
+```
+
+**最佳实践**：优先使用**内双外单**，可以解决更复杂的格式。
+
+---
+
+## 规则16：`{{}}` 内联表达式中不能用 `+` 拼接字符串
+
+`{{}}` 模板内是 Freemarker 语法，**不能用 `+` 拼接字符串**。应该直接在模板中写变量或使用其他方式。
+
+```groovy
+// ❌ 错误：{{}} 内用了 + 拼接
+assign("n_executor_return", "⚠️ 错误：{{n_reason}}\n\n命令：" + (cmd ?: "") + "\n\n请人工操作。")
+
+// ✅ 正确：在 Groovy 脚本里拼接，然后返回
+n_result, act_func?script='''
+def msg = "⚠️ 危险命令已拦截：" + (n_danger_reason ?: "") + "\n\n命令：" + (cmd ?: "") + "\n\n如果必要，请人工操作。"
+fn.put("n_executor_return", msg)
+return msg
+'''
+```
+
+**原则**：复杂字符串拼接应该在 `act_func?script` 中完成，不要在 `{{}}` 模板内使用 `+`。
+
+---
+
+## 规则17：`{{}}` 是 Freemarker 模板语法，`act_func?script` 才是 Groovy 语法
+
+| 语法 | 实际引擎 | 说明 |
+|---|---|---|
+| `{{}}` | Freemarker | 模板语法，简单变量和表达式 |
+| `act_func?script='''...'''` | Groovy | 复杂逻辑，用 `fn.put()` 写入变量 |
+
+**常见误解**：`{{}}` 里面的代码不是 Groovy 语法，而是 Freemarker 表达式语法。
+
+**复杂表达式处理原则**：
+- 简单变量输出用 `{{变量名}}`
+- 复杂表达式优先使用 `{{fn.xxx()}}` 自定义工具方法
+- **禁止**在 `fn.xxx()` 后面继续调用 Java 方法，如 `{{fn.list(n_data).size()}}` ❌
+- 复杂逻辑用 `act_func?script`
+
+```groovy
+// {{}} - Freemarker 模板语法
+assign('n_upper', '{{n_name}}')  // 直接输出变量值
+assign('n_str', '{{fn.str(n_result)}}')  // 使用 fn 工具方法
+// ❌ 错误：fn.xxx() 后面不能调用 .size()
+assign('n_len', '{{fn.list(n_data).size()}}')
+
+// ✅ 正确：复杂逻辑用 act_func?script
+n_result, act_func?script='''
+def list = fn.list(n_data)
+return list?.size() ?: 0
+'''
+```
+
+**原则**：
+- 简单变量输出用 `{{}}`
+- 复杂表达式优先用 `{{fn.xx()}}`
+- 复杂逻辑用 `act_func?script`
+
+```groovy
+n_result, act_func?script='''
+  def output = fn.str(n_input) ?: ""
+  def valid = output.trim().equals("VALID")
+  fn.put('n_is_valid', valid)
+  return valid
+'''
+```
+
+---
+
+## 规则18：`fn.optional` 只支持2参数，不支持3参数
+
+**报错示例**：`Method optional(java.lang.String,java.lang.String,null) cannot be found`
+
+```groovy
+// ❌ 错误：fn.optional 不支持3参数
+assign('n_effective_server_id', '{{fn.optional(server_id, n_g_server_id, n_server_id)}}')
+
+// ✅ 正确：用 act_func?script 实现多参数优先级
+n_effective_server_id, act_func?script='''
+    def sid = (server_id ?: "").trim()
+    def gsid = (n_g_server_id ?: "").trim()
+    def lsid = ""
+    try {
+        lsid = ((n_server_id ?: "") as String).trim()
+    } catch(e) {
+        lsid = ""
+    }
+
+    def result = sid
+    if (sid.isEmpty()) {
+        result = !gsid.isEmpty() ? gsid : lsid
+    }
+
+    fn.put("n_effective_server_id", result)
+    return result
+'''
+```
+
+---
+
+## 规则19：Freemarker 访问可能为 null 的属性会报错
+
+**报错示例**：`The following has evaluated to null or missing: ==> n_result_data.commands`
+
+```groovy
+// ❌ 错误：Freemarker 中访问不存在的属性会报错
+act_memory.assign?var=n_executor_return&value="{{((n_result_data.command == '')?then(n_result_data.commands, n_result_data.command))}}\n{{n_result_data.stderr}}"&type=code
+
+// ✅ 正确：用 act_func?script 安全访问
+n_fail_msg, act_func?script='''
+    def cmd = (n_result_data?.command ?: "").trim()
+    def cmds = (n_result_data?.commands ?: "").trim()
+    def err = (n_result_data?.stderr ?: "").trim()
+
+    def finalCmd = cmd
+    if (cmd.isEmpty()) {
+        finalCmd = cmds
+    }
+
+    def msg = finalCmd + "\n" + err
+    fn.put("n_executor_return", msg)
+    return msg
+'''
+```
+
+**原则**：如果对象属性可能为 null，应该在 Groovy 脚本中用 `?.` 安全访问，不要在 Freemarker `{{}}` 中直接访问。
+
+---
+
+## 规则20：`act_func?script` 块内代码缩进规范
+
+`act_func?script='''...'''` 块内的代码应该缩进4个空格，保持 Java/Groovy 代码风格。
+
+```groovy
+// ✅ 正确：脚本内缩进4空格
+n_is_dangerous, act_func?script='''
+    def c = (cmd ?: "").trim().toLowerCase()
+    def d = false
+    def reason = ""
+
+    if (c.contains("rm -rf /")) {
+        d = true
+        reason = "递归删除根目录"
+    }
+
+    fn.put("n_danger_reason", reason)
+    return d
+'''
+
+// ✅ 简单逻辑可压缩成一行
+n_danger_msg, act_func?script='''def msg = "..."; fn.put("n_executor_return", msg); return msg'''
+```
+
+---
+
+## 规则21：全局变量命名规则 `n_g_驼峰`
+
+当 `act_memory.assign` 使用 `global=true` 存入全局变量时，命名规则为 `n_g_` + 驼峰变量名。
+
+```groovy
+// ✅ 正确：全局变量用 n_g_ 前缀，驼峰命名
+act_memory.assign?var=n_g_serverId&value={{server_id}}&type=code&global=true
+act_memory.assign?var=n_g_userName&value={{user_name}}&type=code&global=true
+
+// 读取时用同样的命名
+n_g_serverId, act_memory.retrieve?var=n_g_serverId&global=true
+n_g_userName, act_memory.retrieve?var=n_g_userName&global=true
+```
+
+**命名规范**：
+- 全局变量：`n_g_` + 驼峰，如 `n_g_serverId`、`n_g_userName`
+- 普通变量：`n_` + 驼峰，如 `n_server_id`、`n_user_name`（下划线也可）
+
+---
+
+## 规则22：外部 Agent 调用返回值为 Map 对象，需用 act_func 解析
+
+当使用 `n_result, agt_xxx.yy?...` 调用外部 agent 时，`n_result` 的值是**被调用 agent 最后一句有效代码的返回值（Map 对象）**。
+
+**重要**：`n_agt_result` 是 Map 对象，在 `act_func?script` 的 Groovy 上下文中可直接访问属性，但在 FreeMarker `{{}}` 和 `when()` 条件中**不能直接访问**。
+
+```groovy
+// agt_xxx.txt 最后一句
+assign("n_return_result", '{"n_log":"{{n_log}}","n_data":"值","is_plan_break":"false"}')
+
+// 调用方接收返回值（Map 对象）
+n_agt_result, agt_xxx.yy?param=value
+
+// ❌ 错误：FreeMarker 不支持直接 Map 属性访问
+assign('n_log', '{{n_agt_result.n_log}}')
+
+// ❌ 错误：FreeMarker 不支持 ?. 安全导航
+when('fn.hasValue(n_agt_result.n_data)', { ... })
+
+// ✅ 正确：用 act_func?script 提取属性到独立变量
+n_result_log, act_func?script='''
+  def log = n_agt_result?.n_log ?: ""
+  fn.put("n_result_log", log)
+  return log
+'''
+assign('n_log', '{{n_result_log}}')
+
+// ✅ 正确：用 act_func?script 处理判断
+n_should_break, act_func?script='''
+  def isBreak = n_agt_result?.is_plan_break == "true"
+  fn.put("n_should_break", isBreak ? "true" : "false")
+  return isBreak
+'''
+when('fn.bool(n_should_break)', {
+  act_flow.go?plan=break
+})
+```
+
+**推荐返回值格式**：
+```groovy
+// 成功
+assign("n_return_result", '{"n_log":"{{n_log}}","n_data":"值","is_plan_break":"false"}')
+
+// 失败
+assign("n_return_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"true"}')
+```
+
+---
+
+## 规则23：when() 条件语法分类与限制
+
+`WhenPlanExecutor.java` 第 63-82 行的解析逻辑：
+
+| 条件格式 | 解析方式 | 示例 |
+|---------|---------|------|
+| 纯变量（`[a-zA-Z0-9_.!]+`） | 直接取值 | `n_flag`, `n_step.item` |
+| `fn.xxx(...)` 开头 | 直接作为 FreeMarker 函数 | `fn.bool(xxx)`, `fn.hasValue(xxx)` |
+| `<#...>` 开头 | 完全由 FreeMarker 控制 | `<#if xxx>...</#if>` |
+| 其他表达式 | 用 `fn.str()` 包裹 | `n_step.item == "find_project"` |
+
+**FreeMarker 语法限制**：
+- ❌ **不支持** `?.` 安全导航操作符（Groovy 语法）
+- ❌ **不支持** `.contains()`、`.toLowerCase()` 等方法调用
+- ❌ **不支持** 直接 JSON 对象属性访问 `n_agt_result.n_log`
+- ✅ **支持** 三元运算符 `condition ? value1 : value2`
+- ✅ **支持** `(xxx)!''` 默认值语法
+
+---
+
+## 快速检查清单
+
+| 检查项 | 状态 |
+|-------|------|
+| when() 条件没用方法调用 | ☐ |
+| when() 条件没用 `?.` 安全导航 | ☐ |
+| when() 条件没用 JSON 属性访问 | ☐ |
+| 三元运算用了 `?:` 或 `? :`（有空格） | ☐ |
+| 含 `\|` 的命令用了 assign 变量 | ☐ |
+| 多行内容用了三引号 `'''` 或 `"""` | ☐ |
+| script 块内反斜杠用了 `\\\\` | ☐ |
+| Windows 路径转为了正斜杠 `/` | ☐ |
+| 含空格的路径用了 `\"` | ☐ |
+| CLI 返回值用了 `fn.list()` | ☐ |
+| 多层引号嵌套用了外双内单 | ☐ |
+| `{{}}` 内联表达式引号与外部不同 | ☐ |
+| `fn.optional` 只用了2参数 | ☐ |
+| 可能为null的属性访问用了 Groovy script | ☐ |
+| Windows 下用 Git Bash | ☐ |
+
+---
+
+## 相关规则
+
+- **注释标签规则**：`agent_comment_tags_rules.mdc`
+- **编码规范**：`agent_file_encoding_rules.mdc`
+- **Shell 执行规则**：`windows-shell-rules.mdc`

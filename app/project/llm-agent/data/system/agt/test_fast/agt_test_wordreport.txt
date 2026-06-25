@@ -1,0 +1,45 @@
+/*
+ {
+	 "title": "自动化测试-测试报告",
+	 "parameter": "test_no=测试用例编号&current_step=可选的测试步骤",
+	 "resultPlan": "n_report"
+ }
+*/
+// Check requirement
+when('!fn.hasValue(test_no)', {
+	assign('test_no', 'deposit_and_transfer_funds_find')
+	assign('current_step', "10. Check if today's transaction of deposit “2580” to primary Account is successful")
+})
+
+when('!fn.hasValue(run_agent_name)', {
+	assign('run_agent_name', 'agt_test_wordreport')
+})
+// Get execution information
+n_req,act_func?name='ReportData.data()'
+assign('RequestId', "{{n_req[0]['request_id']}}")
+assign('TaskName', "{{n_req[0]['task_name']}}")
+assign('StartTime', "{{n_req[0]['start_time']}}")
+assign('EndTime', "{{n_req[0]['end_time']}}")
+assign('DurationSeconds', "{{n_req[0]['duration_hms']}}")
+assign('TestResult', "{{n_req[0]['test_result']}}")
+assign('StatusName', "{{n_req[0]['status_name']}}")
+assign('AgentName', "{{n_req[0]['agent_name']}}")
+assign('AgentTitle', "{{n_req[0]['agent_title']}}")
+assign('parameters', "{{n_req[0]['parameters']}}")
+
+assign('Steps', "{{parameters['steps']}}")
+assign('ExpectedResult', "{{parameters['expected_result']}}")
+
+// Query test step result from KB
+n_images, act_kb.select?name=kb_testcase_step&column=result&where={{fn.json('test_no, test_no, step, current_step!')}}
+
+
+// Query test result from KB
+n_success, act_kb.select?name=kb_testcase&column=test_result&where={{fn.json('test_no, test_no')}}
+assign('success', '{{n_success}}')
+
+// Initialize report variables
+assign('images', '{{fn.filepath(n_images)}}', 'success', '{{n_success}}')
+
+// Generate test report
+n_report, act_func.word?template='test report.docx'&output='selenium/result/report_{{test_no}}.docx'

@@ -1,0 +1,56 @@
+/*
+ {
+	 "title": "deep search by rag file.",
+	 "description": "Retrieve the source file information after rag conversion",
+	 "parameter": [
+		 {
+			"documentId":"document id"
+		 }
+	 ],
+     "uiEntrance": "chatDoc",
+     "tag":"chatdoc"
+ }
+*/
+
+// 1.查询出需要处理的知识
+n_data,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,kb_spaces_folder_id,extension,store_uri,knowledge_name'&maxSize=1&where='{"id":{{documentId}}}'
+n_first_data,act_func?script='''
+                    return n_data[0]
+                '''
+// 2.通过文件类型，获取对应的api后缀
+agt_rag_parse_postfix?extension={{n_first_data.extension}}
+when("fn.hasValue(postfix)", {
+        // 3.获取不需要转换的文本
+        n_file_data,act_kbs.readSectionFile?kbSpaceFileId='{{documentId}}'&isSource=true
+        // 4.生成指定格式数据
+        n_result_data,act_func?script='''
+                                    def list = new ArrayList()
+                                    def map = new HashMap()
+                                    map.put("fileName", n_first_data.knowledge_name)
+                                    map.put("imagePath", null)
+                                    map.put("documentId", documentId)
+                                    map.put("page", 1)
+                                    map.put("content", n_file_data)
+                                    list.add(map)
+                                    return list
+                                '''
+        assign('last_result', '{{n_result_data}}')
+    },{
+        // 3.获取rag转换后的数据信息
+        n_file_data,act_kb.select?name='kbs_doc_page_parse'&maxSize=1000&where='{"documentId":{{documentId}}}'
+        assign('last_result', '{{n_file_data}}')
+    })
+
+assign('return', '{{last_result}}')
+
+agent('agt_rag_parse_postfix', {
+    when("extension=='txt'", {
+        assign('postfix', 'general')
+    })
+    when("extension=='text'", {
+        assign('postfix', 'general')
+    })
+    when("extension=='md'", {
+        assign('postfix', 'general')
+    })
+})

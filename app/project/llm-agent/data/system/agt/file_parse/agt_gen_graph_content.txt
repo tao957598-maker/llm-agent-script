@@ -1,0 +1,126 @@
+/*
+{
+	"title":"Generate Graph Content",
+	"description":"Generate graph content based on feature requirements and relationships",
+	"parameter":[
+		{
+			"name":"document_id",
+			"label":"文档ID",
+			"type":"knowledge_space"
+		}
+	],
+  "uiEntrance":"graph",
+	"resultPlan":"n_features_data,n_stories_data,n_tasks_data,n_graph_data,",
+	"life":1000,
+	"version":1
+}
+*/
+
+// get features
+n_features_data,act_kb.selectBy?sql='SELECT * FROM kb_test_req_features WHERE documentId = {{document_id}}'
+
+// foreach features
+foreach('n_data', 'n_features_data', {
+  // item
+  assign('feature_item', '{{n_data.item}}')
+  // featureId
+  assign('feature_id', '{{feature_item.featureId}}')
+  // get stories
+  n_stories_data,act_kb.selectBy?sql='SELECT * FROM kb_test_req_stories WHERE documentId = "{{document_id}}" AND featureId = "{{feature_id}}"'
+
+  // tasks_list
+  assign("tasks_list", "[]")
+
+  // foreach stories
+  foreach('n_story_data', 'n_stories_data', {
+    // item
+    assign('story_item', '{{n_story_data.item}}')
+    // storyId
+    assign('story_id', '{{story_item.storyId}}')
+    // get tasks
+    n_tasks_data,act_kb.selectBy?sql='SELECT * FROM kb_test_req_tasks WHERE documentId = "{{document_id}}" AND storyId = "{{story_id}}"'
+
+    act_func?script='''
+      tasks_list.addAll(n_tasks_data)
+    '''
+  })
+
+  // generate graph
+  n_graph_data,tpl_graph_prompt,psr_json_python
+
+  //# Update
+  act_kb.update?name=kb_test_req_features&columnValues={{fn.json('graph_content, n_graph_data')}}&where='{"documentId":"{{documentId}}","featureId":"{{feature_id}}"}'
+})
+
+// prompt
+define('tpl_graph_prompt','''
+  你是一位专业的 JSON 数据结构生成专家，任务是根据给定的三类输入数据（feature、store list、task list）生成树形结构的 JSON。
+
+  规则：
+  1. 根节点为 feature 数据：
+    - properties 只包含：
+        {
+          "featureId": feature.featureId,
+          "name": feature.title,
+          "relationKey": "featureId"
+        }
+
+  2. 根节点下的 subNode 数组为 store list 数据：
+    - properties 只包含：
+        {
+          "storyId": store.storyId,
+          "name": store.title,
+          "relationKey": "storyId"
+        }
+    - 如果 store 对应的 storyId 在 task list 中有匹配项，则将这些 task 数据放入该 store 节点的 subNode 数组
+
+  3. task 节点：
+    - properties 只包含：
+        {
+          "taskId": task.taskId,
+          "name": task.title,
+          "relationKey": "taskId"
+        }
+
+  4. 匹配关系：
+    - store 根据 featureId 关联到 feature
+    - task 根据 storyId 关联到 store
+
+  5. 输出：
+    - 必须是 JSON 对象
+    - 不要添加多余解释或说明
+    - 确保字段顺序与示例一致
+
+  输入数据：
+  feature: {{feature_item}}
+  store list: {{n_stories_data}}
+  task list: {{tasks_list}}
+
+  输出格式示例：
+  {
+    "properties": {
+      "featureId": "F101",
+      "name": "OKP Group ID Maintenance",
+      "relationKey": "featureId"
+    },
+    "subNode": [
+      {
+        "properties": {
+          "storyId": "S101-2",
+          "name": "CDD Case Allocation",
+          "relationKey": "storyId"
+        },
+        "subNode": [
+          {
+            "properties": {
+              "taskId": "T101-2-1",
+              "name": "Implement Auto-Allocation Logic",
+              "relationKey": "taskId"
+            }
+          }
+        ]
+      }
+    ]
+  }
+
+''')

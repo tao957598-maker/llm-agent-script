@@ -1,0 +1,76 @@
+/*
+{
+	"title":"Python to Ruby Conversion",
+	"description":"Translate Python code into Ruby",
+	"parameter":[
+		{
+			"name":"cucumber_git_path",
+			"label":"代码目录路径",
+			"type":"text"
+		},
+        {
+            "name":"type",
+            "label":"文件类型",
+            "type":"text"
+        },
+        {
+            "name":"page_name",
+            "label":"页面名称",
+            "type":"text"
+        },
+        {
+            "name":"test_no",
+            "label":"测试用例编号",
+            "type":"text"
+        },
+        {
+            "name":"n_system",
+            "label":"系统名称",
+            "type":"text"
+        },
+        ,
+        {
+            "name":"data",
+            "label":"数据",
+            "type":"text"
+        }
+	],
+	"tag":"demo",
+    "life":1000,
+	"version":1
+}
+*/
+when('fn.hasValue(cucumber_git_path)',{
+    // page script 文件存放路径
+    assign('pages_scripts_path','{{cucumber_git_path}}/scripts/{{n_system}}/pages/{{page_name}}')
+    // pages feature 文件存放路径
+    assign('pages_features_path','{{cucumber_git_path}}/features/{{n_system}}/pages')
+    // pages step 文件存放路径
+    assign('pages_steps_path','{{cucumber_git_path}}/features/step_definitions/{{n_system}}/pages')
+
+    // workflows script 文件存放路径
+    assign('workflows_scripts_path','{{cucumber_git_path}}/scripts/{{n_system}}/workflows/{{test_no}}')
+    // workflows feature 文件存放路径
+    assign('workflows_features_path','{{cucumber_git_path}}/features/{{n_system}}/workflows')
+    // workflows step 文件存放路径
+    assign('workflows_steps_path','{{cucumber_git_path}}/features/step_definitions/{{n_system}}/workflows')
+    when('type=="pages_scripts_path"',{
+         // 按照python代码的路径存储ruby代码
+            assign('ruby_file_name', '{{pages_scripts_path}}/{{page_name}}.rb')
+            // 写入ruby代码
+            act_func.write?filename='{{ruby_file_name}}'&data='{{data}}'&syncKbs=true
+    })
+    when('type=="pages_features_path"',{
+        // 按照python代码的路径存储ruby代码
+            assign('feature_file_name', '{{pages_features_path}}/{{page_name}}.feature')
+            // 写入ruby代码
+            act_func.write?filename='{{feature_file_name}}'&data='{{data}}'&syncKbs=true
+    })
+    when('type=="pages_steps_path"',{
+        // step文件路径
+        assign('step_file_name', '{{pages_steps_path}}/{{page_name}}_step.rb')
+        // 写入pages step文件
+        act_func.write?filename='{{step_file_name}}'&data='{{data}}'&syncKbs=true
+    })
+
+})

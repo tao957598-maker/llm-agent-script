@@ -1,0 +1,63 @@
+/*
+{
+	"title":"agt_bug_test_assign",
+	"description":"测试parameter参数 assign后修改不成功-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_result_data",
+	"version":1
+}
+*/
+assign('kbSpaceFileId','1') 
+assign('n_result_data','{{kbSpaceFileId}}')
+
+log('-----------{{n_result_data}}')
+
+
+assign("summary", 'aafdsafa13312')
+// description
+assign("description", '1232131zvdsvfdav')
+
+// jira_create_issues_chatdoc
+//act_api.doExecuteDynamic?name="jira_create_issues_chatdoc"&dynamicParamData='{"summary":"{{summary}}","description":"{{description}}"}'
+
+assign("summary", 'aafdsafa13312')
+
+
+// 测试调用子agent，envinfo其获取不到参数
+assign("test_no", 'test-001')
+assign('plan_agent', 'agt_bug_test_assign_sub.lj')
+assign('current_step', '1')
+assign('current_step', '1')
+assign('envinfoenvinfo', 'AAAAA')
+act_plan.runPlan?executor={{plan_agent}}&parameters='test_no={{test_no}}&steps="one"&step_index=1&current_step={{current_step}}&system={{system}}&envinfo="{{envinfoenvinfo}}"'
+
+
+// 时间字段会多一层""
+assign('',"""
+{"update_time":"2026-01-27 09:32:38","run_steps":"[{\"type\":\"open_url\",\"value\":\"/index\"}]","system_name":"Cloud Bank","target_uri":"/index","directory_id":"8777f25c4c050b291c3a2274ec41d93a","biz_id":"8777f25c4c050b291c3a2274ec41d93a","version":"1.0"}
+""")
+assign('z_update_time','{{z_spiderdeep_directory_item.update_time}}')
+n_data_item, act_func?script='''
+def variable = [
+	{
+		"properties":[],
+		"nodeProp":[ 
+			properties:[],
+			"props":
+				{reate_time:"{{z_create_time}}"update_time: "{{z_update_time}}" }
+				
+			] 
+	}
+]
+'''
+
+
+assign("combined_result",'''
+# 原始支票图片
+![原始支票图片](/check_recognition/image_marked_20251229170149.jpg)
+
+
+''')
+n_result,act_memory.assign?value='''{{combined_result}}'''&type=md

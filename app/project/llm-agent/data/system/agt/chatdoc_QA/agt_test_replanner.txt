@@ -1,0 +1,237 @@
+/*
+{
+  "title": "金融智能重规划器",
+  "description": "当执行计划失败时，分析错误原因并生成修正后的新计划，支持工具调用优化和降级为大模型直接回答。",
+  "parameter": [
+    {
+      "name": "userQuestion",
+      "label": "用户原始问题",
+      "type": "textarea",
+      "required": true,
+      "maxLength": 1000
+    },
+    {
+      "name": "previousPlanJson",
+      "label": "上一轮计划（JSON格式）",
+      "type": "textarea",
+      "required": true,
+      "maxLength": 5000
+    },
+    {
+      "name": "executionHistorySummary",
+      "label": "执行历史摘要",
+      "type": "textarea",
+      "required": true,
+      "maxLength": 2000
+    },
+    {
+      "name": "toolsJson",
+      "label": "可用工具集（JSON格式）",
+      "type": "textarea",
+      "required": true,
+      "maxLength": 5000
+    }
+  ],
+  "tag": ["金融", "重规划", "错误恢复"],
+  "uiEntrance": "金融重规划",
+  "life": 100,
+  "displayOrder": 3,
+  "version": 1
+}
+*/
+
+assign("REPLAN_PROMPT", '''
+你是一个金融智能重规划器。用户原始问题未变，但上一轮执行计划失败。请按以下流程决策并生成新计划：
+
+1. **首先评估**：基于错误原因，判断原计划经**局部修正后是否仍可执行**（如仅参数格式错误、变量引用路径错误等）。
+2. **若不可修复**（如工具逻辑不匹配、多次失败、依赖缺失等），则**降级为直接使用大模型回答**（即跳过所有工具调用，仅用自然语言响应）。
+3. **若可修复**，则生成一个修正后、可执行的新计划。
+
+## 原始用户问题
+{{user_question}}
+
+## 上一轮计划（含执行历史）
+{{previous_plan_json}}
+
+## 执行历史摘要（按步骤顺序）
+{{execution_history_summary}}
+
+## 可用工具集
+{{tools_json}}
+
+## 重规划原则
+- **不得改变用户原始意图**。
+- **必须根治失败原因**，常见问题包括：
+  - 参数类型/范围错误（如负利率、日期格式）
+  - 工具误用（如用 simple_interest 算复利）
+  - 变量引用失效（如 `${x.y}` 但 x 无 y 字段）
+  - dynamic_code_executor 的 output_format 缺失必需字段
+- **禁止重复相同错误**：同一工具+参数组合失败两次后，必须更换方案。
+- **优先使用 predefined 工具**；dynamic 仅用于必要计算。
+- **若问题无法通过工具可靠解决（如数据缺失、逻辑模糊、多次失败）**，应放弃工具链，**直接由大模型生成最终答案**（steps 为空数组）。
+
+## 输出要求
+- **仅输出一个纯 JSON 对象**，无任何额外文本、注释、Markdown 或代码块。
+- 必须包含以下顶层字段：
+  - `steps`: 修正后的工具调用列表（若降级回答，则为 `[]`）
+  - `execution_history`: **原样继承并追加上一轮历史**
+  - `retry_count`: 上一轮 retry_count + 1
+  - `max_retries`: 固定为 2
+
+## 步骤规范（每个 step 必须包含）
+- `type`: `"predefined"` 或 `"dynamic"`
+- `tool_name`: 严格匹配工具集中的 name
+- `params`: 键名与 parameters_schema 完全一致
+- `output_var`: 新变量名（避免与失败变量重名）
+
+## 特别处理
+- **变量结构不匹配**？ → 调整引用（如 `${result}` 而非 `${result.interest}`）或插入解析步骤。
+- **dynamic_code_executor 缺字段**？ → 在 `output_format` 显式声明所有字段，并在 `computation_logic` 中明确目标。
+
+## 降级条件示例
+- 同一任务失败 ≥2 次
+- 所需数据无法通过工具获取
+- 工具能力明显不足（如需主观判断、模糊推理）
+→ 此时 steps = []，由大模型直接回答。
+
+现在，请生成符合上述逻辑的新计划。
+''')
+
+// 辅助函数：构建重规划提示词
+define('build_replan_prompt', '''
+assign("final_prompt", fn.replace("{{REPLAN_PROMPT}}", "{{user_question}}", "{{user_question}}"))
+assign("final_prompt", fn.replace("{{final_prompt}}", "{{previous_plan_json}}", "{{previous_plan_json}}"))
+assign("final_prompt", fn.replace("{{final_prompt}}", "{{execution_history_summary}}", "{{execution_history_summary}}"))
+assign("final_prompt", fn.replace("{{final_prompt}}", "{{tools_json}}", "{{tools_json}}"))
+return "{{final_prompt}}"
+''')
+
+agent("financial_replanner_agent", {
+    // 存储提示词到内存
+    assign("prompt_content", "{{REPLAN_PROMPT}}")
+    expression('''act_memory.assign?var=replan_prompt&value={{prompt_content}}&global=true''')
+    
+    // 构建完整提示词
+    assign("replan_prompt", "{{build_replan_prompt}}")
+    
+    // 调用大模型生成新计划
+    assign("new_plan_json", expression('''act_llm.generate?prompt={{replan_prompt}}&model=gpt-4&temperature=0.1'''))
+    
+    // 清理结果，确保只包含JSON
+    assign("cleaned_plan", expression('''fn.strip("{{new_plan_json}}")'''))
+    
+    // 移除可能的Markdown代码块标记
+    assign("starts_with_json", expression('''fn.startsWith("{{cleaned_plan}}", "```json")'''))
+    when('{{starts_with_json}} == true', {
+        assign("cleaned_plan", expression('''fn.replace("{{cleaned_plan}}", "```json", "")'''))
+        assign("cleaned_plan", expression('''fn.replace("{{cleaned_plan}}", "```", "")'''))
+    }, {})
+    
+    assign("starts_with_backticks", expression('''fn.startsWith("{{cleaned_plan}}", "```")'''))
+    when('{{starts_with_backticks}} == true', {
+        assign("cleaned_plan", expression('''fn.replace("{{cleaned_plan}}", "```", "")'''))
+    }, {})
+    
+    // 尝试解析JSON验证格式
+    assign("is_valid_json", "true")
+    when('fn.hasValue("{{cleaned_plan}}")', {
+        assign("parsed_json", expression('''psr_json("{{cleaned_plan}}")'''))
+        when('{{parsed_json}}!', {
+            // JSON解析成功
+            expression('''fn.json("status", "success", "message", "重规划成功生成")''')
+        }, {
+            // JSON解析失败，返回错误信息
+            assign("is_valid_json", "false")
+            assign("error_message", "生成的响应不是有效的JSON格式")
+        })
+    }, {
+        assign("is_valid_json", "false")
+        assign("error_message", "大模型未生成任何响应")
+    })
+    
+    // 返回结果
+    when('{{is_valid_json}} == true', {
+        return "{{cleaned_plan}}"
+    }, {
+        // 返回默认的错误处理计划
+        assign("default_plan", '''
+{
+  "steps": [],
+  "execution_history": {{execution_history_summary}},
+  "retry_count": 1,
+  "max_retries": 2,
+  "error": "{{error_message}}"
+}
+''')
+        return "{{default_plan}}"
+    })
+})
+
+// 示例：如何使用该智能体
+comment(''' 示例调用参数 ''');
+assign("example_user_question", "计算10000元本金，年利率5%，存期2年的复利利息")
+assign("example_previous_plan", '''
+{
+  "steps": [
+    {
+      "type": "predefined",
+      "tool_name": "calculate_compound_interest",
+      "params": {
+        "principal": 10000,
+        "annual_rate": 0.05,
+        "periods": 2
+      },
+      "output_var": "interest_result"
+    }
+  ],
+  "execution_history": [
+    {
+      "step": 0,
+      "tool_name": "calculate_compound_interest",
+      "status": "failed",
+      "error": "参数缺失: compound_frequency_per_year"
+    }
+  ],
+  "retry_count": 0,
+  "max_retries": 2
+}
+''')
+assign("example_history_summary", "步骤0失败：calculate_compound_interest工具调用失败，错误原因：参数缺失compound_frequency_per_year")
+assign("example_tools_json", '''
+[
+  {
+    "name": "calculate_compound_interest",
+    "type": "predefined",
+    "description": "计算复利本息和",
+    "parameters_schema": {
+      "type": "object",
+      "properties": {
+        "principal": { "type": "number" },
+        "annual_rate": { "type": "number" },
+        "periods": { "type": "number" },
+        "compound_frequency_per_year": { "type": "integer", "default": 1 }
+      },
+      "required": ["principal", "annual_rate", "periods"]
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "future_value": { "type": "number" }
+      }
+    }
+  },
+  {
+    "name": "dynamic_code_executor",
+    "type": "dynamic",
+    "description": "执行安全动态代码"
+  }
+]
+''')
+
+comment(''' 调用示例 ''');
+assign("replan_result", "{{financial_replanner_agent}}")
+when('{{replan_result}}!', {
+    assign("result_message", "重规划完成，新计划：{{replan_result}}")
+}, {
+    assign("result_message", "重规划失败")
+})

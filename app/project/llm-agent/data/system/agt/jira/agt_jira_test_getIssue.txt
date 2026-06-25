@@ -1,0 +1,18 @@
+/*
+ {
+	 "title": "自动化测试-jira获取issue并存入testcase_db",
+	 "description": "获取single issue，issue key",
+	 "parameter": "issueKey=待获取ISSUE的key",
+	 "llmType": "",
+	 "resultPlan": "n_jira_get_issue",
+	 "life": "100"
+ }
+*/
+
+// jira rest
+n_rest_api, act_func?name='jiraRestapi.addBatch({{json}})'
+// 获取getIssues data
+n_jira_get_issue, act_func?name='Jira.getIssueByKey('{{issueKey}}')'
+
+// 调用import data function to db
+ n_jira_save, act_kb.defineAndImportData?tableName='kb_testcase'&data={{n_jira_get_issue}}

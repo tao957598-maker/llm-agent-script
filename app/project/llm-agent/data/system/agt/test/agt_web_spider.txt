@@ -1,0 +1,128 @@
+/*
+{
+	"title": "Web Spider",
+	"description": "Web Spider",
+	"parameter": [
+	 	{
+	 		"name":"system_name",
+			"required":true,
+	 		"label":"System"
+	 	},
+	 	{
+	 		"name":"url",
+	 		"label":"Base URL",
+			"required":true,
+	 	},
+		{
+			"name":"current_uri",
+			"label":"Current uri"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		},
+		{
+			"name":"continue",
+			"label":"Continue Execution",
+			"args":[
+				{
+					"label":"First Execution",
+					"value":"first"
+				},
+				{
+					"label":"Continue Execution",
+					"value":"continue"
+				}
+			],
+			"type":"select"
+		},
+		{
+			"name":"explore_mode",
+			"label":"Execution Mode",
+			"args":[
+				{
+					"label":"File Download Mode",
+					"value":"FileDownExplorationMode"
+				},
+				{
+					"label":"Element Step Exploration Mode",
+					"value":"stepExplorationMode"
+				},
+				{
+					"label":"URL Exploration Mode",
+					"value":"urlExplorationMode"
+				},
+			],
+			"required":true,
+			"type":"select"
+		},
+		{
+	 		"name":"spider_deep_num",
+	 		"label":"Maximum Spider Deep",
+			"required":true,
+	 	},
+		{
+			"name":"custom_param",
+			"label":"LLM Additional Parameters (e.g. account, password)"
+		},
+		{
+			"name":"cookie",
+			"label":"cookie"
+		},
+  ],
+  "life":1000,
+	"version": "1",
+	"tag":"Testing Model",
+    "displayOrder":1
+}
+*/
+
+// current_uri
+when('!fn.hasValue(current_uri)', {
+  assign("current_uri", "")
+})
+// cookie
+when('!fn.hasValue(cookie)', {
+  assign("cookie", "")
+})
+// version
+when('!fn.hasValue(version)', {
+  assign("version", "1.0")
+})
+// is continue?
+when('!fn.hasValue(continue)', {
+  assign("continue", "first")
+})
+
+// is continue?
+when('continue == "first"', {
+  // first time
+	n_first_result,agt_loop_steps?system_name="{{system_name}}"&url="{{url}}"&current_uri={{current_uri}}&cookie={{cookie}}&version={{version}}&custom_param={{custom_param}}&explore_mode={{explore_mode}}&spider_deep_num={{spider_deep_num}}&time="first"
+	// check first end_status
+	n_end_status, act_func?script="""
+		if (n_first_result != 'true') {
+			return 'end'
+		}
+	"""
+	when('n_end_status == "end"', {
+		// end
+		act_flow.go?plan=end
+	})
+})
+
+// 1000 loop
+foreach('n_l_data', '[1..1000]', {
+	n_loop_result,agt_loop_steps?system_name="{{system_name}}"&url="{{url}}"&current_uri={{current_uri}}&cookie={{cookie}}&version={{version}}&custom_param={{custom_param}}&explore_mode={{explore_mode}}&spider_deep_num={{spider_deep_num}}&time="loop"
+
+	// n_end_status
+	n_end_status, act_func?script="""
+		if (n_loop_result != 'true') {
+			return 'end'
+		}
+	"""
+	when('n_end_status == "end"', {
+		// end
+		act_flow.go?plan=end
+	})
+})

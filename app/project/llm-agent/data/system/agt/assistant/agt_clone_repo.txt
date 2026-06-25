@@ -1,0 +1,119 @@
+/*{
+  "title": "克隆或更新Git仓库",
+  "description": "克隆或更新 Git 仓库，优先使用已有项目，必要时进行克隆或 git pull",
+  "parameter": [
+    {
+      "name": "project_name",
+      "label": "项目名称",
+      "required": true
+    },
+    {
+      "name": "os",
+      "label": "操作系统",
+      "required": true
+    },
+    {
+      "name": "git_repo_url",
+      "label": "Git仓库地址",
+      "required": true
+    },
+    {
+      "name": "branch_name",
+      "label": "分支名称",
+      "required": true
+    },
+    {
+      "name": "server_id",
+      "label": "服务器ID"
+    }
+  ],
+  "resultPlan": "n_clone_repo_plan_result",
+  "discoverable": false,
+  "life": "100"
+}*/
+
+assign('n_log', '')
+assign('n_repo_path', '')
+
+// 参数校验：git_repo_url 和 branch_name 必须有值
+when('!fn.hasValue(git_repo_url) || !fn.hasValue(branch_name)', {
+  assign('n_log', '{{n_log}}\n❌ Git 仓库地址或分支名称为空，无法执行克隆\n  git_repo_url: {{git_repo_url}}\n  branch_name: {{branch_name}}')
+  assign("n_clone_repo_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"true"}')
+  act_flow.go?plan=break
+})
+
+// 检查 /tmp/git-repository-clone 下是否有同名项目（优先使用）
+when('os == "windows"', {
+  assign('n_tmp_check_cmd', 'if exist "C:\\temp\\git-repository-clone\\{{project_name}}" (echo EXISTS) else (echo NOT_EXISTS)')
+  assign('n_tmp_project_root', 'C:\\temp\\git-repository-clone\\{{project_name}}')
+}, {
+  assign('n_tmp_check_cmd', 'if [ -d "/tmp/git-repository-clone/{{project_name}}" ]; then echo EXISTS; else echo NOT_EXISTS; fi')
+  assign('n_tmp_project_root', '/tmp/git-repository-clone/{{project_name}}')
+})
+n_tmp_check, agt_cmd_executor.assistant?cmd={{n_tmp_check_cmd}}&cmd_executor_name="检查工作缓存目录"&server_id={{server_id}}
+
+assign('n_tmp_exists', '{{n_tmp_check == "EXISTS"}}')
+
+
+// 优先使用 /tmp 下的项目
+when('fn.bool(n_tmp_exists)', {
+  assign('n_repo_path', '{{n_tmp_project_root}}')
+  assign('n_log', '{{n_log}}\n📥 检测到 /tmp 下已有项目: {{n_repo_path}}')
+})
+
+// 如果任何项目路径存在，尝试 git pull
+when('fn.hasValue(n_repo_path)', {
+  assign('n_log', '{{n_log}}\n📥 尝试 git pull 更新')
+  assign('n_git_pull_cmd', 'cd "{{n_repo_path}}" && git fetch origin && git checkout {{branch_name}} && git pull')
+  n_git_result, agt_cmd_executor.assistant?cmd={{n_git_pull_cmd}}&cmd_executor_name="Git更新代码"&server_id={{server_id}}
+  log("--------------n_git_result:{{n_git_result}}")
+  assign('n_git_pull_output', '{{n_git_result}}')
+  n_git_ok, act_func?script='''
+    def output = n_git_pull_output ?: ""
+    def success = output.contains("Updating") || output.contains("Already up to date") || output.contains("Fast-forward") || output.contains("branch is up to date") || output.contains("Switched to a new branch") || output.contains("Switched to branch")
+    fn.put("n_git_output", output)
+    return success
+  '''
+  when('fn.bool(n_git_ok)', {
+    assign('n_log', '{{n_log}}\n✓ 代码更新成功')
+    assign("n_clone_repo_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_repo_path}}","is_plan_break":"false"}')
+  }, {
+    assign('n_log', '{{n_log}}\n⚠️ Git更新失败，将尝试继续使用现有目录')
+    assign("n_clone_repo_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_repo_path}}","is_plan_break":"false"}')
+  })
+}, {
+  // 没有找到任何项目，需要 clone
+  assign('n_log', '{{n_log}}\n📥 未找到本地项目，准备克隆仓库')
+  when('os == "windows"', {
+    assign('n_clone_base', 'C:\\temp\\git-repository-clone')
+    assign('n_repo_path', '{{n_clone_base}}\\{{project_name}}')
+  }, {
+    assign('n_clone_base', '/tmp/git-repository-clone')
+    assign('n_repo_path', '{{n_clone_base}}/{{project_name}}')
+  })
+
+  n_mkdir_result, agt_cmd_executor.assistant?cmd='mkdir -p "{{n_clone_base}}"'&cmd_executor_name="创建基础目录"&server_id={{server_id}}
+  assign('n_is_https_url', '{{fn.startsWith(git_repo_url, "https://")}}')
+  assign('n_effective_git_url', "{{fn.gitHttpsToSsh(git_repo_url)}}")
+  when('fn.bool(n_is_https_url)', {
+    assign('n_clone_cmd', 'GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no" git clone -b {{branch_name}} "{{n_effective_git_url}}" "{{n_repo_path}}"')
+    assign('n_log', '{{n_log}}\n(已转换为SSH: {{n_effective_git_url}})')
+  }, {
+    assign('n_clone_cmd', 'GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no" git clone -b {{branch_name}} "{{git_repo_url}}" "{{n_repo_path}}"')
+  })
+  n_clone_result, agt_cmd_executor.assistant?cmd="{{n_clone_cmd}}"&cmd_executor_name="克隆Git仓库"&server_id={{server_id}}
+
+  assign('n_clone_output', '{{n_clone_result}}')
+  n_clone_ok, act_func?script='''
+    def output = n_clone_output ?: ""
+    return output.contains("Cloning into") || output.contains("warning: You appear to have cloned an empty repository")
+  '''
+  when('fn.bool(n_clone_ok)', {
+    assign('n_log', '{{n_log}}\n✓ 仓库克隆成功')
+    assign("n_clone_repo_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_repo_path}}","is_plan_break":"false"}')
+  }, {
+    assign('n_log', '{{n_log}}\n❌ 仓库克隆失败\n\n命令: {{n_clone_cmd}}\n\n输出: {{n_clone_result}}')
+    assign("n_clone_repo_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"true"}')
+    act_flow.go?plan=end 
+  })
+})

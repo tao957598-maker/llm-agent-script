@@ -1,0 +1,39 @@
+/*
+{
+	"title":"Parameter Generation",
+	"description":"Extract target table names or file paths from user input",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"客户问题\",\"type\":\"textarea\"}",
+	"life":10000,
+	"version":1
+}
+*/
+// 调用大模型抽取结构化信息
+n_input_info,tpl_json_list
+
+// 问答参数生成
+assign("generated_data", "{{n_input_info}}")
+
+// 提取表名或文件路径信息
+define("tpl_json_list", '''
+你是一个信息提取器。请从以下用户问句中提取关键信息，并输出标准JSON格式，不要添加解释：
+
+- 其中 method 来自用户输入的生成方式，如提到“Python方式生成”则是 "Python"，否则默认为 "llm"
+
+输出结构如下：
+1. 若是表相关的句子（如“生成XXX表的测试数据”），输出：
+{
+  "type": "table",
+  "kb_name": "xxx",
+  "method": "llm 或 Python（若语句中提到用 Python 方式）"
+}
+
+2. 若是文件路径相关句子（如“在/XXX/YYY.txt生成测试数据”或“在知识库XXX中提取YYY”），输出：
+{
+  "type": "file",
+  "kb_name": "XXX",  // 表示路径或知识库名
+  "file_name": "YYY",    // 文件名不含后缀
+  "method": "llm 或 Python"
+}
+
+用户问句：{{userInput}}
+''')

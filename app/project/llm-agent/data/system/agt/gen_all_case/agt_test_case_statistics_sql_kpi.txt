@@ -1,0 +1,253 @@
+/*
+{
+	"title":"业务需求覆盖率统计",
+	"description":"统计业务需求覆盖率：(已覆盖的独立业务需求数 / 总业务需求数) * 100%",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"version":1
+}
+*/
+assign('documentId', '{{kbSpaceFileId}}')
+// 1. 根据documentId过滤数据，统计该文档的总test case数量、正反案例数量及正反比例
+n_sql_kpi_data, act_kb.selectBy?sql='''
+SELECT
+    design_element,
+    sub_id,
+    COUNT(*) AS total_cases,
+    SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) AS positive_cases,
+    SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) AS negative_cases,
+    ROUND(SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS positive_ratio,
+    ROUND(SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS negative_ratio
+FROM kb_gen_test_case
+WHERE document_id = '{{documentId}}' and version = "{{version}}"
+GROUP BY sub_id,design_element
+'''
+// kpi_dc
+assign('kpi_dc', '''{
+  "10": {
+    "sub_id": 10,
+    "name": "Navigation Flow",
+    "positive_ratio": 50,
+    "negative_ratio": 50,
+    "proportion": "1:1"
+  },
+  "11": {
+    "sub_id": 11,
+    "name": "Interactive Function",
+    "positive_ratio": 33,
+    "negative_ratio": 67,
+    "proportion": "1:2"
+  },
+  "12": {
+    "sub_id": 12,
+    "name": "State Transition",
+    "positive_ratio": 33,
+    "negative_ratio": 67,
+    "proportion": "1:2"
+  },
+  "13": {
+    "sub_id": 13,
+    "name": "Static Content",
+    "positive_ratio": 33,
+    "negative_ratio": 67,
+    "proportion": "1:2"
+  },
+  "14": {
+    "sub_id": 14,
+    "name": "Dynamic Content",
+    "positive_ratio": 33,
+    "negative_ratio": 67,
+    "proportion": "1:2"
+  },
+  "15": {
+    "sub_id": 15,
+    "name": "Localization & Internationalization",
+    "positive_ratio": 25,
+    "negative_ratio": 75,
+    "proportion": "1:3"
+  },
+  "16": {
+    "sub_id": 16,
+    "name": "Device Rendering",
+    "positive_ratio": 25,
+    "negative_ratio": 75,
+    "proportion": "1:3"
+  },
+  "17": {
+    "sub_id": 17,
+    "name": "Visual Consistency",
+    "positive_ratio": 50,
+    "negative_ratio": 50,
+    "proportion": "1:1"
+  },
+  "18": {
+    "sub_id": 18,
+    "name": "Responsive Layout",
+    "positive_ratio": 50,
+    "negative_ratio": 50,
+    "proportion": "1:1"
+  },
+  "20": {
+    "sub_id": 20,
+    "name": "Field Input Control",
+    "positive_ratio": 17,
+    "negative_ratio": 83,
+    "proportion": "1:5"
+  },
+  "21": {
+    "sub_id": 21,
+    "name": "Field Output Display",
+    "positive_ratio": 25,
+    "negative_ratio": 75,
+    "proportion": "1:3"
+  },
+  "22": {
+    "sub_id": 22,
+    "name": "Data",
+    "positive_ratio": 25,
+    "negative_ratio": 75,
+    "proportion": "1:3"
+  },
+  "30": {
+    "sub_id": 30,
+    "name": "Login Process",
+    "positive_ratio": 33,
+    "negative_ratio": 67,
+    "proportion": "1:2"
+  },
+  "31": {
+    "sub_id": 31,
+    "name": "Feature Entry Process",
+    "positive_ratio": 33,
+    "negative_ratio": 67,
+    "proportion": "1:2"
+  },
+  "32": {
+    "sub_id": 32,
+    "name": "Normal Business Process",
+    "positive_ratio": 25,
+    "negative_ratio": 75,
+    "proportion": "1:3"
+  },
+  "33": {
+    "sub_id": 33,
+    "name": "Exception Business Process",
+    "positive_ratio": 25,
+    "negative_ratio": 75,
+    "proportion": "1:3"
+  },
+  "34": {
+    "sub_id": 34,
+    "name": "Post-Business Query Result Process",
+    "positive_ratio": 33,
+    "negative_ratio": 67,
+    "proportion": "1:2"
+  },
+  "40": {
+    "sub_id": 40,
+    "name": "Positive/Negative Logic",
+    "positive_ratio": 25,
+    "negative_ratio": 75,
+    "proportion": "1:3"
+  },
+  "42": {
+    "sub_id": 42,
+    "name": "Logic-Triggered System Messages",
+    "positive_ratio": 33,
+    "negative_ratio": 67,
+    "proportion": "1:2"
+  },
+  "43": {
+    "sub_id": 43,
+    "name": "Logic Trigger Conditions",
+    "positive_ratio": 33,
+    "negative_ratio": 67,
+    "proportion": "1:2"
+  },
+  "44": {
+    "sub_id": 44,
+    "name": "Conditional Logic Combinations",
+    "positive_ratio": 33,
+    "negative_ratio": 67,
+    "proportion": "1:2"
+  }
+}''')
+
+// n_md_table
+n_md_table, act_func?script='''
+def md = new StringBuilder()
+// 添加表头
+md.append("| design_element | sub_name | total_cases | positive_cases | negative_cases | status | proportion |\\n")
+md.append("|--|--|--|--|--|--|--|\\n")
+// 添加数据行
+n_sql_kpi_data.each { row ->
+    def sub = kpi_dc[row.sub_id]
+    if(sub) {
+        sub_name = sub.name
+        positive_ratio = sub.positive_ratio
+        row_positive_ratio = row.positive_ratio
+        status = Math.abs(positive_ratio - row_positive_ratio) <= 5
+        status_value = status ? "True" : '<span style="color:red">False</span>'
+
+        md.append("| " + row.design_element + " | " + sub_name + " | " + row.total_cases + " | " + row.positive_cases + " | " + row.negative_cases +" | " + status_value + " | " + sub.proportion + " |\\n")
+    }
+}
+return md.toString()
+'''
+
+
+// 定义agent运行结果
+assign("result", """
+# Comparative analysis of statistical data and standards
+{{n_md_table}}
+""")
+
+
+define('tpl_coverage_report', '''
+# 统计数据
+```
+
+```
+
+# 要求
+把统计数据中不符合标准的数据标红,规则为:根据sub_id,positive_ratio和negative_ratio 与标准相差5%以上的False,符合为True
+
+返回json 数据: ```json
+{sub_id:"True or False",..}
+```
+以下是标准:
+
+sub_id	positive_ratio	negative_ratio	正反比例
+10	50	50	1:1
+11	33	67	1:2
+12	33	67	1:2
+13	33	67	1:2
+14	33	67	1:2
+15	25	75	1:3
+16	25	75	1:3
+17	50	50	1:1
+18	50	50	1:1
+20	17	83	1:5
+21	25	75	1:3
+22	25	75	1:3
+30	33	67	1:2
+31	33	67	1:2
+32	25	75	1:3
+33	25	75	1:3
+34	33	67	1:2
+40	25	75	1:3
+41	25	75	1:3
+42	33	67	1:2
+43	33	67	1:2
+44	33	67	1:2
+ ''')

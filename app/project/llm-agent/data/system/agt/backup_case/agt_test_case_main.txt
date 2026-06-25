@@ -1,0 +1,108 @@
+/*
+{
+	"title":"Gen testcase by KB",
+	"description":"Read requirement document to generate test cases",
+	"parameter": [
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"llmType":"alias.highquality",
+	"resultPlan":"status,result_test_cases",
+	"life":10000,
+	"version":1
+}
+*/
+//# Agent status
+assign("status", 'Agent is running')
+// Document ID
+assign("documentId", '{{kbSpaceFileId}}')
+
+n_design_flattened_data, act_kb.selectBy?sql='SELECT * FROM kb_gen_test_module_design WHERE documentId ="{{documentId}}" and version ="{{version}}"'
+
+
+
+// 用例生成：async=false 顺序执行，避免异步句柄未就绪导致 data 为空或遗漏；若运行时已保证子 agent 可完整 await，可改为 async=true 提速
+assign('async_test_case_list', '[]')
+foreach('n_test_design','n_design_flattened_data', {
+    assign('test_design', '{{n_test_design.item}}')
+    n_gen_case,agt_test_doc_gen_case?input_data='{{test_design}}'&documentId='{{documentId}}'&async=false
+    act_func?script="async_test_case_list.add(n_gen_case)"
+})
+// 与「设计异步」两段解包一致：async 句柄可能尚未带 .value，或结果直接在句柄上，需兼容否则 test_case_list 为空导致整表无数据
+assign('test_case_list', '[]')
+foreach('n_test_case', 'async_test_case_list', {
+    assign('test_case', '{{n_test_case.item}}')
+    act_func?script='''
+        def h = test_case
+        if (h == null) return
+        def v = null
+        try {
+            if (h instanceof Map) {
+                v = h.get("value")
+                if (v == null) v = h
+            } else {
+                v = h
+            }
+        } catch (Exception ignore) {
+            v = h
+        }
+        if (v != null) test_case_list.add(v)
+    '''
+})
+
+act_kb.selectBy?sql='delete from kb_gen_test_case where version = "{{version}}" and document_id in ("{{documentId}}","{{kbSpaceFileId}}")'
+on_failure({
+	// Force to success status
+	act_flow.success
+})
+// 汇总全部设计行对应的用例后一次性入库，避免多次 defineAndImportData 只保留最后一批
+assign('result_list_test_cases', '[]')
+
+foreach('n_test_case', 'test_case_list', {
+        assign('test_case_map', '{{n_test_case.item}}')
+        foreach('n_test_case_map','test_case_map.data',{
+            assign('test_case', '{{n_test_case_map.item}}')
+            // 直接构造 Map，避免字符串 JSON 因引号未转义导致 String/Map 混入
+            act_func?script='''
+                def row = [
+                    title: test_case.title,
+                    application: test_case.application,
+                    steps: test_case.steps,
+                    test_no: test_case.test_no,
+                    expected_result: test_case.expected_result,
+                    source_value: test_case.source_value,
+                    test_type: test_case.test_type,
+
+                    sub_category: test_case_map.sub_category,
+                    sub_id: test_case_map.sub_id,
+                    design_element: test_case_map.design_element,
+                    test_content: test_case_map.test_content,
+                    platform: test_case_map.platform,
+                    main_module_name: test_case_map.main_module_name,
+                    main_module_source: test_case_map.main_module_source,
+                    submodule_name: test_case_map.submodule_name,
+                    submodule_description: test_case_map.submodule_description,
+                    submodule_source: test_case_map.submodule_source,
+                    document_id: fn.optional(kbSpaceFileId, ''),
+                    version: version
+                ]
+                result_list_test_cases.add(row)
+            '''
+        })
+    })
+
+act_kb.defineAndImportData?tableName='kb_gen_test_case'&data='{{result_list_test_cases}}'
+
+assign('result_test_cases', '{{result_list_test_cases}}')
+
+ 
+//# kb_gen_test_case
+assign('kb_gen_test_case', 'Download <a href="/knowledge-base/retrieval?title=knowledgeBaseList/knowledgeRetrieval/kb_gen_test_case&tableName=kb_gen_test_case&schema=llm_agent" target="_blank">kb_gen_test_case</a>')

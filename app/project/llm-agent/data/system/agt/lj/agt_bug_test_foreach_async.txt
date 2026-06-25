@@ -1,0 +1,72 @@
+/*
+{
+	"title":"agt_bug_test_foreach_async",
+	"description":"测试foreach异步阻塞-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"answer_summary_list",
+	"version":1
+}
+*/ 
+
+assign("kbSpaceFileId", '261611868362915840') 
+
+// 设置问题集合
+assign("kb_list_data", '[]') 
+append("kb_list_data", "期货分类评价中的扣分指标和评价方法具体包括哪些内容？")
+
+// 异步查询
+foreach('n_question', 'kb_list_data', {
+  // 获取当前用户输入
+  assign('question', '{{n_question.item}}')
+
+  // 专家知识库查询
+  n_expert_query_answer, agt_test_query_expert_0.chatdoc_QA?userInput={{question}}&async=true
+  // act_func?script="async_list.add(n_expert_query_answer)"
+  append("async_list", "{{n_expert_query_answer}}")
+  
+  when('fn.hasValue(kbSpaceFileId)',{
+    // 向量查询
+    n_vector_query_answer, agt_test_query_vector_1.chatdoc_QA?userInput={{question}}&folderIds={{kbSpaceId!}}&knowledgeIds={{kbSpaceFileId}}&async=true
+    // act_func?script="async_list.add(n_vector_query_answer)"
+    append("async_list", "{{n_vector_query_answer}}")
+
+    // 文档查询
+    n_document_query_answer,agt_test_query_document_2.chatdoc_QA?userInput={{question}}&kbSpaceFileId={{kbSpaceFileId}}&async=true
+    // act_func?script="async_list.add(n_document_query_answer)"
+    append("async_list", "{{n_document_query_answer}}")
+
+  })
+})
+
+// 定义一个空 list
+assign('answer_summary_list', '[]')
+
+// 对查询结果进行循环处理并分类
+foreach('n_item', 'async_list', {
+  // 获取当前循环项的数据
+  assign('async_summary', '{{n_item.item}}')
+  // 当前异步结果
+  assign('answer_summary', '{{async_summary.value}}')
+  
+  // 临时答案 
+  n_tmp_answer,act_func?script='''
+     def newList = []
+     newList.addAll(answer_summary)
+     answer_summary_list.addAll(answer_summary)
+     return newList
+   '''
+
+  // 临时答案
+  // assign('tmp_answer', '{{answer_summary_list}}')
+  //append("answer_summary_list", "{{n_tmp_answer}}")
+
+  // // 判断是否结束查询
+  // when('seek_mode=="快速模式" && answer_summary_list?size>0',{
+  //   // 快速模式
+  //   act_flow.go?plan=break
+  // })
+
+})
+log("answer_summary_list====={{answer_summary_list}}")

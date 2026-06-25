@@ -1,0 +1,174 @@
+/*
+{
+	"title":"Gen testcase by KB",
+	"description":"Read requirement document to generate test cases",
+	"parameter": [
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"llmType":"alias.highquality",
+	"resultPlan":"status,result_test_cases",
+	"life":10000,
+	"version":1
+}
+*/
+//# Agent status
+assign("status", 'Agent is running')
+// Document ID
+assign("documentId", '{{kbSpaceFileId}}')
+
+n_design_flattened_data, act_kb.selectBy?sql='SELECT * FROM kb_gen_test_module_design WHERE documentId ="{{documentId}}" and version ="{{version}}"'
+
+// 按 submodule_name 分批：同批多条 design 汇总后再治理导入
+n_design_batches,act_func?script='''
+    def d = fn.get('n_design_flattened_data')
+    if (d == null || !(d instanceof List)) d = []
+    def byKey = new LinkedHashMap()
+    d.each { row ->
+        if (!(row instanceof Map)) return
+        def name = (row.get("submodule_name") ?: "").toString().trim()
+        if (!byKey.containsKey(name)) byKey[name] = []
+        byKey[name].add(row)
+    }
+    def batches = []
+    byKey.each { k, v -> batches.add(v) }
+    return batches
+'''
+assign('design_batches', '{{n_design_batches}}')
+
+act_kb.selectBy?sql='delete from kb_gen_test_case where version = "{{version}}" and document_id in ("{{documentId}}","{{kbSpaceFileId}}")'
+on_failure({
+	// Force to success status
+	act_flow.success
+})
+assign('flush_data', '[]')
+assign('seen_biz_global', '[]')
+assign('seen_no_global', '{}')
+assign('serial_counter', '{{fn.raw(0)}}')
+
+foreach('n_batch', 'design_batches', {
+    assign('batch_designs', '{{n_batch.item}}')
+    act_func?script='fn.put("batch_case_rows", [])'
+    foreach('n_test_design', 'batch_designs', {
+        assign('test_design', '{{n_test_design.item}}')
+        assign('design_case_rows', '[]')
+        n_gen_case,agt_test_doc_gen_case?input_data='{{test_design}}'&documentId='{{documentId}}'&async=false
+        assign('test_case_raw', '{{n_gen_case}}')
+        assign('test_case_map', '{}')
+        act_func?script='''
+            def h = test_case_raw
+            if (h == null) { fn.put("test_case_map", [:]); return }
+            def v = null
+            try {
+                if (h instanceof Map) {
+                    v = h.get("value")
+                    if (v == null) v = h
+                } else {
+                    v = h
+                }
+            } catch (Exception ignore) {
+                v = h
+            }
+            if (v == null || !(v instanceof Map)) v = [:]
+            fn.put("test_case_map", v)
+        '''
+        foreach('n_test_case_map','test_case_map.data',{
+            assign('test_case', '{{n_test_case_map.item}}')
+            act_func?script='''
+                def row = [
+                    title: test_case.title,
+                    application: test_case.application,
+                    steps: test_case.steps,
+                    test_no: test_case.test_no,
+                    expected_result: test_case.expected_result,
+                    source_value: test_case.source_value,
+                    test_type: test_case.test_type,
+
+                    sub_category: test_case_map.sub_category,
+                    sub_id: test_case_map.sub_id,
+                    design_element: test_case_map.design_element,
+                    test_content: test_case_map.test_content,
+                    platform: test_case_map.platform,
+                    main_module_name: test_case_map.main_module_name,
+                    main_module_source: test_case_map.main_module_source,
+                    submodule_name: test_case_map.submodule_name,
+                    submodule_description: test_case_map.submodule_description,
+                    submodule_source: test_case_map.submodule_source,
+                    document_id: fn.optional(kbSpaceFileId, ''),
+                    version: version
+                ]
+                design_case_rows.add(row)
+            '''
+        })
+        act_func?script='''
+            def acc = fn.get('batch_case_rows')
+            if (acc == null || !(acc instanceof List)) acc = []
+            def add = fn.get('design_case_rows')
+            if (add instanceof List) add.each { acc.add(it) }
+            fn.put('batch_case_rows', acc)
+        '''
+    })
+    act_func?script='''
+        def arr = fn.get('batch_case_rows')
+        if (arr == null || !(arr instanceof List)) { fn.put("flush_data", []); return }
+        def norm = { v -> (v == null ? "" : v.toString()).trim().replaceAll(/\\s+/, " ") }
+        def containsAny = { txt, kws ->
+            def s = (txt == null ? "" : txt.toString().toLowerCase())
+            kws.any { k -> s.contains(k) }
+        }
+        def forbidden = [
+            "unregistered","not registered","feature not registered","no permission","without permission",
+            "access blocked","navigation denied","button disabled","未注册","無權限","无权限"
+        ]
+        def seenBiz = (seen_biz_global instanceof List) ? new LinkedHashSet(seen_biz_global) : new LinkedHashSet()
+        def seenNo = (seen_no_global instanceof Map) ? new LinkedHashMap(seen_no_global) : new LinkedHashMap()
+        int serial = 0
+        try { serial = Integer.parseInt((serial_counter == null ? "0" : serial_counter.toString())) } catch (Throwable ignore) { serial = 0 }
+        def out = []
+        arr.each { row ->
+            if (!(row instanceof Map)) return
+            def text = [row.title, row.steps, row.expected_result].collect { norm(it) }.join(" ").toLowerCase()
+            if (containsAny(text, forbidden)) return
+            def bizKey = [norm(row.submodule_name), norm(row.sub_id), norm(row.title), norm(row.steps), norm(row.expected_result), norm(row.version), norm(row.document_id)].join("||").toLowerCase()
+            if (!bizKey || seenBiz.contains(bizKey)) return
+            seenBiz.add(bizKey)
+            def no = norm(row.test_no)
+            if (!no) {
+                serial = serial + 1
+                no = "TC-" + serial
+            }
+            if (!seenNo.containsKey(no)) {
+                seenNo.put(no, 1)
+                row.test_no = no
+            } else {
+                def n = (seenNo.get(no) ?: 1) + 1
+                seenNo.put(no, n)
+                row.test_no = no + "-D" + n
+            }
+            out.add(row)
+        }
+        fn.put("flush_data", out)
+        fn.put("seen_biz_global", new ArrayList(seenBiz))
+        fn.put("seen_no_global", seenNo)
+        fn.put("serial_counter", serial)
+    '''
+    when('fn.hasValue(flush_data)', {
+        act_kb.defineAndImportData?tableName='kb_gen_test_case'&data='{{flush_data}}'
+    }, {
+        act_flow.success
+    })
+})
+
+assign('result_test_cases', 'stream_import_done')
+
+ 
+//# kb_gen_test_case
+assign('kb_gen_test_case', 'Download <a href="/knowledge-base/retrieval?title=knowledgeBaseList/knowledgeRetrieval/kb_gen_test_case&tableName=kb_gen_test_case&schema=llm_agent" target="_blank">kb_gen_test_case</a>')

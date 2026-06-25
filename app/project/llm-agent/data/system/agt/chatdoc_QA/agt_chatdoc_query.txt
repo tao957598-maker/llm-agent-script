@@ -1,0 +1,124 @@
+/*
+{
+	"title":"Answer user question",
+	"description":"Answer user question",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceId",
+			"label":"目录ID（支持多个）",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"type":"knowledge_space"
+		}
+	],
+	"tag":"chatdoc_QA",
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"finally_answer",
+	"life":100,
+	"version":1
+}
+*/
+// 定义异步结果收集器
+assign('async_list', '[]')
+
+// 初始化问题与答案集合
+assign("answer_list", '[]')
+assign("kb_list_data", '[]')
+append("kb_list_data", "{{userInput}}")
+
+//查询
+foreach('n_question', 'kb_list_data', {
+  // 获取当前用户输入
+  assign('question', '{{n_question.item}}')
+
+  //## 专家知识库查询
+  n_expert_query_answer, agt_test_query_expert_0?userInput={{question}}
+  append('answer_list', '{{n_expert_query_answer}}')
+  
+  when('fn.hasValue(kbSpaceFileId)',{
+    //## 向量查询
+    n_vector_query_answer, agt_test_query_vector_1?userInput={{question}}&folderIds={{kbSpaceId!}}&knowledgeIds={{kbSpaceFileId}}
+    append('answer_list', '{{n_vector_query_answer}}')
+
+    //## 文档查询
+    n_document_query_answer,agt_test_query_document_2?userInput={{question}}&kbSpaceFileId={{kbSpaceFileId}}
+    append('answer_list', '{{n_document_query_answer}}')
+
+  })
+})
+
+// 查询最终结果
+assign('n_answers', '{{answer_list}}')
+
+//Extract answers from information blocks
+n_finally_result,tpl_extract_answer_v1,psr_all
+
+// Finally answer for query demo
+assign('finally_answer', '{{n_finally_result}}')
+
+
+// Extract answers from information blocks
+define('tpl_extract_answer_v1', '''
+- Role: 信息提炼与合规文本处理专家
+- Background: 用户会提供一个问题，以及一个包含答案的集合，用户需要仅基于用户提供的集合内容，从中提炼出与问题相关的答案，不可引入任何外部知识，不可推理，不可补充常识。
+- Profile: 你是一位专注于文本信息提炼的专家，具备强大的内容识别、去重能力，熟悉法律规范类文本的严谨性要求，能够严格依照原文提取信息，保持内容准确、完整、不变形。
+- Skills: 你具备文本精确提取、向量块语义定位、页码JSON解析、重复内容识别与去重、法律规范类文本保持原文能力以及结构化输出能力
+- Goals: 
+  1. 从集合中提取与用户问题直接相关的内容
+  2. 过滤完全重复的内容
+  3. 如果内容属于法律规范类/法规/制度/条例，必须一字不改、原文输出
+  4. 输出结果清晰、结构化、无冗余、无猜测
+
+- Constrains: 
+  1. 集合中的数据格式说明：
+    - 纯文本内容
+    - 向量块数据（包含 page 标识、上文截断、当前内容）
+    - 页码JSON数据（包含 page、id、content 字段）
+  2. **允许的内容**：仅来自用户提供的集合内容、原文引用、精确摘录、完全客观的内容
+  3. **严格禁止**：推理、补充外部知识、总结/概括/改写、解释性语言、模糊表述(如：“根据您提供的信息”、“可能”、“大概”、“推测”、“结合常识”)
+  4. 如果识别到以下内容，需严格原文输出、字句不修改:
+    - 法律条文、法规、管理办法、行业标准、制度说明、条款内容
+
+- Workflow: 
+  1. 内容解析：
+    - 识别集合中包含的内容类型：文本 / 向量块 / 页码JSON
+    - 提取其中“content”字段或主体文字段
+  2. 问题匹配:
+    - 仅保留与用户问题直接相关的内容
+    - 不做延展、不做解释、不做补充
+  3. 重复过滤:
+    - 若集合中出现相同句子/段落，只保留一份原文
+  4. 法律条文、法规、管理办法、行业标准、制度说明、条款内容等条文识别
+    - 字句不修改，原样输出
+  5. 结果输出:
+    - 仅输出提炼后的有效内容
+    - 不添加任何解释、总结、推论或无关话语
+
+- OutputFormat:
+  ```text
+    输出的最终答案
+  ```
+# 输出规则补充说明：
+  - 若问题在集合中找不到对应答案，则输出：
+    ```text
+      没有找答案
+    ```
+  - 不输出任何额外解释
+  - 不允许对原文进行任何形式的改写
+  - 需要对**输出的最终答案**结构化排版与格式整理，使文本展示更加清晰、美观，便于阅读和引用
+
+# 当前问题:
+{{userInput}}
+
+# 信息列表:
+{{n_answers}}
+
+''')

@@ -1,0 +1,65 @@
+/*
+{
+	"title":"Save selenium script",
+	"description":"Save seleniumn for test requirement",
+	"parameter":[{
+      "name":"test_no",
+      "label":"测试编号",
+      "type":"textarea"
+    },
+	{
+      "name":"steps",
+      "label":"所有步骤",
+      "type":"textarea"
+    }
+	],
+	"resultPlan":"",
+	"life":50,
+	"version":1,
+	"tag":"chatdoc_QA"
+}
+*/
+
+n_global_variable_page_code_info,act_memory.retrieve?var=global_variable_page_code_info&global=true
+n_global_variable, act_memory.retrieve?var=global_variable&global=true
+// merge page code info
+n_page_code_info,act_func.run?script='''
+def requirements =  n_global_variable_page_code_info
+
+def lastByNumber = [:].withDefault { [] }
+
+requirements.each { item ->
+    def reqText = item.requirement
+    def matcher = reqText =~ /^(\\d+)\\./
+    if (matcher) {
+        def number = matcher[0][1]  
+        lastByNumber[number] = item  
+    }
+}
+
+def sortedKeys = lastByNumber.keySet().sort { it.toInteger() }
+def result = sortedKeys.collect { lastByNumber[it] }
+
+return result
+'''
+
+// TODO 假设
+// write page code script
+foreach('n_data', 'n_page_code_info', {
+    // 下标对应内容
+    assign('page_code_info', '{{n_data.item}}')
+	when("page_code_info.is_page_code=='1'", {
+		assign("code", "{{fn.readFile(page_code_info.code_path)}}")
+		// Write page code script
+		act_python.writeCode?type={{page_code_info.type}}&requirement={{page_code_info.requirement}}&application={{page_code_info.application}}&code={{fn.str(code)}}&filename={{page_code_info.filename}}&subfolder={{page_code_info.subfolder}}
+		on_failure({
+			// Force to success status
+			act_flow.success
+		})
+	})
+})
+
+// write test code script
+act_python.mergeFiles?type='{{n_global_variable.programming_language}}'&outputFilePath='{{n_global_variable.feature_subfolder_main_code}}'&inputSubfolder='{{n_global_variable.script_subfolder}}'
+// write test steps script
+act_python.writeText?outputFilePath='{{n_global_variable.feature_subfolder_main_steps}}'&content="{{steps}}"&append=false

@@ -1,0 +1,260 @@
+/*
+{
+	"title":"Test Case generation",
+	"description":"Generate test case according to steps: {{steps}}",
+	"parameter":[
+		{
+			"name":"system",
+			"label":"系统名称",
+			"required":true
+		},
+		{
+			"name":"test_no",
+			"label":"测试编号",
+			"required":true
+		},
+		{
+			"name":"steps",
+			"label":"测试步骤",
+			"type":"textarea"
+		},
+		{
+			"name":"version",
+			"label":"版本"
+		},
+		{
+			"name":"explore_mode",
+			"label":"运行模式",
+			"args":[
+				{
+					"label":"开发模式",
+					"value":"1"
+				},
+				{
+					"label":"生产模式",
+					"value":"0"
+				}
+			],
+			"required":true,
+			"type":"select"
+		}
+	],
+	"resultPlan":"n_test_step",
+	"life":1000,
+	"version":6
+}
+*/
+// Initialize parameters
+assign('pythonType', 'selenium', 'explore_mode', '{{fn.optional(explore_mode,1)}}', 'subfolder', '{{test_no}}')
+
+// Change page view to full screen
+act_flow.changeView?field=isFullScreen&value=true
+
+// Load business information from knowledge base
+n_envinfo, act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'
+
+// Set system language
+assign('language', '{{fn.str(n_envinfo, "language")}}')
+
+// Load steps if not provided
+when('{{fn.equals(steps, "")}}', {
+    // Load steps from knowledge base
+    act_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("test_no,test_no,application,system,version,version")}}',act_memory.assign?var=steps 
+})
+// TODO callback
+n_plan_steps, act_plan.convert?var=steps&callback=agt_plan_save_testcase_step.rpa
+// Execute test steps
+foreach('n_test_step', 'n_plan_steps', {
+    // Reset system variables and initialize counter
+    act_memory.forgetSystemVariable
+    act_memory.increase?var=count_{{n_test_step.index}}&max=10
+    // **Log** ✅
+    log('=== STEP START ===')
+    // Initialize all steps variables
+    assign('steps', '{{n_test_step.items}}')
+
+
+    // Initialize current step variables
+    assign('current_step', '{{n_test_step.item}}')
+    
+    // Execute based on exploration mode
+    when('{{fn.equals(explore_mode, "0")}}', {
+        // Production mode: call production agent
+        agt_test_step_run_prod?current_step={{current_step}}&test_no={{test_no}}&application={{system}}&version={{version}}
+        
+        // Handle failures by jumping to report
+        on_failure({
+            act_flow.go?plan=n_report
+        })
+    }, {
+        // Exploration mode: dynamic agent selection
+        n_plan_agent, act_plan.agent?var=n_test_step&index={{n_test_step.index}}
+        
+        when('{{n_plan_agent.executor == "None"}}', {
+            // Get executor from knowledge base
+            n_executor, act_kb.select?name=kb_testcase_step&column=executor&where='{{fn.json("test_no,test_no,application,system,version,version,step,current_step")}}'
+            
+            when('{{n_executor[0] == null}}', {
+                // **Log** ✅
+                log('Starting large model call')
+                // Determine test case type using LLM
+                n_task_type,tpl_get_testcase_type,psr_json
+                assign('taskType', '{{n_task_type["taskType"]}}')
+                
+                // Map task type to agent
+                n_new_taskType, act_func?script='''
+                    def taskType = '{{taskType}}'
+                    def agentList = [
+                        ['TRIPLE_TASK','Triple'],
+                        ['VERIFICATION_TASK','Verify'],
+                        ['OPERATION_EXECUTE_TASK','Execute'],
+                        ['PAMP_EXECUTE_TASK','Pamp'],
+                        ['DYNAMIC_SELECT_TASK','Select'],
+                        ['DYNAMIC_PLAN_TASK','Plan']
+                    ]
+                    def newTaskType = agentList.find { it[0] == taskType }?.getAt(1) ?: 'Execute'
+                    return newTaskType
+                '''
+                assign('new_taskType', '{{n_new_taskType}}')
+                // TODO TEST newTaskType
+                // Update knowledge base with executor
+                act_kb.update?name=kb_testcase_step&columnValues='{"executor":"{{taskType}}"}'&where='{{fn.json("test_no,test_no,application,system,version,version,step,current_step")}}'
+            }, {
+                // taskType
+                assign('taskType', '{{n_executor[0]}}')
+                // Map task type to agent
+                n_new_taskType, act_func?script='''
+                    def taskType = '{{taskType}}'
+                    def agentList = [
+                        ['TRIPLE_TASK','Triple'],
+                        ['VERIFICATION_TASK','Verify'],
+                        ['OPERATION_EXECUTE_TASK','Execute'],
+                        ['PAMP_EXECUTE_TASK','Pamp'],
+                        ['DYNAMIC_SELECT_TASK','Select'],
+                        ['DYNAMIC_PLAN_TASK','Plan']
+                    ]
+                    def newTaskType = agentList.find { it[0] == taskType }?.getAt(1) ?: 'Execute'
+                    return newTaskType
+                '''
+                assign('new_taskType', '{{n_new_taskType}}')
+            })
+            
+            // Map task type to specific agent
+            n_plan_agent_map, act_func?script='''
+                def taskType = '{{new_taskType}}'
+                def agentList = [
+                    ['agt_test_triple.test','TRIPLE_TASK','Triple'],
+                    ['agt_test_verification.test','VERIFICATION_TASK','Verify'],
+                    ['agt_test_selenium.test','OPERATION_EXECUTE_TASK','Execute'],
+                    ['agt_test_selenium_pamp.test','PAMP_EXECUTE_TASK','Pamp'],
+                    ['agt_test_selenium_dyna.test','DYNAMIC_SELECT_TASK','Select'],
+                    ['agt_test_planlist.test','DYNAMIC_PLAN_TASK','Plan']
+                ]
+                def agent = agentList.find { it[2] == taskType }?.getAt(0) ?: 'agt_test_selenium.test'
+                return agent
+            '''
+            // executor为空后再次赋值
+            assign('plan_agent', '{{n_plan_agent_map}}')
+            act_plan.assignAgent?var=n_test_step&index={{n_test_step.index}}&executor={{plan_agent}}
+        }, {
+            // executor不为空
+            assign('plan_agent', '{{n_plan_agent.executor}}')
+        })
+        // envinfoenvinfo
+        assign('envinfoenvinfo', '{{n_envinfo}}')
+        // Execute the plan with selected agent
+        act_plan.runPlan?executor={{plan_agent}}&parameters='test_no={{test_no}}&steps={{n_test_step.items}}&step_index={{n_test_step.index}}&current_step={{current_step}}&system={{system}}&version={{version}}&envinfo={{n_envinfo.envinfo}}'&callAgentNames='''
+				[['agt_test_triple.test','TRIPLE_TASK','Triple'],
+				['agt_test_verification.test','VERIFICATION_TASK','Verify'],
+				['agt_test_selenium.test','OPERATION_EXECUTE_TASK','Execute'],
+				['agt_test_selenium_pamp.test','PAMP_EXECUTE_TASK','Pamp'],
+				['agt_test_selenium_dyna.test','DYNAMIC_SELECT_TASK','Select'],
+				['agt_test_planlist.test','DYNAMIC_PLAN_TASK','Plan']]
+			'''
+    })
+    // **Log** ✅
+    log('=== STEP END ===')
+})
+
+// Update test result in knowledge base
+act_kb.merge?name=kb_testcase&columnValues='{"test_result":"Pass"}'&where='{"test_no":"{{test_no}}"}'
+
+// Generate test report
+n_word_report, agt_test_wordreport?test_no={{test_no}}&application={{system}}&version={{version}}
+// aaaaaaaaaaaa
+assign('aaaaaaaaaaaa', '{{n_plan_steps}}')
+// Process and store steps
+n_steps, act_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("test_no,test_no,application,system,version,version")}}'
+n_result, act_func?script='''
+    def result = ""
+    for (item in n_steps) {
+        result += item + "\\n"
+    }
+    return result.trim()
+'''
+assign("output_string", "{{n_result}}")
+// 注销 不能反向更新kb_testcase
+// act_kb.merge?name=kb_testcase&columnValues='{"steps":"{{output_string}}"}'&where='{"test_no":"{{test_no}}","application":"{{system}}","version":"{{version}}"}'
+assign("word_report", "{{n_word_report}}")
+// 写page 和 main steps
+agt_test_save_success_file?steps={{n_result}}&test_no={{test_no}}
+// Stop cloud grid
+act_rpa.send?command=StopCloudGrid
+on_failure({
+	// Force to success status
+	act_flow.success
+})
+
+// Define for test case type analysis
+define('tpl_get_testcase_type', '''
+- Role: 测试工程师
+- Background: 用户需要对局部测试用例进行类型识别，并以JSON格式返回识别结果。这表明用户可能正在从事软件测试工作，需要对测试用例进行分类以优化测试流程和管理。
+- Profile: 你是一名经验丰富的测试工程师，对软件测试的各个环节有着深入的理解和丰富的实践经验，擅长分析测试用例并准确识别其类型。
+- Skills: 你具备扎实的软件测试理论知识，熟悉各种测试用例的类型和特点，能够快速准确地识别测试用例的类型，并能够熟练使用JSON格式进行数据返回。
+- Goals: 识别局部测试用例的类型，并以JSON格式返回识别结果。
+- Constrains: 仅识别测试用例的类型，不进行其他操作；返回结果必须符合JSON格式要求。
+- OutputFormat: JSON格式
+- Workflow:
+  1. 分析局部测试用例(共1步)的内容和特点,并解释局部测试用例目标。
+  2. 根据测试用例的特点，判断其属于VERIFICATION_TASK、OPERATION_EXECUTE_TASK、PAMP_EXECUTE_TASK、DYNAMIC_SELECT_TASK还是DYNAMIC_PLAN_TASK。
+  3. 使用JSON格式返回识别结果。
+- 类型说明:
+	VERIFICATION_TASK：涉及检查系统功能、行为、数据状态或界面元素是否符合预期的任务。这包括但不限于交易成功验证、数据一致性检查、界面元素存在性和可见性验证等
+	返回JSON: {{fn.task().result('{"taskType":"VERIFICATION_TASK"}')}}
+	OPERATION_EXECUTE_TASK：仅执行具体界面操作的任务（如：点击按钮、输入文本、选择下拉项、数据存储）。**不包含任何分析判断过程**
+	返回JSON: {{fn.task().result('{"taskType":"OPERATION_EXECUTE_TASK"}')}}
+	PAMP_EXECUTE_TASK（PAMP Execute task）：当局部测试用例不是“单一UI动作”，而是需要先满足“页面动作最小前置条件（PAMP）”后才能完成的复合动作时使用。
+	判定要点（满足其一即可归为 PAMP_EXECUTE_TASK）：
+	1) 同一个 step 文本同时包含“输入/填写/至少N个 input” + “点击/提交/确认/下一步/保存”这类动作组合（例如：填写表单并点击提交、至少填写2个输入后再点提交）。
+	2) step 含有定量约束：出现“至少/不少于/必须填写 N 个/填写满 N 个”等，强调输入数量的最小条件。
+	3) step 明确存在页面状态依赖或执行顺序依赖：例如“填完后按钮才可用/点击提交前需要校验/需要等待渲染/滚动到区域后再点击”等。
+	4) 该 step 通常需要拆分成多个子动作并共享前置条件（>=2 个互相依赖的子动作），且这些依赖需要由页面地图（PAMP）给出元素/关系/可操作条件。
+	与 OPERATION_EXECUTE_TASK 的区别：
+	- OPERATION_EXECUTE_TASK 通常只需对一个明确元素做一次动作（单点输入或单次点击），不需要“最小输入数量/提交依赖/顺序依赖”的建模。
+	- PAMP_EXECUTE_TASK 则需要把该 step 的前置条件显式建模成 required_elements/约束，供后续 PAMP Selenium 执行链路生成代码。
+	返回JSON: {{fn.task().result('{"taskType":"PAMP_EXECUTE_TASK"}')}}
+	DYNAMIC_SELECT_TASK：涉及动态点击或定位元素的任务，如随机选择记录、动态过滤元素等。这些任务通常不直接涉及验证，但可能为后续验证提供条件或数据
+	返回JSON: {{fn.task().result('{"taskType":"DYNAMIC_SELECT_TASK"}')}}
+	DYNAMIC_PLAN_TASK：需要分析页面结构或内容，动态生成后续操作计划的任务，或者需要规划新的任务，**核心特征是产生新的任务序列或决策逻辑**
+	返回JSON: {{fn.task().result('{"taskType":"DYNAMIC_PLAN_TASK"}')}}
+- Examples:
+  - 例子1：局部测试用例为“检查登录后首页的用户名是否正确显示”
+    返回JSON: {{fn.task().result('{"taskType":"VERIFICATION_TASK"}')}}
+  - 例子2：局部测试用例为“点击登录按钮”
+    返回JSON: {{fn.task().result('{"taskType":"OPERATION_EXECUTE_TASK"}')}}
+  - 例子2b：局部测试用例为“填写表单（至少2个input）并点击提交/确认”
+    返回JSON: {{fn.task().result('{"taskType":"PAMP_EXECUTE_TASK"}')}}
+  - 例子2c：局部测试用例为“先填写用户名/密码（满足必填）再点击提交按钮（提交前需校验）”
+    返回JSON: {{fn.task().result('{"taskType":"PAMP_EXECUTE_TASK"}')}}
+  - 例子2e：局部测试用例为“单独点击登录按钮/单独输入一个字段”
+    返回JSON: {{fn.task().result('{"taskType":"OPERATION_EXECUTE_TASK"}')}}
+  - 例子3：局部测试用例为“随机选择一个商品并点击”
+    返回JSON: {{fn.task().result('{"taskType":"DYNAMIC_SELECT_TASK"}')}}
+  - 例子4：局部测试用例为“根据页面上的商品数量动态生成购买计划”
+    返回JSON: {{fn.task().result('{"taskType":"DYNAMIC_PLAN_TASK"}')}}	
+# 局部测试用例：
+{{current_step}}
+
+# 完整测试步骤：
+{{steps}}
+''')

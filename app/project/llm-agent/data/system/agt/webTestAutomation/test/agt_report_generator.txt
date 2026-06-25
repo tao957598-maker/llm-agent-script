@@ -1,0 +1,367 @@
+/*
+{
+	"title": "Generate Report Data Based On Db data ",
+	"description": "Generate Report Data Based On Db data",
+    "parameter": [
+					{
+						"name":"reportId",
+						"label":"ReportId",
+						"type":"text"
+					},
+					{
+                        "name":"templateId",
+                        "label":"TemplateId",
+                        "type":"text"
+                    }
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "life": "100"
+} */
+
+//Step9:Generate report--Get template information from db by templateId
+n_remplate_info, act_kb.selectBy?sql='select id,name,file_path as filePath,kb_folder_path as kbFolderPath,kb_folder_id as kbFolderId,file_path as kbTemplateFilePath,template_variables as templateVariables from kb_file_template where id ="{{templateId}}"'
+//Step10: Generate report--Get report data from db by reportId
+n_report_data, act_kb.selectBy?sql='select report_name as reportName,kb_folder_path as kbFolderPath,report_source as reportSource,template_variables as templateVariables from  kb_template_report_record where id={{reportId}}'
+when('!fn.hasValue(n_report_data)',{
+    //# Can not find report data by reportId!
+    log('Can not find report data by reportId:{{reportId}}')
+    act_flow.go?step='exit'
+})
+assign('n_template_var',"{{n_remplate_info[0].templateVariables}}")
+assign('n_report_source',"{{n_report_data[0].reportSource}}")
+
+//Step11: Handler data by variable's type
+foreach('n_var','n_template_var',{
+    assign('n_var_name',"{{n_var.item.var}}")
+    when('n_var.item.type=="Chart"',{
+        assign('n_chart_desc',"{{n_var.item.desc}}")
+        act_func?script='''
+            def reportSource=n_report_source
+            fn.put("n_reportSource_temp",reportSource)
+            def echartMql = reportSource[n_var_name]
+            fn.put("n_chart_mql_temp",echartMql)
+        '''
+        log('***n_var_name={{n_var_name}}')
+        //## Get chart data from report source
+        log('***n_chart_mql_temp={{n_chart_mql_temp!}}')
+        when('fn.hasValue(n_chart_mql_temp!)',{
+            ////## Execute query report data
+	        n_sql_result, act_api.doExecuteDynamic?name=ReportDataSearch&dynamicParamData='{{fn.json("searchMQL, n_chart_mql_temp", true)}}'
+            //## Call LLM generate echart data
+            n_echart_format_data,tpl_analysis_chart
+            //## Save Echart data to db
+            act_func?script='''
+                def key=n_var.item.var
+                def value=n_echart_format_data
+                fn.put('n_chart_format_data', [(key): value])
+                n_report_source.put(key,'')
+                return n_report_source
+            '''
+            when('fn.hasValue(n_chart_format_data)',{
+                //Append n_sql_result to n_combined_result
+                append('n_chart_json_data',"{{n_chart_format_data}}")
+            })
+        })
+    })
+
+    //Type is list
+    when('n_var.item.type=="List"',{
+       // log('----n_var_value==={{n_var.item.value}}*************n_var.item={{n_var.item}}')
+        act_func?script='''
+            def n_var_value = fn.map(n_var.item.value)
+            def tagArr = n_var_value.tagArry ?: []
+            def label = n_var_value.label
+            for (int j = 0; j < tagArr.size(); j++) {
+                def tagItem = tagArr[j]
+                if (tagItem.type == "image") {
+                    def listData = n_report_source[label]
+                    if (listData == null) continue
+                    if (!(listData instanceof List)) {
+                        try {
+                            listData = fn.list(listData)
+                        } catch(e) {
+                            continue
+                        }
+                    }
+        
+                    def key = tagItem.key
+                    def formatList = []
+        
+                    for (int n = 0; n < listData.size(); n++) {
+                        def listDataItem = listData[n]
+                        if (listDataItem instanceof String) {
+                                listDataItem = fn.map(listDataItem)
+                        }
+        
+                        def path = listDataItem[key]
+                        if (path && !(path.startsWith("http://") || path.startsWith("https://"))) {
+                            listDataItem[key] = fn.filepath(path)
+                        }
+                        formatList.add(listDataItem)
+                    }
+                    //Replace fromatList
+                    n_report_source[label] = formatList
+                }
+        }
+        return n_report_source
+    '''
+    })
+
+    //Type is Table
+    when('n_var.item.type=="Table"',{
+         n_table_mql,act_func?script='''
+            def n_table_var = n_var.item.var
+            def tableMql = n_report_source[n_table_var]
+            n_report_source.put(n_table_var,'[]')
+            return tableMql
+        '''
+        log('***n_table_mql={{n_table_mql!}}')
+        when('fn.hasValue(n_table_mql!)',{
+            ////## Execute mql to get report data 
+	        n_table_data_result, act_api.doExecuteDynamic?name=ReportDataSearch&dynamicParamData='{{fn.json("searchMQL, n_table_mql", true)}}'
+            //## Save Table data to db
+            act_func?script='''
+                def varName=n_var.item.var
+                def value=n_table_data_result.data
+                n_report_source.put(varName,value)
+                return n_report_source
+            '''
+        })
+    })
+})
+
+//##Check chart data is exists
+when('fn.hasValue(n_chart_json_data)',{
+    //##  Combined all chart data to a big json and then save to db
+    n_save_chart_data,act_func?script='''
+        // 定义批次号
+        def  batchNumber = System.currentTimeMillis()
+        // n_chart_json_data 是前面步骤聚起来的那个数组
+        def dataList = n_chart_json_data
+        // 最终要合并成的那个大JSON对象
+        def merged = [:]
+        // 安全遍历
+        for (int i = 0; i < dataList.size(); i++) {
+            def item = dataList[i]
+            if (item == null) {
+                continue
+            }
+            // fn.map 来把 “字符串JSON” → Map
+            def obj = fn.map(item)
+            if (obj == null) {
+                // 转不了就跳过
+                continue
+            }
+            // 合并到一个对象里，后面的键会覆盖前面的同名键
+            merged.putAll(obj)
+        }
+        def reportId = reportId
+        def saveChartData = [
+            "reportDataId": reportId,
+            "batchNumber": batchNumber,
+            "chartFormatData": merged
+        ]
+        // 返回合并后的大JSON
+        return saveChartData
+    '''
+
+    log('***n_save_chart_data={{n_save_chart_data!}}')
+    //## Save chart data to db
+    n_save_chart_data_resp,act_api.doExecute?name='report_chart_data_save'&params='{{n_save_chart_data}}'
+    when('n_save_chart_data_resp.code==200',{
+        assign('n_chart_data_keys',"{{n_save_chart_data_resp.data}}")
+        log('n_chart_data_key=={{n_chart_data_key}}')
+        // Call Api to generate chart 
+        foreach('n_chart_key','n_chart_data_keys',{
+            log('n_chart_key.item=={{n_chart_key.item}}')
+            assign("n_request_body",'''{
+                "reportId":"{{reportId}}",
+                "dataKey": "{{n_chart_key.item}}",
+                "headers": "{}",
+                "cookies": "{}"
+             }''')
+            //## Call Api to generate chart screenshot
+            n_chart_url,act_api.doExecute?name='report_call_screenshot'&params="{{n_request_body}}"
+            log('********n_chart_url={{n_chart_url}}')
+             when('fn.hasValue(n_chart_url.absolutePath)',{
+                 act_func?script='''
+                    def varName = n_chart_key.item
+                    def reportFilePath = n_chart_url.absolutePath
+                    reportFilePath = reportFilePath.replace("\\\\", "/")
+                    n_report_source.put(varName, reportFilePath)
+                    return n_report_source
+                '''
+            })
+        })
+    })
+})
+
+
+when('!fn.hasValue(n_report_source)',{
+    //# Report Data is Empty!
+    log('Report Data is Empty')
+    act_flow.go?step='exit'
+})
+//Step 12 Generate a report in Word format
+assign('n_output_path',"/kbs/report/{{n_report_data[0].reportName}}.docx")
+ //# Generate word format report
+n_word_report_path,act_func.word?template="{{n_remplate_info[0].name}}.docx"&output="{{n_output_path}}"&rootVar='n_report_source'
+
+when('!fn.hasValue(n_word_report_path)',{
+     //# Generate report failed!
+    log('Generate report failed!')
+    act_flow.go?step='exit'
+})
+//Step 13 Word document to PDF conversion
+assign("n_converter_type",'''{"converter_type":"word_to_pdf"}''')
+ //# word format report to pdf response
+n_pdf_url,act_api.doExecute?name='report_word_to_pdf'&fileNames='/ac_script/{{n_output_path}}'&params='{{n_converter_type}}'
+
+when('n_pdf_url.code !=200',{
+    //# Word document to PDF conversion failed!
+    log('Word document to PDF conversion failed!')
+    act_flow.go?step='exit'
+})
+act_func?script='''
+    def pdfPath=n_pdf_url.absolutePath.replace("\\\\", "/")
+    pdfPath = pdfPath.replace("/app/data/", "/")
+    fn.put("n_temp_pdf_url",pdfPath)
+'''
+//Step 14 Update filePath to db
+//## Move word and pdf file to kbs user path
+n_store_report_pdf_path,act_api.doExecute?name='report_kbs_upload_user_file'&fileNames="{{n_temp_pdf_url}}"&params='{"folderName":"report"}'
+n_store_report_word_path,act_api.doExecute?name='report_kbs_upload_user_file'&fileNames="/ac_script/{{n_output_path}}"&params='{"folderName":"report"}'
+log('n_store_report_pdf_path:{{n_store_report_pdf_path}}')
+act_func?script='''
+    def pdfMap=n_store_report_pdf_path.data[0]
+    def wordMap=n_store_report_word_path.data[0]
+    def pdfFileName = pdfMap.keySet().iterator().next()
+    def wordFileName = wordMap.keySet().iterator().next()
+    def pdfFileId = pdfMap.get(pdfFileName)
+    def wordFileId = wordMap.get(wordFileName)  
+    def id=reportId
+    def params=[:]
+    params.put("id",id)
+    params.put("reportName",n_report_data[0].reportName)
+    params.put("wordFileId",wordFileId)
+    params.put("pdfFileId",pdfFileId)
+    fn.put("n_update_report_url",params)
+'''
+//Step 14 Update filePath to db
+ //## Update filePath to db
+n_update_report_url_result,act_api.doExecute?name='report_update_report_url'&params='{{n_update_report_url}}'
+
+when('n_update_report_url_result.code==200',{ 
+    //## Return pdf url to chatDoc
+    assign('resultTip', '<a class="download-link" href="/kbs-template/download-report?fileName={{n_update_report_url_result.data}}" target="_blank">Report generated successfully, please click to download.</a >')
+},{
+    //## Update pdf url to chatDoc failed!
+    log('Error Message:{{n_update_report_url_result.message}}')
+})
+
+//Step 15 Generate echart data
+define('tpl_analysis_chart','''
+    你是 **数据分析专家** 和 **ECharts可视化专家**。
+
+    请根据以下输入：
+    - 【指标描述】，描述了待生成的echart图标数据类型，比如折线图，饼状图，柱状图等，如果没有指定图表类型，请根据数据和描述生成最符合的图标数据
+    - 【图表数据】（一般是JSON数组格式）
+
+    解析【图表数据】，识别字段类型与数据逻辑，自动选择最合适的 ECharts 图表类型（pie、bar、line等），并生成完整、可直接渲染的 **ECharts配置JSON对象**（结构与ECharts官方option一致）。
+
+    ---
+
+    ### 一、分析顺序
+    1. 使用【图表数据】(JSON数组)生成series数据。
+    2. 若【指标描述】包含“趋势”“变化”“占比”“排行”等关键词，可作为辅助判断依据。
+
+    ---
+
+    ### 二、图表类型选择逻辑
+    - **单值聚合（仅一个数值）** → `bar` 或 `pie`。
+    - **分组结果（含 GROUP BY）** → 自动识别分类字段与数值字段，绘制 `bar` 或 `pie`。
+    - **时间字段（含 date/time/timestamp）** → `line` 折线图。
+    - **多数值字段（多列数字）** → 多序列柱状图或折线图。
+    - 若字段名包含 `rate/ratio/percent/share` → 优先使用饼图。
+    - 若字段名或描述含 `top`、`rank`、`order by` → 优先使用柱状图。
+
+    ---
+
+    ### 三、嵌套JSON字段处理
+    若【图表数据】某字段值为JSON字符串（如`content`）：
+    - 尝试解析为对象；
+    - 展开一级字段；
+    - 将其中的时间、类别、数值字段纳入判断逻辑。
+
+    ---
+
+    ### 四、容错与兜底逻辑
+    - 若结果为空(`[]`或`null`)，输出空图表（标题保留，series.data=[]）；
+    - 若仅存在非数值字段，则统计其出现次数；
+    - 若存在null/NaN值，自动过滤该项；
+    - 若仅一个结果字段，创建虚拟类别 `"指标"`。
+
+    ---
+
+    ### 五、输出要求
+    1. 输出必须是合法 **JSON**，与ECharts官方option结构完全一致；
+    2. 不得输出任何说明文字、注释、Markdown标记；
+    3. `series.data` 内每个元素应为 `{ "name": <string>, "value": <number> }`；
+    4. 所有字段值均应来源于SQL执行结果动态生成；
+    5. 数据需符合系统【工具集列表】中定义的ECharts格式规范。
+
+    ---
+
+    ### 六、输出示例（仅供参考）
+
+    ```json
+    {
+    "title": {
+        "text": "测试步骤与截图统计",
+        "subtext": "数据来源：系统自动统计",
+        "left": "center"
+    },
+    "tooltip": {
+        "trigger": "axis",
+        "axisPointer": { "type": "shadow" }
+    },
+    "xAxis": {
+        "type": "category",
+        "data": ["测试步骤次数", "截图数量"]
+    },
+    "yAxis": { "type": "value" },
+    "series": [
+        {
+        "name": "数量统计",
+        "type": "bar",
+        "data": [
+            { "name": "测试步骤次数", "value": 1 },
+            { "name": "截图数量", "value": 1 }
+        ],
+        "emphasis": {
+            "itemStyle": {
+            "shadowBlur": 10,
+            "shadowOffsetX": 0,
+            "shadowColor": "rgba(0, 0, 0, 0.5)"
+            }
+        }
+        }
+    ]
+    }
+
+    # 特殊规则：
+    - 若【图表数据】返回单值（如 [{"record_count":1}]），生成单柱图：
+    series[0].type = "bar"，data = [{"name": "记录条数", "value": 1}]
+    - 若【图表数据】包含GROUP BY分类字段，生成pie/bar；
+    - 若【图表数据】包含时间（date、time等），生成line；    
+    - 若仅一个结果字段，使用bar并创建虚拟类别 "指标"。
+
+    # 输入：
+    【指标描述】
+    {{n_chart_desc}}
+    【图表数据】
+    {{n_sql_result}}
+
+    {{sys_hint}}
+''')

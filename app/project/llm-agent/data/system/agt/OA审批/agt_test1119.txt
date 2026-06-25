@@ -1,0 +1,37 @@
+/*
+{
+	"title":"test1119",
+	"parameter":"{\"required\":true,\"maxLength\":5000}",
+	"tag":"OA审批",
+	"uiEntrance":"test1119",
+	"displayOrder":0,
+	"version":1
+}
+*/
+// Use selenium
+assign('explore_mode_data', '{{fn.optional(explore_mode, 1)}}')
+
+when('fn.hasValue(restart_browser)&restart_browser=1', {
+	//# Send product mode information to RPA
+	act_rpa.send?command=SwitchExploreMode&name={{fn.json('explore_mode,explore_mode_data,test_system,system,test_no,test_no')}}
+},{
+	assign('msg', 'Not restart Browser')
+})
+
+
+when('fn.hasValue(dependent_test_no)', {
+	// Send the dependent test number
+	n_rpa_test, act_rpa.send?command=dependOn&parameters='{{fn.json("test_no,dependent_test_no")}}'
+	
+	// Result of dependent
+  	on_failure({
+		act_flow.go?plan=end
+	})
+	
+})
+	
+// Call agent to generate test steps
+agt_test_steps_gen?system={{system}}&test_no={{test_no}}&version={{version}}&steps={{steps}}&expected_result={{expected_result}}&force_update=false
+
+// Call agent to run test steps
+agt_test_steps_run?system={{system}}&test_no={{test_no}}&explore_mode={{explore_mode}}&version={{version}}

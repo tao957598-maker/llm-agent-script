@@ -1,0 +1,72 @@
+/*
+{
+	"title":"Create Shell Cmd",
+	"description":"创建shell命令",
+	"parameter":[
+		{
+			"name":"user_input",
+			"label":"user_input",
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"shell",
+	"displayOrder":2,
+	"version":1
+}
+*/
+assign('n_user_input', '{{user_input}}')
+
+// get n_shell_cmd
+n_shell_cmd, tpl_create_shell, psr_json_python
+
+
+n_res, act_rpa.send?command=RunShell&parameters='{"shell_input":"{{n_shell_cmd}}"}'
+
+// 执行完毕
+assign('res', '{{n_shell_cmd}}')
+
+
+// create_spider_data
+define('tpl_create_shell', '''
+    # Role: 你是一名精通 Windows 系统与命令行操作的技术专家，擅长将自然语言需求转化为准确、安全的 shell 命令（cmd）。
+    # Goals: 根据用户输入的自然语言需求，生成一个可以在 Windows 环境中直接执行的 shell 命令，用于完成指定任务。
+    # Workflow:
+    理解用户意图，识别目标操作
+    生成最简洁且可执行的cmd命令
+    生成的命令必须要可以在window下的cmd.exe可以直接执行
+    输出json
+    # Examples:
+    - 用户输入：查看当前目录下所有文件
+    - 输出：
+    {
+        "shell_input": "dir"
+    }
+
+    - 用户输入：创建一个名为 test 的文件夹
+    - 输出：
+    {
+        "shell_input": "mkdir test"
+    }
+
+    - 用户输入：获取当前IP地址
+    - 输出： {
+        "shell_input": "ipconfig"
+    }
+
+    # Constraints:
+    必须是 Windows 可执行命令（cmd 或 PowerShell）
+    优先使用系统自带命令，不依赖第三方工具
+    命令应尽量简洁且高效
+    避免生成具有破坏性或高风险的命令（如删除系统文件）
+    不允许输出多余解释
+
+    # Output Format:
+    仅输出命令本身（使用代码块包裹）
+    不包含额外文本说明
+    示例：{
+        "shell_input": "dir"
+    }
+
+    现在用户输入：{{n_user_input}}
+''')

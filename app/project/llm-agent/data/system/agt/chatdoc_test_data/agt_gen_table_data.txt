@@ -1,0 +1,58 @@
+/*
+{
+	"title":"Generation Test Data Table",
+	"description":"Generation Test Data Table",
+	"parameter":"{\"name\":\"tableName\",\"label\":\"表名\",\"type\":\"textarea\"}",
+	"life":1000,
+	"version":1
+}
+*/
+// 查询元数据语句
+assign("userInput", "在kb_test_metadata查询table_name为{{tableName}}的第一条数据")
+
+// 取元数据sql
+agt_auto_sql1.knowledge?userInput='{{userInput}}'
+n_kb_data,act_kb.selectBy?sql='{{sys_last_result}}'
+
+// 生成测试数据agent
+n_table_data,agt_tpl_gen_data.test_gen_data?metadata="{{n_kb_data.metadata}}"&information="[]"
+
+// 测试数据json
+n_json_data,tpl_columns_rows_to_json
+
+// 数据拼接
+n_data_item,act_func?script='''
+  def result = [:]          
+  result.metadata_id = n_kb_data.id[0].toString()
+  result.data = n_json_data.data.toString()
+  result.generation_method = "ai"
+  return result
+'''
+
+// 保存数据库
+act_kb.defineAndImportData?tableName='kb_test_data_table'&data='{{n_data_item}}'
+
+// json数据生成
+define('tpl_columns_rows_to_json', '''
+你将接收两部分数据：
+1. `columns`：字段名列表，如 ["name", "age", "gender"]
+2. `data`：二维数组，每行是与 columns 对应的一组数据，如 [["小明", "12", "男"], ["小红", "22", "女"]]
+
+请将这些数据转换为 JSON 数组的结构化格式，每行为一个对象，字段名与值一一对应。例如：
+
+输入：
+columns: {{n_table_data.columns}}
+data: {{n_table_data.data}}
+
+输出格式：
+{
+  "data": [
+    {"name": "小明", "age": "12"},
+    {"name": "小红", "age": "22"}
+  ]
+}
+
+⚠️ 要求：
+- 只返回最终的 JSON 数据，不需要解释说明。
+- 输出字段请与 columns 保持一致，顺序对应 data。
+''')

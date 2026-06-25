@@ -1,0 +1,12 @@
+/*
+{
+	"title":"agt_demo2",
+	"tag":"可视化",
+	"displayOrder":0,
+	"version":4
+}
+*/
+
+assign('sync_result', '123456')
+
+

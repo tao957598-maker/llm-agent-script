@@ -1,0 +1,126 @@
+/*
+{
+	"title":"知识空间-知识向量化",
+	"version":1
+}
+*/
+/
+ 
+// 1.更新知识的状态todo->IN_PROGRESS
+foreach('n_loop_id', 'knowledgeIdArr', {
+    act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"1"}'&where='{"id":{{n_loop_id.item}}}'
+})
+
+foreach('n_loop_id', 'knowledgeIdArr', {
+    assign('knowledgeId', '{{n_loop_id.item}}')
+
+    // 2.创建/更新知识库表与milvus
+    // act_kb.defineKB?tableInfo={{tableInfo}}&embedding='emb_question'
+
+    // 3.查询出需要处理的知识
+    n_data,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,kb_spaces_folder_id,extension,store_uri,knowledge_name'&maxSize=1&where='{"id":{{n_loop_id.item}}}'
+    n_first_data,act_func?script='''
+                            return n_data[0]
+                        '''
+    // 4.通过文件类型，获取对应的api后缀
+    agt_gen_api_postfix?extension={{n_first_data.extension}}
+
+    // 5.获取api编码
+    n_api_code,act_func?script='''
+                        def api_code = 'ink_upload_api'
+                        api_code += "_" + apiPostfix
+                        return api_code
+                    '''
+
+    // 6.调用Ink院的接口，将知识进行分片
+    n_api_data,act_api.doExecute?name={{n_api_code}}&params='{"table_name":'kb_spaces_knowledge_ink_section',"document_id":'{{knowledgeId}}',"schema":'default',"folder_id":'{{n_first_data.kb_spaces_folder_id}}',"token":'{{token}}'}'&fileNames='{{n_first_data.store_uri}}'
+    // n_api_data,act_api.doExecute?name={{n_api_code}}&fileNames='{{n_first_data.store_uri}}'
+    when("n_api_data.success==true", {
+        // 7.将参数信息添加到指定的map中
+        n_api_data,act_func?script='''
+                n_api_data.put("knowledge_name", n_first_data.knowledge_name)
+                n_api_data.put("storeUri", n_first_data.store_uri)
+            '''
+
+        // 8.将转换后的内容，存储到指定的文件目录
+        n_save_parse_file,act_kbs.writeParseFile?paramData='{{n_api_data}}'&subFolder='/kbs_parse'
+
+        when("n_save_parse_file.success==true", {
+                // 9.body相关的参数信息
+                n_detail_data,act_func?script='''
+                                def map = new HashMap()
+                                map.put("transformed_file", n_save_parse_file.fileUri)
+                                return map
+                            '''
+
+                // 10.将转换之后的文件，保存到detail里面
+                act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{{n_detail_data}}'&where='{"id":{{n_loop_id.item}}}'
+
+                n_api_parsed_content_data,act_func?script='''
+                                def parsed_content = n_api_data.parsed_content;
+                                def newList = new ArrayList()
+                                for (int i = 0; i < parsed_content.size(); i++) {
+                                    def map = parsed_content[i]
+                                    map.put("document_id",n_loop_id.item)
+                                    map.put("folder_id",n_first_data.kb_spaces_folder_id +"")
+                                    map.put("page",map.page +"")
+                                    map.put("update_time", "now")
+                                    map.put("order_by_num", (i + 1)+"")
+                                    map.put("status", 1+"")
+                                    newList.add(map)
+                                }
+                                return newList
+                            '''
+
+                // 11.切片的数据存储到db/milvus
+                // act_kb.importData?name='kb_spaces_knowledge_section'&data={{n_api_parsed_content_data}}&addColumnsMilvus=true
+
+                // 12.更新知识状态
+                // act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"2","update_time":'now'}'&where='{"id":{{n_loop_id.item}}}'
+        },{
+            // 11.更新知识状态->fail
+            act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"5","msg":"save file error"}'&where='{"id":{{n_loop_id.item}}}'
+        })
+    },{
+        // 7.更新知识状态->fail
+        act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"5","msg":'{{n_api_data.message}}'}'&where='{"id":{{n_loop_id.item}}}'
+    })
+})
+
+assign('return', '{{sys_last_result}}')
+
+agent('agt_gen_api_postfix', {
+    when("extension=='txt'", {
+        assign('apiPostfix', 'general')
+    })
+    when("extension=='text'", {
+        assign('apiPostfix', 'general')
+    })
+    when("extension=='md'", {
+        assign('apiPostfix', 'general')
+    })
+    when("extension=='docx'", {
+        assign('apiPostfix', 'word')
+    })
+    when("extension=='doc'", {
+        assign('apiPostfix', 'word')
+    })
+    when("extension=='msg'", {
+        assign('apiPostfix', 'email')
+    })
+    when("extension=='eml'", {
+        assign('apiPostfix', 'email')
+    })
+    when("extension=='xlsx'", {
+        assign('apiPostfix', 'excel')
+    })
+    when("extension=='html'", {
+        assign('apiPostfix', 'html')
+    })
+    when("extension=='pdf'", {
+        assign('apiPostfix', 'pdf')
+    })
+    when("extension=='pptx'", {
+        assign('apiPostfix', 'ppt')
+    })
+})

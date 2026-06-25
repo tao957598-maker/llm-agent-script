@@ -1,0 +1,47 @@
+/*
+{
+  "title": "文档节点处理",
+  "description": "根据documentid查询文档信息并生成Neo4j节点",
+  "parameter": [
+    {
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+	},
+    {
+			"name":"page",
+			"type":"text"
+	}
+  ],
+  "uiEntrance": "",
+  "version": 1
+}
+*/
+
+ 
+// 1. 读取数据库信息
+assign('kbSpaceFileId', '{{kbSpaceFileId}}')
+
+n_summary, act_kb.selectBy?sql='select documentId as document_id,page,description as summary,title as page_title,keywords  from kb_doc_req_metadata where  documentId="{{kbSpaceFileId}}" and page="{{page}}"'
+// 2. 使用GPT生成Neo4j节点信息
+// tpl_neo4j_node,psr_cypher
+n_psr_cypher,act_func?script='''
+def item = n_summary[0]
+def document_id =  item.document_id
+def pageNumber = item.page
+def keywords = item.keywords
+def summary = item.summary
+def page_lable = "p"+pageNumber
+def cypher = "MERGE ("+page_lable+":Page {document_id: \\"" + document_id + "\\", page_number: \\"" + pageNumber + "\\"})\\n" +
+  'set '+page_lable+'.summary= "' + item.summary.replace('"', '\\"') + '", \\n' +
+  page_lable+'.page_title= "' + item.page_title.replace('"', '\\"') + '", \\n' +
+  page_lable+".keywords= " + keywords 
+def map = [
+    document_id: document_id,
+    pageNumber: pageNumber,
+    keywords: keywords,
+    summary: summary,
+    page_lable: page_lable
+]
+return map
+'''

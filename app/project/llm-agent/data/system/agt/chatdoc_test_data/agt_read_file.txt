@@ -1,0 +1,39 @@
+/*
+{
+	"title":"Read File Content",
+	"description":"Read file content from uploaded file or knowledge base. If no file is uploaded, the content will be read from the knowledge base.",
+	"parameter":[
+		{
+			"name":"file_data",
+			"label":"*文件",
+			"type":"file"
+		},
+		{
+			"name":"knowledge_name",
+			"label":"File Name"
+		},
+		{
+			"name":"folder_name",
+			"label":"Knowledge Space"
+		}
+	],
+	"life":10000,
+	"version":1
+}
+*/
+// 将上传文件参数赋值
+assign("file_data", "{{file_data}}")
+
+// 判断是否上传了文件
+when('fn.hasValue(file_data)', {
+  // 读取上传的文件内容
+  n_result_data1, act_func.read?filename='{{file_data}}'
+  assign("n_file_data", "{{n_result_data1}}")
+}, {
+  // 从知识库读取指定文件内容
+  n_result_data2, act_kbs.readSectionFile?folderName='{{folder_name}}'&knowledgeName='{{knowledge_name}}'&isSource=true
+  assign("n_file_data", "{{n_result_data2}}")
+})
+
+// 文件结果
+assign("generated_data", "{{n_file_data}}")

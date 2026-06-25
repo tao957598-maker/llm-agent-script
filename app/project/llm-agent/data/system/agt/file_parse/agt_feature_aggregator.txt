@@ -1,0 +1,213 @@
+/*
+{
+	"title":"Aggregate Requirements",
+	"description":"Read paging records from the req_metadata table, summarize them and insert them into the function table.",
+	"parameter":[
+		{
+			"name":"document_id",
+			"label":"文档ID",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"config_page",
+			"label":"配置页数"
+		},
+		{
+			"name":"project_id",
+			"label":"项目ID"
+		},
+		{
+			"name":"version",
+			"label":"版本"
+		}
+	],
+	"resultPlan":"total_count,last_features_list,last_stories_list,last_tasks_list",
+	"life":1000,
+	"tag":"Testing Model",
+    "displayOrder":4,
+	"version":1
+}
+*/
+
+// 参数处理
+when('!fn.hasValue(config_page)', {
+  assign("config_page", "10")
+})
+when('!fn.hasValue(project_id)', {
+  assign("project_id", "1")
+})
+when('!fn.hasValue(version)', {
+  assign("version", "1.0")
+})
+
+// kb_doc_req_metadata取total
+n_kb_count,act_kb.selectBy?sql='SELECT COUNT(*) AS total FROM kb_doc_req_metadata WHERE documentId = {{document_id}}'
+assign("total_count", "{{n_kb_count[0].total}}")
+
+// 批量次数
+n_pages,act_func?script='''
+  def totalPages = Math.ceil({{total_count}} / {{config_page}})
+  def array = (1..totalPages).toList()
+  return array
+'''
+
+assign("features_list", "[]")
+assign("stories_list", "[]")
+assign("tasks_list", "[]")
+
+// 批量处理数据
+foreach('n_data', 'n_pages', {
+  // 下标对应内容
+  assign('item', '{{n_data.item}}')
+
+  // OFFSET
+  n_page,act_func?script='''
+    def pages = ({{item}} - 1) * {{config_page}}
+    return pages
+  '''
+
+  // 批次数据
+  n_kb_data,act_kb.selectBy?sql='SELECT * FROM kb_doc_req_metadata WHERE documentId = {{document_id}} ORDER BY id LIMIT {{config_page}} OFFSET {{n_page}}'
+  assign('batch_item', '{{n_kb_data}}')
+
+  // 调用 n_results_list,tpl_all_in_one_generator,psr_json_python
+  n_prompt,agt_req_prompt?item="{{item}}"batch_item="{{batch_item}}"&document_id="{{document_id}}"&version="{{version}}"&project_id="{{project_id}}"
+  n_results_list,tpl_all_in_one_generator,psr_json_python
+
+  // 数据生成
+  act_func?script='''
+    features_list.addAll(n_results_list.features)
+    stories_list.addAll(n_results_list.stories)
+    tasks_list.addAll(n_results_list.tasks)
+  '''
+
+  // save features
+  act_kb.defineAndImportData?tableName=kb_doc_req_features&data='{{n_results_list.features}}'&graphColumn='graph_content'&embeddingColumn='title'
+  // save stories
+  act_kb.defineAndImportData?tableName=kb_doc_req_stories&data='{{n_results_list.stories}}'&embeddingColumn='title'
+  // save tasks
+  act_kb.defineAndImportData?tableName=kb_doc_req_tasks&data='{{n_results_list.tasks}}'&embeddingColumn='title'
+})
+
+// Features List
+assign('last_features_list', '{{features_list}}')
+// Stories List
+assign('last_stories_list', '{{stories_list}}')
+// Tasks List
+assign('last_tasks_list', '{{tasks_list}}')
+
+// prompt
+define('tpl_all_in_one_generator', '''
+  {{n_prompt}}
+''')
+
+// 提示词
+define('tpl_all_in_one_generator123', '''
+  - Role: 高级需求聚合与功能任务拆解专家
+  - Background: 用户已使用结构化工具将需求文档转化为 req_metadata 数据，现需将这些结构化内容进一步聚合为产品开发三层结构：Features（功能）、Stories（用户故事）、Tasks（开发任务）。
+  - Profile: 你精通产品架构分析、用户目标建模与开发任务拆解，能识别功能性内容中的真实需求点，并组织为开发友好的结构。
+
+  - Skills:
+    • 能识别是否为功能型页面（基于 isFunctional、type、section、description 等综合判断）  
+    • 能从多个页面中提取同类需求内容，聚合为 Feature 模块  
+    • 能从 Feature 出发，拆解用户使用路径为 Story，再细化为开发 Task  
+    • 熟悉前后端常见技术，支持生成 technicalDetail 字段（如 Vue、Element UI、REST API 等）  
+
+  - Goals:
+    接收一批 req_metadata 数据，输出如下结构：
+    {
+      "features": [ ... ],
+      "stories": [ ... ],
+      "tasks": [ ... ]
+    }
+
+    - Feature（功能）：
+      • 基于 isFunctional=true 且 type 含 "requirement", "process", "prototype" 的页面聚合  
+      • 若多个页面内容聚焦同一功能目标（如“实名认证流程”），可归为同一 Feature  
+      • 每个 Feature 建议包含 1~3 个 Stories
+
+    - Story（用户故事）：
+      • 描述用户目标行为，必须以用户视角描述：“为了xxx，我希望xxx”  
+      • 每个 Story 建议包含 1~3 个 Task
+
+    - Task（开发任务）：
+      • 每个 Task 需可独立执行，粒度控制清晰（避免笼统如“开发 UI”）  
+      • 如可判断，请尽量补充 technicalDetail 字段  
+      • 自动推断任务优先级（priority: High / Medium / Low）
+
+  - Field Requirements:
+
+    features:
+      - featureId: 功能唯一编号（如：F101、F201），按批次编号生成
+      - title: 功能标题（英文）
+      - project_id: 取项目ID
+      - sourcePages: 来源页码（如：[1,2,3]）
+      - description: 功能简述（英文，聚焦业务目标与功能范围）
+      - documentId: 来源文档 ID（从代表性页面中选择）
+      - graph_content: 固定为空字符串
+      - update_content: 固定为空字符串
+      - version: 来源用户输入
+      - section: 来源页面的 section 字段（如 Requirement / Process）
+
+    stories:
+      - storyId: 用户故事编号（如 S001-1 表示属于 F001 的第1个 Story）
+      - featureId: 所属功能 ID
+      - title: 用户故事标题（英文）
+      - description: 用户视角下的行为故事（英文）
+      - documentId: 来源页面的 ID
+      - modelContent: 通过description字段提取对应的模型内容,
+      - update_content: 固定为空字符串
+      - version: 来源用户输入
+
+    tasks:
+      - taskId: 开发任务编号（如 T001-1-1 表示属于 F001 的第1个 story 的第1个任务）
+      - storyId: 所属 Story ID
+      - title: 任务标题（英文）
+      - description: 可执行的开发任务内容（英文）
+      - technicalDetail（可选）: 如可判断，请尽量补充，格式：
+        - 前端技术：Vue / Element UI（如 Table、Dialog、Tabs 等）
+        - 后端技术：REST API、字段设计、接口调用说明等
+        - 多项用英文分号分隔
+      - priority: High / Medium / Low（自动推断）
+      - documentId: 来源文档 ID
+      - update_content: 固定为空字符串
+      - version: 来源用户输入
+
+  - Constraints:
+    1. 仅处理 isFunctional=true 且 type 含 ["requirement", "process", "prototype"] 的页面
+    2. 忽略 type 为 ["other"] 或 description 为空、仅为附录/目录/术语说明类内容
+    3. 聚合逻辑应根据语义、关键词、模块归属等综合判断 Feature 归类
+    4. 所有编号应统一连续（如 F001、S001-1、T001-1-1），并保持对应关系
+    5. 所有文本输出为英文，原文术语如 AML、CDD、eKYC 保留不翻译
+    6. 技术说明可选，但建议尽量补充有助于开发理解
+
+  - OutputFormat:
+    使用 JSON 格式输出结构化内容：
+    {
+      "features": [...],
+      "stories": [...],
+      "tasks": [...]
+    }
+
+  - Workflow:
+    1. 过滤无效页面，仅保留功能性内容
+    2. 聚合为功能模块（Feature），构建完整标题与描述
+    3. 拆解为用户故事（Story），从用户目标出发编写
+    4. 每个故事进一步生成任务（Task），包含描述与可选技术说明
+    5. 输出合法 JSON 结构，字段齐全、格式标准
+
+  # 当前批次编号：
+  {{item}}
+
+  # 当前批次数据：
+  {{batch_item}}
+
+  # 文档ID（整批来源文档 ID）：
+  {{document_id}}
+
+  # 项目ID：
+  {{project_id}}
+
+  # 版本：
+  {{version}}
+''')

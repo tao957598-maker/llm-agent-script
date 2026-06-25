@@ -1,0 +1,46 @@
+/*
+{
+	"title":" mcp runner ",
+    "description": "mcp执行者",
+	"parameter": [
+        {
+            "name":"userInput",
+            "label":"客户问题",
+            "type":"textarea"
+        },
+        {
+            "name":"mcpCode",
+            "label":"mcp工具编号",
+            "type":"textarea"
+        }
+  ],
+	"tag":"chatdoc_QA",
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"n_mcp_response",
+	"life":100,
+	"displayOrder":11,
+	"version":2
+}
+*/
+"""
+这个是不同机器人的配置不同，需要后端处理。才能动态调用。
+robotCode :  dingcxsnxllzatn7z7bk 
+"""
+
+n_robot_code, act_kb.readCfg?type='dingtalk'&key='robot_code'
+// 测试，写定
+// assign('mcp_codes', 'mcp_feishu')
+// 解析 LLM 输出的 JSON
+//$ run mcp
+n_mcp_response, tpl_mcp_skills, act_plan.run
+define("tpl_mcp_skills",'''
+robotCode :  {{n_robot_code}}
+
+分析用户问题，从工具集中选择合适的工具及参数。
+#用户问题:
+{{userInput}}
+
+#工具集:
+{{fn.toolset(mcpCode)}}
+
+''')

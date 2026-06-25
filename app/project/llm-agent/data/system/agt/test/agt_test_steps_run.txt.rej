@@ -1,0 +1,9 @@
+diff a/agt/test/agt_test_steps_run.txt b/agt/test/agt_test_steps_run.txt	(rejected hunks)
+@@ -56,7 +56,6 @@
+ // Load steps if not provided
+ when('fn.equals(steps, "")', {
+ 	// Load steps from KB
+-	act_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("test_no,test_no,system_name,system")}}'\
+ 	act_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("test_no,test_no")}}'\
+ 		act_memory.assign?var=steps
+ })

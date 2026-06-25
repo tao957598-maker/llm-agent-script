@@ -1,0 +1,776 @@
+/*
+{
+	"title":"Loop Generate Step Test",
+	"description":"生成测试步骤",
+	"parameter":[
+		{
+			"name":"system_name",
+			"label":"系统",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"url",
+			"label":"指定URL",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"current_uri",
+			"label":"当前路由",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"cookie",
+			"label":"cookie",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"time",
+			"label":"时间",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"explore_mode",
+			"label":"运行模式",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"custom_param",
+			"label":"补充参数内容（账号密码等补充）",
+			"maxLength":50,
+			"hidden":false,
+			"type": "textarea",
+			"readOnly":false
+		},
+		{
+			"name":"spider_deep_num",
+			"label":"最大采集深度",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"spider",
+	"displayOrder":2,
+	"version":1
+}
+*/
+n_max_spider_deep, act_func?script='''
+    def spider_deep = spider_deep_num.toInteger()
+    return spider_deep
+'''
+// max spider deep num
+assign('max_spider_deep', '{{n_max_spider_deep}}')
+
+// system_namesystem_name
+assign('system_name', '{{system_name}}')
+
+when('explore_mode == "FileDownExplorationMode"', {
+  // Set FileDownExplorationMode params
+  assign("spider_deep_num", "2")
+})
+
+when('time == "first"', {
+	// is first time
+	n_parameters,act_func?script='''
+		def params = [:]
+		params.system_name = system_name
+		params.biz_id = ''
+		params.base_url = url
+		params.current_uri = current_uri
+		params.run_steps = '[{"type":"open_url", "value": "{{current_uri}}"}]'
+		params.msg = "打开{{url}}{{current_uri}}"
+		params.action_type = 'open_url'
+		params.run_success = '2'
+		params.target_uri = current_uri
+		params.cookie = cookie
+		params.spider_deep = 1
+		params.explore_mode = explore_mode
+
+		return params
+	'''
+},{
+	// not first time query all data
+	n_kb_all_data,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" AND run_success = 2 AND spider_deep <= {{max_spider_deep}}'
+	// check n_parameters
+	when('{{(n_kb_all_data![])?size > 0}}', {
+			n_parameters,act_func?script=''' n_kb_all_data[0] '''
+	},{
+		// Get All knowledge_file
+		n_kb_all_knowledge_file, act_kb.selectBy?sql='SELECT Title,knowledge_id FROM kb_spiderdeep_content WHERE system_name = "{{system_name}}" AND knowledge_id != ""'
+		// Get res knowledge data
+		n_res_knowledge_data,act_func?script='''
+		def result = n_kb_all_knowledge_file.collect { item ->
+			def map = [:]
+			map[item.Title] = item.knowledge_id.toString()
+			return map
+		}
+		'''
+		// return
+		assign('return', '{{n_res_knowledge_data}}')
+		act_flow.go?plan=end
+	})
+})
+
+// has n_parameters?
+when('!fn.hasValue(n_parameters)', {
+	// return
+	assign('return', 'false')
+	act_flow.go?plan=end
+},{
+	// Get folder_id
+	assign("n_folder_id", "261432912946724864")
+	n_parameters,act_func?script='''
+		n_parameters.folder_id = n_folder_id
+		return n_parameters
+	'''
+
+	// send
+	n_spider_deep_result, act_rpa.send?command=SpiderDeep&parameters='{{n_parameters}}'
+	// send_all_data
+	n_data,act_func?script=''' n_spider_deep_result[0] '''
+
+	// check send backdata
+	when('!fn.hasValue(n_data.old_data)', {
+		// return
+		assign('return', 'false')
+		act_flow.go?plan=end
+	})
+
+	when('n_data.old_data.run_success != "1" && n_data.old_data.run_success != "3"', {
+		// 任务不在扫描范围内, 提前结束
+		assign('old_data', '{{n_data.old_data}}')
+		assign('n_run_success', '{{n_data.old_data.run_success}}')
+		act_kb.update?name='kb_spiderdeep_directory'&columnValues='{{n_data.old_data}}'&where='{"id":"{{n_parameters.id}}"}'
+
+		n_param,act_func?script='''
+			def v = []
+			v << fn.str(n_parameters.run_steps)
+		'''
+		// 更新相同步骤状态
+		act_kb.selectBy?sql="UPDATE kb_spiderdeep_directory SET run_success = '{{n_run_success}}' WHERE run_steps=?"&parameters={{n_param}}
+
+		assign('return', 'true')
+		act_flow.go?plan=end
+	})
+
+
+	// is_return_able
+	when('n_data.old_data.is_return_able == "0"', {
+		// is_return_able == 0
+		n_return_able_data,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" AND run_success = 1 AND (target_uri = "{{n_data.old_data.current_uri}}" OR current_uri like "%{{n_data.old_data.target_uri}}%")'
+		n_gen_data,tpl_generate_return_able_data,psr_json_python
+		n_check_return_able,act_rpa.send?command=SpiderDeep&parameters='{{n_gen_data}}'
+		// check returnable data
+		when('!fn.hasValue(n_check_return_able[0].old_data)', {
+			// return
+			assign('return', 'false')
+			act_flow.go?plan=end
+		})
+	})
+
+	// back content
+	assign('n_content', '{{n_data.spider_deep_content}}')
+
+	when('explore_mode == "stepExplorationMode"', {
+		// 当前步骤执行结果入库
+		agt_content_version?n_content={{n_content}}&n_old_data={{n_data.old_data}}&n_parameters={{n_parameters}}
+		assign('n_same_content', '{{n_same_content}}')
+		
+		when('n_same_content.have_content != true', {
+			// 元素与库内不一致才会走步骤生成
+			when('n_data.old_data.run_success == "3"', {
+				// 当前步骤未发生页面跳转，尝试对比差异
+				n_steps_list_first,tpl_compare_data,psr_json_python
+
+				// 生成后开始校验
+				agt_verify_steps?n_steps_list_first={{n_steps_list_first}}&custom_param={{custom_param}}&now_collect_data={{n_content.collect_data}}
+
+				// 生成新步骤
+				n_content_data,act_func?script='''
+					def current_uri = n_data.old_data.current_uri
+					def result = []
+					// 循环处理每个step
+					n_steps_list.each { steps ->
+						def params = [:]
+						
+						// 设置固定值
+						params.action_type = "execute"
+						params.target_uri = ""
+						params.run_success = "2"
+						params.cookie = ""
+						// 从n_parameters中获取数据
+						params.system_name = n_parameters.system_name ?: ""
+						params.base_url = n_parameters.base_url ?: ""
+						params.current_uri = current_uri
+						// 设置run_steps（当前步骤列表）
+						params.run_steps = steps.run_steps
+						params.msg = steps.msg
+						// 步骤关联id, 由这个步骤数据生成出新的步骤(父级id)
+						params.step_relate_id = n_parameters.id
+						// 差异对比时，深度不变
+						params.spider_deep = n_data.old_data.spider_deep
+						result << params
+					}
+					return result
+				'''
+			},	{
+				// run_success = 1
+				// 元素步骤探索模式2, 生成新的步骤列表
+				n_steps_list_first, tpl_extract_jump_steps,psr_json_python
+
+				// 生成后开始校验
+				agt_verify_steps?n_steps_list_first={{n_steps_list_first}}&custom_param={{custom_param}}&now_collect_data={{n_content.collect_data}}
+
+				// 组装目录表数据
+				n_content_data,act_func?script='''
+					def current_uri = n_data.spider_deep_content.current_uri
+					def result = []
+					// 循环处理每个step
+					n_steps_list.each { steps ->
+						def params = [:]
+						
+						// 设置固定值
+						params.action_type = "execute"
+						params.target_uri = ""
+						params.run_success = "2"
+						params.cookie = ""
+						// 从n_parameters中获取数据
+						params.system_name = n_parameters.system_name ?: ""
+						params.base_url = n_parameters.base_url ?: ""
+						params.current_uri = current_uri
+						// 设置run_steps（当前步骤列表）
+						params.run_steps = steps.run_steps
+						params.msg = steps.msg
+						// 步骤关联id（父级id）
+						params.step_relate_id = n_parameters.id
+						result << params
+					}
+					return result
+				'''
+
+				// 去重逻辑1，新生成的任务去重
+				n_param,act_func?script='''
+					def v = []
+					v << fn.str(n_old_data.run_steps)
+					v << n_old_data.system_name
+				'''
+				// 查询目录表重复的步骤做更新
+				n_all_repeat_steps,act_kb.selectBy?sql="SELECT * FROM kb_spiderdeep_directory WHERE run_steps =? and system_name=? and run_success=2"&parameters={{n_param}}
+				foreach('n_repeat_steps', 'n_all_repeat_steps', {
+					// 存在重复步骤，尝试直接赋值target_uri
+					assign('repeat_steps_item', '{{n_repeat_steps.item}}')
+					assign('n_new_biz_id_str', '{{n_old_data.system_name + repeat_steps_item.current_uri + n_old_data.target_uri + n_old_data.run_steps}}')
+					assign('n_new_biz_id', "{{fn.md5(n_new_biz_id_str)}}")
+
+					// 新生成出的biz_id是否已存在
+					n_steps_same_biz,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE biz_id = "{{n_new_biz_id}}"'
+					when('{{(n_steps_same_biz![])?size > 0}}', {
+						// 重复步骤已存在biz_id 当前页跳转到目标页已执行过，仅更新target_uri、run_success、is_return_able字段
+						act_kb.selectBy?sql="UPDATE kb_spiderdeep_directory SET content_id='{{n_same_content.content_id}}', run_success = 1, directory_id = '{{n_old_data.directory_id}}', target_uri='{{n_old_data.target_uri}}', is_return_able='{{n_old_data.is_return_able}}' WHERE current_uri='{{repeat_steps_item.current_uri}}' and run_steps = ? and system_name='{{n_old_data.system_name}}' and run_success =2"&parameters={{n_param}}
+					},{
+						n_param,act_func?script='''
+							def v = []
+							v << fn.str(n_old_data.run_steps)
+						'''					
+						// 重复步骤不存在biz_id，此时directory_id相同，biz_id唯一，更新 biz_id、directory_id、target_uri、run_success、is_return_able
+						act_kb.selectBy?sql="UPDATE kb_spiderdeep_directory SET content_id='{{n_same_content.content_id}}', run_success = 1, biz_id = '{{n_new_biz_id}}', directory_id = '{{n_old_data.directory_id}}', target_uri='{{n_old_data.target_uri}}', is_return_able='{{n_old_data.is_return_able}}' WHERE current_uri='{{repeat_steps_item.current_uri}}' and run_steps = ? and system_name='{{n_old_data.system_name}}' and run_success =2"&parameters={{n_param}}
+					})
+				})
+			})
+
+		})
+
+	}, {
+		// URL探索 / 文件下载模式 直接保存返回
+		act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{n_data.old_data}}'
+		act_kb.defineAndImportData?tableName=kb_spiderdeep_content&data='{{n_content}}'
+
+		// URL探索 / 文件下载模式, 不需要解析步骤元素
+		n_content_data,act_func?script='''
+			def content_data = []
+			return content_data
+		'''
+	})
+
+	// all directory
+	n_all_directory,act_func?script='''
+		def arr1 = n_data.spider_deep_directory
+		def arr2 = n_content_data
+		def merged = arr1 + arr2
+		return merged
+	'''
+
+	foreach('n_d_data', 'n_all_directory', {
+		// d_item
+		assign('d_item', '{{n_d_data.item}}')
+
+		// 更新采集深度
+		assign('old_spider_deep', '{{n_data.old_data.spider_deep}}')
+		assign('now_data_spider_deep', '{{d_item.spider_deep}}')
+	
+		// 生成返回数据的采集深度
+		when('fn.hasValue(now_data_spider_deep)', {
+			assign('new_spider_deep', '{{now_data_spider_deep}}')
+		},{
+			n_new_spider_deep, act_func?script='''
+				def new_spider_deep = old_spider_deep + 1
+				return new_spider_deep
+			'''
+			assign('new_spider_deep', '{{n_new_spider_deep}}')
+		})
+
+		// 插入 spider_deep字段
+		act_func?script="d_item.put('spider_deep', '''{{new_spider_deep}}''')"
+
+		// 是否存在biz_id
+		when('fn.hasValue(d_item.biz_id!)', {
+			// 查询目录表是否有相同的biz
+			n_same_biz,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE biz_id = "{{d_item.biz_id}}"'
+			when('{{(n_same_biz![])?size > 0}}', {
+				assign('same_biz_id', '{{n_same_biz}}')
+				// 目录表已有数据，更新 run_success = 1 
+				act_kb.selectBy?sql='UPDATE kb_spiderdeep_directory SET run_success = 1 WHERE biz_id = "{{d_item.biz_id}}"'
+			},{
+				// 目录表无数据，保存
+				act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{d_item}}'
+			})
+		},{
+			// 新生成的步骤，先直接入库
+			act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{d_item}}'
+
+			n_param,act_func?script='''
+				def v = []
+				v << fn.str(d_item.run_steps)
+			'''
+			// 去重逻辑2：查找库内此步骤是否已执行过（步骤相同，run_success = 1）
+			n_executed_repeat_steps,act_kb.selectBy?sql="SELECT * FROM kb_spiderdeep_directory WHERE run_steps = ? and system_name='{{d_item.system_name}}' and run_success = 1"&parameters={{n_param}}
+			when('{{(n_executed_repeat_steps![])?size > 0}}', {
+				// 此步骤已被执行过，尝试直接赋值target_uri
+				n_executed_repeat_step,act_func?script=''' n_executed_repeat_steps[0] '''
+				// 当前重复步骤
+				assign('executed_repeat_step', '{{n_executed_repeat_step}}')
+				assign('n_new_biz_id_str', '{{executed_repeat_step.system_name + d_item.current_uri + executed_repeat_step.target_uri + d_item.run_steps}}')
+				assign('n_new_biz_id', "{{fn.md5(n_new_biz_id_str)}}")
+				
+				n_param,act_func?script='''
+					def v = []
+					v << fn.str(executed_repeat_step, 'run_steps')
+				'''
+				// 模拟生成出的biz_id是否已存在
+				n_steps_same_biz,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE biz_id = "{{n_new_biz_id}}"'
+				when('{{(n_steps_same_biz![])?size > 0}}', {
+					// 新解析的步骤已存在biz_id 当前页跳转到目标页已执行过，仅更新directory_id、target_uri、run_success、is_return_able字段
+					assign('steps_same_biz', '{{n_steps_same_biz}}')
+					act_kb.selectBy?sql="UPDATE kb_spiderdeep_directory SET content_id='{{executed_repeat_step.content_id}}', run_success = 1, directory_id = '{{executed_repeat_step.directory_id}}', target_uri='{{executed_repeat_step.target_uri}}', is_return_able='{{executed_repeat_step.is_return_able}}' WHERE current_uri='{{d_item.current_uri}}' and run_steps = ? and system_name='{{executed_repeat_step.system_name}}' and run_success = 2"&parameters={{n_param}}
+				},{
+					// 新解析的步骤不存在biz_id，此时directory_id相同，biz_id唯一，更新 biz_id、directory_id、target_uri、run_success、is_return_able
+					act_kb.selectBy?sql="UPDATE kb_spiderdeep_directory SET content_id='{{executed_repeat_step.content_id}}', run_success = 1, biz_id = '{{n_new_biz_id}}', directory_id = '{{executed_repeat_step.directory_id}}', target_uri='{{executed_repeat_step.target_uri}}', is_return_able='{{executed_repeat_step.is_return_able}}' WHERE current_uri='{{d_item.current_uri}}' and run_steps = ? and system_name='{{executed_repeat_step.system_name}}' and run_success = 2"&parameters={{n_param}}
+				})
+			})
+		})
+	})
+})
+
+assign('return', 'true')
+
+
+
+
+
+agent('agt_verify_steps', {
+	// 步骤生成后开始校验
+	n_verify_steps,tpl_verify_steps,psr_json_python
+
+	n_steps_list,act_func?script='''
+		if (n_verify_steps.success == true) {
+			// 不需要修正
+			return n_steps_list_first
+		} else {
+			// 返回steps_list
+			return n_verify_steps.steps_list
+		}
+	'''
+})
+
+agent('agt_content_version', {
+	// 内容重复版本号判断
+	assign('n_directory_id', "{{n_content.directory_id}}")
+	assign('n_collect_data', "{{n_content.collect_data}}")
+
+	// 查询库内directory_id相同的数据作对比
+	n_content_list,act_kb.selectBy?sql="SELECT content_id, directory_id, collect_data, content_version FROM kb_spiderdeep_content WHERE directory_id = '{{n_directory_id}}'"
+
+	n_same_content, act_func?script='''
+		// 当前页面的 id 集合
+		def currentIds = n_collect_data
+				.findAll { it.containsKey('id') }
+				.collect { it.id }
+				.toSet()
+		def maxVersion = 0
+		def res = [:]
+		for (item in n_content_list) {
+			def libData = item.collect_data
+			def version = item.content_version ?: 0
+			maxVersion = Math.max(maxVersion, version)
+			def libIds_str = fn.str(libData,"id")
+			// .toSet() 会先去重再排序
+            def libIds_list = fn.list(libIds_str).findAll { it != null }.toSet()
+
+			// id 完全一致（忽略顺序）
+			if (currentIds == libIds_list) {
+				res.have_content = true
+				res.directory_id = item.directory_id
+				res.content_id = item.content_id
+				return res
+			}
+		}
+
+		// 都不匹配，返回最大版本号 + 1
+		def newVersion = maxVersion + 1
+		def contentId = "${n_directory_id}${newVersion}".md5()
+
+		res.have_content = false
+		res.max_version = newVersion
+		res.directory_id = n_directory_id
+		res.content_id = contentId
+		return res
+	'''
+
+	when("n_same_content.have_content != true", {
+		// 本内容为首次进入，需要入内容表
+  		n_save_content, act_func?script='''
+  			def res = [:]
+     		res = n_content
+			res.content_id = n_same_content.content_id
+			res.content_version = n_same_content.max_version
+  			return res
+		'''
+		// first time, save content
+		act_kb.defineAndImportData?tableName=kb_spiderdeep_content&data='{{n_save_content}}'
+	})
+
+	// 开始更新任务表，判断执行后biz_id是否存在
+	n_old_same_data,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE biz_id = "{{n_old_data.biz_id}}"'
+	when('{{(n_old_same_data![])?size > 0}}', {
+		// 找到任务表并更新任务表状态
+		act_kb.selectBy?sql='UPDATE kb_spiderdeep_directory SET content_id="{{n_same_content.content_id}}", run_success = {{n_old_data.run_success}},is_return_able = {{n_old_data.is_return_able}}, directory_id = "{{n_directory_id}}", target_uri = "{{n_old_data.target_uri}}" WHERE id = "{{n_parameters.id}}"'
+	},{
+		// 未找到，直接新增
+		n_save_old_data, act_func?script='''
+			def res = [:]
+			res = n_old_data
+			res.content_id = n_same_content.content_id
+			return res
+		'''
+		when('!fn.hasValue(n_parameters.id)', {
+			// 首次执行没有id，直接入库
+			act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{n_save_old_data}}'
+		}, {
+			// 非首次运行，根据id更新任务
+			act_kb.update?name='kb_spiderdeep_directory'&columnValues='{{n_save_old_data}}'&where='{"id":"{{n_parameters.id}}"}'
+		})
+	})
+})
+
+
+// compare and generate
+define('tpl_compare_data', '''
+	- Role: 数据处理与自动化脚本生成专家
+	- Background: 用户需要对两个数组进行一系列数据处理、比较差异，根据差异的ID中，最终输出符合特定格式的JSON结果。需要确保工作流每一步都准确无误。
+	- Profile: 你是一位精通数据处理和自动化脚本生成的专家，对JSON数据结构、数组操作和逻辑处理有着丰富的经验和深刻的理解，能够高效地完成复杂的数据处理任务。
+
+	说明：
+	1.arrayA 为根据"执行步骤信息中的run_steps"执行后得到的元素信息
+	2.arrayB 为根据"执行步骤信息中的run_steps"执行前得到的元素信息
+	3.这两个列表为同一个页面得到的元素信息，其中相同的id已被剔除
+	4.原步骤不做任何变动，不考虑任何因素，新步骤直接在原先的"执行步骤信息中的run_steps"列表的末位新增插入
+
+	- Goals:
+	过滤掉不包含"id"字段的对象。
+	新增插入有差异的数据的ID必须为arrayA中存在但arrayB中不存在的元素id。
+	仅调整"run_steps"和"msg"的内容
+		找到差异id后，原步骤不做任何变动，新步骤直接在原先的"执行步骤信息中的run_steps"列表的末位新增插入，一次只会新增插入一条
+		msg为参考"执行步骤信息中的msg字段" + 新生成的run_steps动态推测出的步骤描述(如：先xxx，再xxx)，其他字段不要做修改、删减
+	当无任何差异的时候，返回空数据: []
+
+	- Constrains: 输出结果必须严格按照指定的JSON格式，不得包含任何解释性文字；即使只有一个差异元素，也必须输出；不得因数据看似相似而忽略实际存在的差异。
+	- OutputFormat: 严格按照指定的JSON格式输出，如果无差异则输出[]。
+	- Workflow:
+	1. 解析输入的JSON字符串arrayA和arrayB为数组对象。
+	2. 过滤掉不包含"id"字段的对象。
+	3. 选取有差异的数据的ID必须为arrayA中存在但arrayB中不存在的元素id。
+	4.找到差异id后，不考虑任何因素，直接在原先的"执行步骤信息中的run_steps"列表的末位新增插入，并将其包装成符合要求的JSON对象。
+	5. 检查每一个"run_steps"只会在原先的run_steps列表中新增插入一条有差异的数据
+
+	要求：
+	1、run_steps中新增的步骤ID必须为arrayA中存在但arrayB中不存在的元素id
+	2、输出 JSON list，每一个列表都代表一个插入后的差异，如：[{"msg": "根据run_steps推测出的步骤描述", "run_steps": [run_steps1, run_steps2]},{"msg": "根据run_steps推测出的步骤描述", "run_steps": [run_steps3, run_steps4]}]
+	3、当arrayA与arrayB的ID无差异的时候，返回 []
+
+	- Examples:
+		输入参数：  
+			arrayA: [{"id":"id_171780386","name":"Accounts","rect":{"height":50,"left":167,"top":121,"width":101},"tag":"link"},{"id":"id_171810177","name":"Transfer","rect":{"height":50,"left":269,"top":121,"width":95},"tag":"link"},{"id":"id_203409476","name":"Between Accounts","rect":{"height":26,"left":270,"top":177,"width":158},"tag":"link"},{"id":"id_203498849","name":"Add/Edit Recipient","rect":{"height":26,"left":270,"top":248,"width":158},"tag":"link"},{"id":"id_171839968","name":"Appointment","rect":{"height":50,"left":364,"top":121,"width":122},"tag":"link"},{"pageUrl":"http://189.1.224.215:8888/userFront","tag":"link"},{"pageTitle":"User Front"}] 
+			arrayB: [{"id":"id_171780386","name":"Accounts","rect":{"height":50,"left":167,"top":121,"width":101},"tag":"link"},{"id":"id_171810177","name":"Transfer","rect":{"height":50,"left":269,"top":121,"width":95},"tag":"link"},{"id":"id_171839968","name":"Appointment","rect":{"height":50,"left":364,"top":121,"width":122},"tag":"link"},{"pageUrl":"http://189.1.224.215:8888/userFront","tag":"link"},{"pageTitle":"User Front"}]  
+
+		输出结果：
+		[
+			{
+				"msg": "先点击[Transfer], 再点击[Between Accounts]按钮",
+				"run_steps": [
+					{
+						"type": "click",
+						"target": "id_171810177"
+					},
+					{
+						"type": "click",
+						"target": "id_203409476"
+					}
+				]
+			},
+			{
+				"msg": "先点击[Transfer], 再点击[Add/Edit Recipient]按钮",
+				"run_steps": [
+					{
+						"type": "click",
+						"target": "id_171810177"
+					},
+					{
+						"type": "click",
+						"target": "id_203439267"
+					}
+				]
+			}
+		]
+
+	### 用户输入数据   
+		1. arrayA: {{n_data.spider_deep_content.diff_end_data}} 
+		2. arrayB: {{n_data.spider_deep_content.diff_start_data}}   
+		3. 执行步骤信息: {{n_parameters}}
+		4. 自定义参数：{{custom_param}}
+''')
+
+
+// prompt
+define('tpl_extract_jump_steps', '''
+	- Role: 你是一位专业的页面操作流程抽取与步骤映射专家。  
+
+	我会提供一个页面解析的 JSON 数据（包含 system_name、base_url、current_uri、cookie、version、collect_data 等字段）。  
+	- Goals:
+		根据 collect_data 中的元素信息，提取所有 **可能导致页面跳转的操作**，并转化为标准执行步骤 JSON list。  
+		由collect_data生成一个字典列表: [{"msg": "", "run_steps": [run_steps1]}, {"msg": "", "run_steps": [run_steps2]}, {"msg": "", "run_steps": [run_steps2]}]
+		"run_steps" 为一个完整的动作组，对应一个跳转操作，可能存在多个步骤组合， "msg" 为根据元素信息和步骤组合推测的描述,
+		覆盖范围：登录页、注册页、首页导航、下拉菜单、按钮、超链接、仪表盘操作等常用网页场景。 
+
+	# 部分生成规则、元素说明：  
+		a. **直接跳转类元素（仅作参考）**（单独生成 click 步骤）  
+		- tag = "a"  
+		- tag = "link"  
+		- tag = "image-button"  
+		- → run_steps: {"msg": "根据元素信息推测的描述", "run_steps": [{ "type": "click", "target": 元素id}]}
+
+		b. **按钮类元素**（需考虑组合逻辑）  
+		- tag = "button"  
+		- 如果按钮关联了用户名输入框 + 密码输入框，则作为 **登录操作**：  
+		1) 用户名输入 → { "type": "input", "target": 用户名id, "value": ...}  
+		2) 密码输入 → { "type": "input", "target": 密码id, "value": ...}  
+		3) 点击登录按钮 → { "type": "click", "target": 登录按钮id}  
+		- 如果按钮关联了其他输入类元素，则和相关输入一起生成组合操作。
+			如：			
+				{
+					"msg": "输入账号'...', 密码'...', 点击【Sign in】按钮登录",
+					"run_steps": [
+						{"type": "input", "target": "用户名对应的元素id", "value": "..."},
+						{"type": "input", "target": "密码对应的元素id", "value": "..."},
+						{"type": "click", "target": "登录按钮对应的元素id"}
+					]
+				}
+		- 独立按钮（提交、确认、下一步等） → {"msg": "点击【元素名称或类型】+ 步骤描述", "run_steps": [{ "type": "click", "target": 按钮id}]}
+
+		c. **输入类元素**（仅在与按钮组合时生效）  
+		- tag = "input" / "textarea" / "tableInput" / "switch" / "select"  
+		- 有值时 → {"msg": "输入/选择【元素名称或类型】+ 步骤描述", "run_steps": [{ "type": "input", "target": 元素id, "value": 值}]}
+		- value值可以在自定义参数中(特别要注意区分参数需要添加的字段和页面)提取相关联的值，也可以直接在元素中提取，若无提取值时 → 不生成 value 字段，仅保留 msg 提示  
+
+		d. **其他可能触发跳转的容器类元素**  
+		- tag = "div" / "span"  或其他
+	
+		e. **图片元素定义**
+		- tag = "image" / "image-button" / "svg"
+        	默认忽略所有图片相关元素，当自定义参数中明确包含"需要操作 / 点击 图片"或类似指令时，需要对图片（含svg）元素进行操作
+			否则：忽略掉图片的数据操作，不对图片、纯文本（不可点击的元素）进行点击操作
+
+		f. **表格元素定义**
+		- tag = "table-box" / "table-header"(表头) / "cell"(单元格) 或其他有表格语义的类型
+			当存在表格中的元素或者表格内的子集的时候，需要忽略不允许提取里面的元素，除非自定义参数中明确包含"需要操作 / 点击表格"或类似指令
+
+	## 输出示例：
+	run_steps 示例:
+	- 输入框 -> {"msg": "输入账号","run_steps": [{ "type": "input", "target": "id_xxx", "value": "提取元素中的值或对应页面的自定义参数，无则不显示"}]}
+	- 密码框 -> {"msg": "输入密码","run_steps": [{ "type": "input", "target": "id_xxx", "value": "提取元素中的值或对应页面的自定义参数，无则不显示"}]}
+	- 点击按钮 -> {"msg": "点击【登录】进行登录", "run_steps": [{"type": "click", "target": "id_xxx"}]}
+
+	## 输出要求：  
+	- run_steps 必须带有 msg 字段，用于简要描述操作目的。
+	- msg为根据元素信息推测的步骤描述，统一输出风格为：点击【xxx】 + 由元素信息用自己的语言总结出描述
+	- 忽略跟文件上传、文件导出、下载、搜索相关的元素
+	- 输出 JSON list，"run_steps" 为一个完整的动作组，对应一个跳转操作，"msg" 为根据元素信息和步骤组合推测的描述,
+	如：[{"msg": "", "run_steps": [run_steps1]}, {"msg": "", "run_steps": [run_steps2]}, {"msg": "", "run_steps": [run_steps2]}]
+	- 每组操作都包含完整根节点字段
+	- 不要额外解释或说明
+	- 输出时检查步骤是否存在约束条件中禁止出现的步骤（如登出、数据修改、翻页、条件选择（如选择日期等））按钮
+
+	- Examples:
+		输入 collect_data：
+		[
+			{"id": "id_2581586144", "tag": "input", "type": "text", "placeholder": "Username"},
+			{"id": "id_1526379877", "tag": "input", "type": "password", "placeholder": "Password"},
+			{"id": "id_1580495499", "tag": "button", "type": "submit", "name": "Sign in"},
+			{"id": "id_1094787217", "tag": "link", "name": "Sign up!"},
+			{"id": "id_1423062691", "tag": "a", "name": "Home"},
+			{"id": "id_171780386", "tag": "image-button", "name": "Accounts"},
+			{"id": "id_171810177", "tag": "div", "name": "Transfer", "onclick": "goTransfer()"}
+		]
+		输出 JSON list：
+		[
+			{
+				"msg": "输入账号'admin', 密码'xJbNmQnqk4wq0Fc', 点击【Sign in】按钮登录",
+				"run_steps": [
+					{"type": "input", "target": "id_2581586144", "value": "admin"},
+					{"type": "input", "target": "id_1526379877", "value": "xJbNmQnqk4wq0Fc"},
+					{"type": "click", "target": "id_1580495499"}
+				]
+			},
+			{
+				"msg": "点击【Sign up!】注册账号",
+				"run_steps": [
+					{"type": "click", "target": "id_1094787217"}
+				]
+			}
+		]
+
+	# 输入参数：
+	{{n_parameters}}
+
+	# current_uri：
+	{{n_data.spider_deep_content.current_uri}}
+
+	# collect_data：
+	{{n_content.collect_data}}
+
+	#自定义参数：
+	{{custom_param}}
+''')
+
+
+define('tpl_verify_steps', '''
+你是一个步骤过滤器，仅根据以下规则判断每个步骤是否应被保留。不要生成、解释或修改任何内容。
+
+	# 输入格式（必须包含以下三部分）：
+	##【自定义参数】
+	用户可能在此声明与约束条件相反允许或禁止的操作类型，例如：“允许点击勾选框”
+
+	## 【待校验步骤】
+	（一个步骤列表，每个步骤包含操作描述和目标元素标识）
+
+	## 【页面元素信息】
+	当前页面搜集到的所有元素，里面的id为唯一的
+    
+    # 约束条件：
+    - 特殊类别：取消、返回、输入账号密码登录操作 不在约束范围内
+	- 登出类：元素 text / aria-label / title / id 包含（不区分大小写）"logout"、"sign out"、"登出"、"退出登录"、"注销"
+	- 执行后会 “新建”、“删除数据”、“提交”、“注册账号”、“保存”的步骤；
+	- 执行任何输入、修改、勾选、筛选、日期选择、搜索，翻页 等
+	- 表格交互类：对 tag 为 "table" 的元素或其子元素进行点击、勾选、展开等操作
+	- 图片、纯文本（不能点击的元素）
+
+	# 处理逻辑：
+	1. 先对【待校验步骤】中的每一步输出检查：
+        a. 根据步骤中引用的元素 ID 或描述，在【页面元素信息】中找到对应元素。
+        b. 判断该步骤是否属于约束范围内：
+    2. 解析【自定义参数】
+        - 当没有声明的时候，是否剔除以约束条件为准，如果没有不在约束范围内，则认为步骤合法
+        - 识别用户显式允许 / 禁止的操作类型, 若包含“允许退出登录”、“允许登出”或类似表述，则视为允许登出类操作。
+        - 其他操作类型（如“允许翻页”、“允许表单输入”）需显式写出才生效。
+	3. 如果步骤属于以上约束操作类别，则检查自定义参数是否明确允许该类操作。若未允许，则剔除；若允许，则保留。
+	4. 如果步骤不属于以上任何约束操作类别，则视为合法，直接保留。
+	5. 合法步骤原样保留，顺序不变。
+
+
+	# Workflow:
+	1. 先逐个输出【待校验步骤】中，是否存在约束范围内的步骤
+	2. 当步骤不在约束范围内时，认为次步骤合法
+    3. 当出现约束范围内的步骤时，检查自定义参数是否明确允许该类操作。若未允许，则剔除；若允许，则保留。
+	4. 检查结果是否存在 1.约束范围内，同时自定义参数未明确说明允许但未剔除 2.不在约束范围内但被异常剔除的情况
+	5. 返回json格式的数据
+
+	输出要求：
+	1. 先输出执行流程，按照Workflow进行简短输出
+	2. 再输出最终结果
+	- 若所有步骤均合法：{"success": true}
+	- 若有非法步骤：{"success": false, "steps_list": [所有合法步骤的原始对象...]}
+	- 若剔除后没有步骤，steps_list返回[]，如：{"success": false, "steps_list": []}
+
+	## 自定义参数：
+		{{custom_param}}
+
+	## 根据当前页面元素信息生成的步骤：
+	{{n_steps_list_first}}
+
+	## 当前页面搜集到的元素：
+	{{now_collect_data}}
+''')
+
+
+
+
+
+// n_return_able_data
+define('tpl_generate_return_able_data', '''
+	在执行前先解释目标与思路
+		1、请根据已执行过并成功执行的数据，总结出一个需要执行的操作run_steps列表
+		2、通过在 {{n_data.old_data.target_uri}} 页面上进行操作，返回到 {{n_data.old_data.current_uri}} 路由中
+		3、当前路由current_uri必须为 {{n_data.old_data.target_uri}} 路由下的
+		4、目标路由target_uri必须为 {{n_data.old_data.current_uri}} 下的
+		5、当不能直接获取数据时，进行run_steps列表的组合，组合成的每一个run_steps必须都是已执行过的，不允许凭空生成
+		6、当涉及到登录的操作时，登录操作结束后直接使用open_url的方式进行直接跳转：如{"type": "open_url", "value": "uri"}
+		7、直接返回
+		
+		字段解释：
+		1、run_steps：需要执行的操作列表，依次执行
+		2、current_uri：执行前的当前uri路由
+		3、target_uri：经过run_steps执行后，得到的路由
+		
+	## 下面为案例：
+	### 已执行成功的数据：
+	[
+	{"run_steps":"[{"type":"input","target":"id_2581586144","value":"admin","msg":"账号输入"},{"type":"input","target":"id_1526379877","value":"xJbNmQnqk4wq0Fc","msg":"密码输入"},{"type":"click","target":"id_1580495499","msg":"登录操作"}]","cookie":"","action_type":"execute","system_name":"Cloud Bank","base_url":"http://189.1.224.215:8888","version":"1.0","is_return_able":"1","target_uri":"/userFront","id":255613186591916032,"directory_id":"1962e660bb58985f0d3f67c6569644e6","run_success":"1","biz_id":"35804b1f9df21ae6317b133d056d004f","current_uri":"/index"},
+	{"run_steps":"[{"type":"click","target":"id_2466441421","msg":"点击【View Details】"}]","cookie":"","action_type":"execute","system_name":"Cloud Bank","base_url":"http://189.1.224.215:8888","version":"1.0","is_return_able":"1","target_uri":"/account/primaryAccount","id":255613258868162560,"directory_id":"20d47f74be1cb6f53a717b475983e42c","run_success":"1","biz_id":"885974312b81eb2054ce643e8e3682ea","current_uri":"/userFront"},
+	{"run_steps":"[{"type":"click","target":"id_542572353","msg":"点击【Go to Deposit】"}]","cookie":"","action_type":"execute","system_name":"Cloud Bank","base_url":"http://189.1.224.215:8888","version":"1.0","is_return_able":"1","target_uri":"/account/deposit","id":255617853424107520,"run_success":"1","current_uri":"/userFront"}
+	]
+	### 案例1,直接选择合适的数据不做处理：
+		输入：现在处于/userFront，现在希望能够回到 /account/primaryAccount 页面
+		输出：```{"run_steps":"[{"type":"click","target":"id_542572353","msg":"点击【Go to Deposit】"}]","cookie":"","action_type":"execute","system_name":"Cloud Bank","base_url":"http://189.1.224.215:8888","version":"1.0","is_return_able":"1","target_uri":"/account/deposit","id":255617853424107520,"run_success":"1","current_uri":"/userFront"}```
+
+	### 案例2,对run_steps进行组合，生成新的数据（涉及到登录）：
+		输入：现在处于/index，现在希望能够回到 /account/deposit 页面
+		输出：```{"run_steps":"[{"type":"input","target":"id_2581586144","value":"admin","msg":"账号输入"},{"type":"input","target":"id_1526379877","value":"xJbNmQnqk4wq0Fc","msg":"密码输入"},{"type":"click","target":"id_1580495499","msg":"登录操作"},{"type": "open_url", "value": "/account/deposit"}]","cookie":"","action_type":"execute","system_name":"Cloud Bank","base_url":"http://189.1.224.215:8888","version":"1.0","is_return_able":"1","target_uri":"/account/deposit","id":255613186591916032,"directory_id":"1962e660bb58985f0d3f67c6569644e6","run_success":"1","biz_id":"35804b1f9df21ae6317b133d056d004f","current_uri":"/index"}```
+
+
+	## 现在输入：
+	已执行过并成功执行的数据:
+	{{n_return_able_data}}
+	输入：
+	我在访问 {{n_data.old_data.current_uri}} 路由的时候被自动跳转到了 {{n_data.old_data.target_uri}} 页面, 现在希望能够回到 {{n_data.old_data.current_uri}} 页面
+''')

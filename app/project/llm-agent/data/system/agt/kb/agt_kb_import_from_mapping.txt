@@ -1,0 +1,12 @@
+/*  
+{
+	"title": "根据列明映射保存Excel数据到知识库",
+	"parameter": "tablename=知识库名称&excelFilename=要保存的Excel文件名&columnMapping=知识库与excel的列名映射&embedding=用于向量化查询的字段",
+	"description": "vector、scalar选填",
+	"category": "知识库"
+} 
+*/
+
+
+n_excel_data, act_func.readExcelByMappingAndDefaultValue?filename={{excelFilename}}&columnList={{columnMapping}}
+act_kb.importData?name={{tablename}}&data={{n_excel_data}}

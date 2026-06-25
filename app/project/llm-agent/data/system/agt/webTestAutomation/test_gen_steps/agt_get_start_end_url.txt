@@ -1,0 +1,78 @@
+/*
+{
+	"title":"SQL数据检查器",
+	"parameter":[
+		{
+			"name":"system_name",
+			"label":"系统名称",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"list_uri",
+			"label":"当前URI",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"version":1
+}
+*/
+// Set parameter
+assign('params','{"question":"{{userInput}}","folderIds":"{{folderIds!}}","knowledgeIds":"{{knowledgeIds!}}"}')
+
+// initialize variables for result
+assign('result_datas', '[]')
+
+n_current_uri,act_func.run?script='def entry = list_uri[0].entrySet().first()
+def key = entry.key
+def value = entry.value
+return  key
+'
+// 定义变量current_uri
+assign("current_uri", "{{n_current_uri}}")
+assign("sql", "SELECT t.* FROM llm_agent.kb_spiderdeep_content t WHERE system_name = '{{system_name}}' AND current_uri = '{{current_uri}}'  LIMIT 1")
+// 执行SQL查询
+n_data,act_kb.selectBy?sql={{sql}}
+
+// 检查查询结果
+when('{{fn.hasValue(n_data)}}', {
+	// 有数据
+	when('n_data[0].current_uri==n_data[0].guest_redirect_uri', {
+
+		// 判断是否需要权限访问
+		assign("operation_result", "无权限控制即可访问")
+		assign("start_url", "{{current_uri}}")
+	}, {
+		// 判断是否需要权限访问
+		assign("operation_result", "需要权限控制访问")
+
+		n_datan_data,act_func.run?script='return n_data[0]'
+		assign("n_datan_data", "{{n_datan_data}}")
+		assign("start_url", "{{n_datan_data.guest_redirect_uri}}")
+	})
+	n_result,tpl_get_start_end_url,psr_json
+	assign("result_datas", '{{n_result}}')
+
+}, {
+	assign("operation_result", "无数据")
+	assign("result_datas", '{"status":false,"message":"无数据"}')
+})
+
+define('tpl_get_start_end_url', '''
+# url信息
+start_url: {{start_url}}
+list_uri: {{list_uri}}
+
+# 要求:
+1. start_url 可能和 list_uri 中的第一个元素相同
+2. end_url 必须是 list_uri 中的最后一个元素
+3. passThrough 必须是 start_url 和 end_url 中的所有元素 是list[ str ]格式
+4. passThrough 中的元素顺序必须和 list_uri 中的元素顺序相同, 但是不包含 start_url 和 end_url
+5. 输出json格式说明: {"status":true,"start_url":"对应start_url","end_url":"对应end_url","passThrough":["url1","url2","url3"]}"
+
+''')

@@ -1,0 +1,9 @@
+/*
+{
+	"title":"123123agt_bug_refresh_newagent_2508270001",
+	"parameter":[],
+	"tag":"lj",
+	"version":1
+}
+*/
+assign('abccccc','')

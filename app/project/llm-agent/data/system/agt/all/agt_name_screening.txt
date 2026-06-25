@@ -1,0 +1,995 @@
+/*
+{
+	"title":"Name Screening Agent",
+	"description":"Simplified name-screening agent. Use customer profile data (customer + related parties) as the population source, supplement company-search officers as new related parties for Non-Individual customers, run Google adverse-media search for each party, assess whether each result belongs to the same party and whether it is negative, then generate the final report.",
+	"parameter":[
+		{
+			"name":"caseId",
+			"label":"Case ID",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"userInput",
+			"label":"需求",
+			"required":false,
+			"maxLength":200,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"all",
+	"displayOrder":0,
+	"version":32,
+	"life":200
+}
+*/
+// =====================================================
+// Name Screening Agent - Simplified Production Version
+// Checked updates:
+// 1. Keep existing API names unchanged
+// 2. companySearch is triggered only for Non-Individual
+// 3. companySearch new related parties are parsed from data.officers
+// 4. companySearch empty response is safely handled
+// 5. Google results limited to max 30 per query
+// 6. Raw hits and final hits are deduplicated
+// 7. Report JSON strengthened with existing/new party sections
+// =====================================================
+
+assign('n_agent_name', 'agt_name_screening_simple')
+assign('n_user_input', '{{userInput}}')
+assign('n_customer_profile', '{}')
+assign('n_existing_related_parties', '[]')
+assign('n_new_related_parties', '[]')
+assign('n_screening_population', '[]')
+assign('n_risk_keyword_list', '[]')
+assign('n_google_raw_hits', '[]')
+assign('n_google_final_hits', '[]')
+assign('n_google_assessments', '[]')
+assign('n_google_search_summary', '{}')
+assign('n_summary', '{}')
+assign('n_report_json', '{}')
+assign('n_combined_result', '[]')
+assign('n_kb_result','[]')
+
+log('Start {{n_agent_name}}, caseId={{caseId}}')
+
+// Step 1: Update case status
+n_status_result,act_api.doExecute?name="okp_update_case_status"&params='{"caseId":"{{caseId}}","status":"Name_Screening"}'
+log('n_status_result={{n_status_result}}')
+
+// Step 2: Get customer profile
+n_customer_api,act_api.doExecuteDynamic?name="okp_agent_tool_customer_profile"&dynamicParamData='{"caseId":"{{caseId}}"}'
+log('n_customer_api={{n_customer_api}}')
+
+n_customer_profile,act_func?script='''
+    def api = fn.map(n_customer_api)
+    def data = fn.map(api.data)
+    def customer = fn.map(data.customer)
+
+    def rawCustomerType = fn.optional(customer.customerType, "Unknown")
+    def normalizedCustomerType = rawCustomerType
+    if("Non-Individual".equalsIgnoreCase(String.valueOf(rawCustomerType))){
+        normalizedCustomerType = "Private Company"
+    }
+
+    return [
+        partyId          : fn.optional(customer.customerId, fn.optional(customer.id, "")),
+        partyType        : fn.optional(rawCustomerType, "Unknown"),
+        customerType     : fn.optional(normalizedCustomerType, "Unknown"),
+        customerName     : fn.optional(customer.nameInEng, fn.optional(customer.nameEng, "")),
+        customerNameCn   : fn.optional(customer.nameInChi, fn.optional(customer.nameCn, "")),
+        businessRegNo    : fn.optional(customer.brn, ""),
+        country          : fn.optional(customer.placeOfIncorporation, "Unknown"),
+        lineOfBusiness   : fn.optional(customer.lineOfBusiness, "Unknown"),
+        dateOfBirth      : fn.optional(customer.dateOfBirth, "Unknown"),
+        gender           : fn.optional(customer.gender, "Unknown"),
+        nationality      : fn.optional(customer.nationality, "Unknown"),
+        idType           : fn.optional(customer.idType, "Unknown"),
+        idNumber         : fn.optional(customer.identityNo, fn.optional(customer.brn, "Unknown")),
+        specialRiskCode  : fn.optional(customer.specialRiskCode, "Unknown"),
+        registeredAddress: fn.optional(customer.registeredAddress, "Unknown"),
+        businessAddress  : fn.optional(customer.businessAddress, "Unknown")
+    ]
+'''
+log('n_customer_profile={{n_customer_profile}}')
+
+n_existing_related_parties,act_func?script='''
+    def api = fn.map(n_customer_api)
+    def data = fn.map(api.data)
+    def relList = data.relatedParties instanceof List ? data.relatedParties : []
+
+    def result = []
+    relList.each{ rp ->
+        def roleStr = fn.optional(rp.relationRole, "")
+        def roles = []
+        if(roleStr != ""){
+            roleStr.split(",").each{ roleItem ->
+                def role = String.valueOf(roleItem).trim()
+                if("AS".equalsIgnoreCase(role)){
+                    role = "Authorized Signatory"
+                }
+                if(role != ""){
+                    roles.add(role)
+                }
+            }
+        }
+
+        result.add([
+            partyId         : fn.optional(rp.id, fn.optional(rp.partyId, "")),
+            partyType       : fn.optional(rp.customerType, fn.optional(rp.partyType, "Unknown")),
+            partyNameEn     : fn.optional(rp.nameInEng, fn.optional(rp.nameEng, "")),
+            partyNameCn     : fn.optional(rp.nameInChi, fn.optional(rp.partyNameCn, "")),
+            aliases         : rp.aliases instanceof List ? rp.aliases : [],
+            relationRole    : roleStr,
+            roles           : roles,
+            sharesHeld      : fn.optional(rp.sharesHeld, "Unknown"),
+            gender          : fn.optional(rp.gender, "Unknown"),
+            dateOfBirth     : fn.optional(rp.dateOfBirth, "Unknown"),
+            nationality     : fn.optional(rp.nationality, "Unknown"),
+            idType          : fn.optional(rp.idType, "Unknown"),
+            idNumber        : fn.optional(rp.identityNo, fn.optional(rp.idNumber, "Unknown")),
+            country         : fn.optional(rp.country, fn.optional(rp.nationality, "Unknown")),
+            specialRiskCode : fn.optional(rp.specialRiskCode, "Unknown"),
+            source          : "customer_api"
+        ])
+    }
+    return result
+'''
+log('n_existing_related_parties={{n_existing_related_parties}}')
+
+// Step 2.5: Get company-search officers as new related parties
+when('{{n_customer_profile.partyType == "Non-Individual"}}',{
+    n_company_search_api,act_api.doExecuteDynamic?name="okp_agent_tool_company_search"&dynamicParamData='{"caseId":"{{caseId}}"}'
+    log('n_company_search_api={{n_company_search_api}}')
+
+    n_new_related_parties,act_func?script='''
+        def api = [:]
+        def data = [:]
+
+        try{
+            api = fn.map(n_company_search_api)
+        }catch(Exception e){
+            api = [:]
+        }
+
+        try{
+            data = fn.map(api.data)
+        }catch(Exception e){
+            data = [:]
+        }
+
+        def rawList = []
+        if(data.officers instanceof List){
+            rawList = data.officers
+        }else{
+            rawList = []
+        }
+
+        def existingKeys = [:]
+        def buildKey = { p ->
+            def idNo = fn.optional(p.idNumber, fn.optional(p.identityNo, ""))
+            if(idNo != "" && !"Unknown".equalsIgnoreCase(idNo)){
+                return "IDNO|" + String.valueOf(idNo).toUpperCase()
+            }
+
+            def pid = fn.optional(p.partyId, fn.optional(p.id, ""))
+            if(pid != ""){
+                return "PID|" + String.valueOf(pid).toUpperCase()
+            }
+
+            def nameEn = fn.optional(p.partyNameEn, fn.optional(p.nameInEng, fn.optional(p.nameEng, ""))).trim().toUpperCase()
+            def dob = fn.optional(p.dateOfBirth, "").trim()
+            if(nameEn != ""){
+                return "NAME_DOB|" + nameEn + "|" + dob
+            }
+
+            def nameCn = fn.optional(p.partyNameCn, fn.optional(p.nameInChi, "")).trim()
+            return "NAMECN|" + nameCn
+        }
+
+        if(n_existing_related_parties instanceof List){
+            n_existing_related_parties.each{ p ->
+                existingKeys.put(buildKey(p), true)
+            }
+        }
+
+        def result = []
+        rawList.each{ rp ->
+            def roleStr = fn.optional(rp.role, "")
+            def roles = []
+            if(roleStr != ""){
+                roleStr.split(",").each{ roleItem ->
+                    def role = String.valueOf(roleItem).trim()
+                    if("AS".equalsIgnoreCase(role)){
+                        role = "Authorized Signatory"
+                    }
+                    if(role != ""){
+                        roles.add(role)
+                    }
+                }
+            }
+
+            def normalized = [
+                partyId         : "",
+                partyType       : "Individual",
+                partyNameEn     : fn.optional(rp.nameInEng, ""),
+                partyNameCn     : fn.optional(rp.nameInChi, ""),
+                aliases         : [],
+                relationRole    : roleStr,
+                roles           : roles,
+                sharesHeld      : fn.optional(rp.sharesHeld, "Unknown"),
+                gender          : "Unknown",
+                dateOfBirth     : "Unknown",
+                nationality     : "Unknown",
+                idType          : fn.optional(rp.idType, "Unknown"),
+                idNumber        : fn.optional(rp.identityNo, "Unknown"),
+                country         : "Unknown",
+                specialRiskCode : "Unknown",
+                source          : "company_search_api"
+            ]
+
+            def key = buildKey(normalized)
+            if(!existingKeys.containsKey(key)){
+                result.add(normalized)
+                existingKeys.put(key, true)
+            }
+        }
+        return result
+    '''
+},{
+    assign('n_new_related_parties','[]')
+})
+log('n_new_related_parties={{n_new_related_parties}}')
+
+// Step 3: Build screening population
+n_screening_population,act_func?script='''
+    def result = []
+    def dedup = [:]
+
+    def makeKey = { p ->
+        def idNumber = fn.optional(p.idNumber, "")
+        if(idNumber != "" && !"Unknown".equalsIgnoreCase(idNumber)){
+            return "IDNO|" + idNumber.toUpperCase()
+        }
+
+        def partyId = fn.optional(p.partyId, "")
+        if(partyId != ""){
+            return "PID|" + partyId.toUpperCase()
+        }
+
+        def nameEn = fn.optional(p.partyNameEn, "").trim().toUpperCase()
+        def dob = fn.optional(p.dateOfBirth, "").trim()
+        if(nameEn != ""){
+            return "NAME_DOB|" + nameEn + "|" + dob
+        }
+
+        def nameCn = fn.optional(p.partyNameCn, "").trim()
+        return "NAMECN|" + nameCn
+    }
+
+    def addParty = { p ->
+        if(p != null){
+            def key = makeKey(p)
+            if(!dedup.containsKey(key)){
+                result.add(p)
+                dedup.put(key, true)
+            }
+        }
+    }
+
+    def customerParty = [
+        partyId         : fn.optional(n_customer_profile.partyId, ""),
+        partyType       : fn.optional(n_customer_profile.partyType, fn.optional(n_customer_profile.customerType, "Unknown")),
+        partyNameEn     : fn.optional(n_customer_profile.customerName, ""),
+        partyNameCn     : fn.optional(n_customer_profile.customerNameCn, ""),
+        aliases         : [],
+        relationRole    : "Customer",
+        roles           : ["Customer"],
+        sharesHeld      : "Unknown",
+        gender          : fn.optional(n_customer_profile.gender, "Unknown"),
+        dateOfBirth     : fn.optional(n_customer_profile.dateOfBirth, "Unknown"),
+        nationality     : fn.optional(n_customer_profile.nationality, fn.optional(n_customer_profile.country, "Unknown")),
+        idType          : fn.optional(n_customer_profile.idType, "Unknown"),
+        idNumber        : fn.optional(n_customer_profile.idNumber, fn.optional(n_customer_profile.businessRegNo, "Unknown")),
+        country         : fn.optional(n_customer_profile.country, "Unknown"),
+        specialRiskCode : fn.optional(n_customer_profile.specialRiskCode, "Unknown"),
+        source          : "customer_api"
+    ]
+    addParty(customerParty)
+
+    if(n_existing_related_parties instanceof List){
+        n_existing_related_parties.each{ p -> addParty(p) }
+    }
+
+    if(n_new_related_parties instanceof List){
+        n_new_related_parties.each{ p -> addParty(p) }
+    }
+
+    return result
+'''
+log('n_screening_population={{n_screening_population}}')
+
+//Step 3-1: Call Api get Name screening result
+n_customer_list,act_func?script='''
+    def json = n_customer_api
+
+    def result = [
+        data: [
+            customers: []
+        ]
+    ]
+
+    def customer = json?.data?.customer
+    if (customer) {
+        result.data.customers << [
+            customerName: customer.nameInEng,
+            customerId  : customer.customerId,
+            customerType: "CORPORATE"
+        ]
+    }
+
+    def relatedParties = json?.data?.relatedParties ?: []
+    relatedParties.each { p ->
+        result.data.customers << [
+            customerName: p.nameInEng,
+            customerId  : p.identityNo,
+            customerType: "INDIVIDUAL"
+        ]
+    }
+
+    return result
+'''
+log('---n_customer_list=={{n_customer_list}}')
+n_name_screening_result,act_api.doExecute?name="okp_word_check_search"&params='{{n_customer_list}}}'
+log('----n_name_screening_result==={{n_name_screening_result}}')
+
+// Step 4: Adverse-media keywords
+n_risk_keyword_list,act_func?script='''
+    def keywordList = []
+    keywordList.add([en:'Money laundering', zh:'洗钱'])
+    keywordList.add([en:'Corruption', zh:'贪污'])
+    keywordList.add([en:'Tax evasion', zh:'逃税'])
+
+    return keywordList
+'''
+log('n_risk_keyword_list={{n_risk_keyword_list}}')
+
+// Step 5: Google search
+foreach('n_party_loop','n_screening_population',{
+    assign('n_party','{{n_party_loop.item}}')
+    foreach('riskKeywordLoop','n_risk_keyword_list',{
+        assign('riskKeyword','{{riskKeywordLoop.item}}')
+        n_google_search_query,act_func?script='''
+            def party = n_party ?: [:]
+            def partyNameEn = fn.optional(party.partyNameEn, "").trim()
+            def partyNameCn = fn.optional(party.partyNameCn, "").trim()
+            def keywordEn = riskKeyword.en == null ? "" : String.valueOf(riskKeyword.en).trim()
+            def keywordZh = riskKeyword.zh == null ? "" : String.valueOf(riskKeyword.zh).trim()
+
+            if(partyNameEn == "" && partyNameCn == ""){
+                return ""
+            }
+
+            def namePart = ""
+            if(partyNameEn != "" && partyNameCn != ""){
+                namePart = '("' + partyNameEn + '" OR "' + partyNameCn + '")'
+            }else if(partyNameEn != ""){
+                namePart = '"' + partyNameEn + '"'
+            }else{
+                namePart = '"' + partyNameCn + '"'
+            }
+
+            def keywordPart = '(' + keywordEn + ' OR ' + keywordZh + ')'
+            def contextPart = '(news OR allegation OR investigation OR enforcement OR court)'
+            def excludePart = '-site:scribd.com -site:coursehero.com'
+
+            return namePart + ' ' + keywordPart + ' ' + contextPart + ' ' + excludePart
+        '''
+
+        when('n_google_search_query!=null && n_google_search_query!=""',{
+            n_search_api_params,act_func?script='''
+                import com.alibaba.fastjson2.JSONObject
+                def params = new LinkedHashMap()
+                params.put("q", n_google_search_query)
+                return JSONObject.toJSONString(params)
+            '''
+
+            n_search_api_result,act_api.doExecute?name='okp_google_Search'&params='{{n_search_api_params}}'
+
+            n_current_google_hits,act_func?script='''
+                def result = []
+                def party = n_party ?: [:]
+                def keywordEn = riskKeyword.en == null ? "" : String.valueOf(riskKeyword.en).trim()
+                def keywordZh = riskKeyword.zh == null ? "" : String.valueOf(riskKeyword.zh).trim()
+
+                def api = n_search_api_result instanceof Map ? n_search_api_result : fn.map(n_search_api_result)
+
+                def items = []
+                if(api.organic_results instanceof List){
+                    items = api.organic_results
+                }else if(api.organicResults instanceof List){
+                    items = api.organicResults
+                }else if(api.items instanceof List){
+                    items = api.items
+                }else if(api.results instanceof List){
+                    items = api.results
+                }else if(api.data instanceof Map){
+                    def data = api.data
+                    if(data.organic_results instanceof List){
+                        items = data.organic_results
+                    }else if(data.organicResults instanceof List){
+                        items = data.organicResults
+                    }else if(data.items instanceof List){
+                        items = data.items
+                    }else if(data.results instanceof List){
+                        items = data.results
+                    }
+                }
+
+                items.each{ it ->
+                    def item = it instanceof Map ? it : [:]
+                    result.add([
+                        partyId     : fn.optional(party.partyId, ""),
+                        partyType   : fn.optional(party.partyType, "Unknown"),
+                        partyNameEn : fn.optional(party.partyNameEn, ""),
+                        partyNameCn : fn.optional(party.partyNameCn, ""),
+                        relationRole: fn.optional(party.relationRole, ""),
+                        dateOfBirth : fn.optional(party.dateOfBirth, "Unknown"),
+                        nationality : fn.optional(party.nationality, "Unknown"),
+                        idNumber    : fn.optional(party.idNumber, "Unknown"),
+                        keywordEn   : keywordEn,
+                        keywordZh   : keywordZh,
+                        query       : fn.optional(n_google_search_query, ""),
+                        title       : fn.optional(item.title, fn.optional(item.name, "")),
+                        snippet     : fn.optional(item.snippet, fn.optional(item.description, fn.optional(item.summary, ""))),
+                        link        : fn.optional(item.link, fn.optional(item.url, fn.optional(item.sourceUrl, ""))),
+                        publishedAt : fn.optional(item.date, fn.optional(item.publishedAt, fn.optional(item.time, fn.optional(item.published, ""))))
+                    ])
+                }
+
+                return result.take(30)
+            '''
+
+            n_google_raw_hits,act_func?script='''
+                def allList = []
+                try{
+                    allList = fn.list(n_google_raw_hits)
+                }catch(e){
+                    allList = []
+                }
+
+                def newList = n_current_google_hits instanceof List ? n_current_google_hits : []
+                newList.each{ row ->
+                    allList.add(row)
+                }
+                return allList
+            '''
+        },{})
+    })
+})
+log('n_google_raw_hits={{n_google_raw_hits}}')
+
+//Step 6: Call Name Screening Api
+
+
+// Step 6: Dedup raw hits
+n_google_raw_hits,act_func?script='''
+    def records = n_google_raw_hits instanceof List ? n_google_raw_hits : []
+    def dedup = [:]
+    def result = []
+
+    records.each{ rec ->
+        def key = String.valueOf(fn.optional(rec.partyId, "")) + "|" +
+                  String.valueOf(fn.optional(rec.partyNameEn, "")) + "|" +
+                  String.valueOf(fn.optional(rec.link, "")) + "|" +
+                  String.valueOf(fn.optional(rec.title, ""))
+        if(!dedup.containsKey(key)){
+            dedup.put(key, true)
+            result.add(rec)
+        }
+    }
+
+    return result.take(200)
+'''
+log('n_google_raw_hits_deduped={{n_google_raw_hits}}')
+
+// Step 7: Assess each Google result
+foreach('n_google_record_loop','n_google_raw_hits',{
+    assign('n_google_record','{{n_google_record_loop.item}}')
+    n_google_hit_assessment,tpl_google_hit_assessment_json,psr_json
+    append('n_google_assessments',"{{n_google_hit_assessment}}")
+
+    when('{{n_google_hit_assessment.sameParty == true && n_google_hit_assessment.hasNegativeNews == true}}',{
+        n_google_final_hit_record,act_func?script='''
+            return [
+                partyId         : fn.optional(n_google_record.partyId, ""),
+                partyType       : fn.optional(n_google_record.partyType, "Unknown"),
+                partyNameEn     : fn.optional(n_google_record.partyNameEn, ""),
+                partyNameCn     : fn.optional(n_google_record.partyNameCn, ""),
+                relationRole    : fn.optional(n_google_record.relationRole, ""),
+                keywordEn       : fn.optional(n_google_record.keywordEn, ""),
+                keywordZh       : fn.optional(n_google_record.keywordZh, ""),
+                title           : fn.optional(n_google_record.title, ""),
+                snippet         : fn.optional(n_google_record.snippet, ""),
+                link            : fn.optional(n_google_record.link, ""),
+                riskLevel       : fn.optional(n_google_hit_assessment.riskLevel, "medium"),
+                category        : fn.optional(n_google_hit_assessment.category, "Adverse Media"),
+                sameParty       : fn.optional(n_google_hit_assessment.sameParty, false),
+                hasNegativeNews : fn.optional(n_google_hit_assessment.hasNegativeNews, false),
+                rationale       : fn.optional(n_google_hit_assessment.rationale, ""),
+                source          : "GOOGLE"
+            ]
+        '''
+        append('n_google_final_hits',"{{n_google_final_hit_record}}")
+    },{})
+})
+
+// Step 7.5: Dedup final hits
+n_google_final_hits,act_func?script='''
+    def records = n_google_final_hits instanceof List ? n_google_final_hits : []
+    def dedup = [:]
+    def result = []
+
+    records.each{ rec ->
+        def key = String.valueOf(fn.optional(rec.partyId, "")) + "|" +
+                  String.valueOf(fn.optional(rec.partyNameEn, "")) + "|" +
+                  String.valueOf(fn.optional(rec.link, "")) + "|" +
+                  String.valueOf(fn.optional(rec.title, ""))
+        if(!dedup.containsKey(key)){
+            dedup.put(key, true)
+            result.add(rec)
+        }
+    }
+
+    return result
+'''
+log('n_google_final_hits={{n_google_final_hits}}')
+
+// Step 8: Google summary
+n_google_search_summary,act_func?script='''
+    def rawHits = n_google_raw_hits instanceof List ? n_google_raw_hits : []
+    def finalHits = n_google_final_hits instanceof List ? n_google_final_hits : []
+    def partyMap = [:]
+    def keywordMap = [:]
+
+    finalHits.each{ h ->
+        def p = fn.optional(h.partyNameEn, fn.optional(h.partyNameCn, "Unknown"))
+        if(p != ""){
+            partyMap.put(p, true)
+        }
+
+        def k = fn.optional(h.keywordEn, "")
+        if(k != ""){
+            def curr = keywordMap.containsKey(k) ? keywordMap.get(k) : 0
+            keywordMap.put(k, curr + 1)
+        }
+    }
+
+    def topKeywords = []
+    keywordMap.each{ k, v ->
+        topKeywords.add([keyword: k, count: v])
+    }
+    topKeywords.sort{ a, b -> b.count <=> a.count }
+
+    return [
+        rawHitCount          : rawHits.size(),
+        relevantNegativeCount: finalHits.size(),
+        involvedPartyCount   : partyMap.size(),
+        topKeywords          : topKeywords.take(10)
+    ]
+'''
+log('n_google_search_summary={{n_google_search_summary}}')
+
+// Step 9: Overall summary
+n_summary,act_func?script='''
+    def totalParties = (n_screening_population instanceof List) ? n_screening_population.size() : 0
+    def googleRelevantHitCount = (n_google_final_hits instanceof List) ? n_google_final_hits.size() : 0
+
+    def highCount = 0
+    def mediumCount = 0
+    def lowCount = 0
+
+    if(n_google_final_hits instanceof List){
+        n_google_final_hits.each{ h ->
+            def risk = fn.optional(h.riskLevel, "medium")
+            if("high".equalsIgnoreCase(risk)) highCount++
+            if("medium".equalsIgnoreCase(risk)) mediumCount++
+            if("low".equalsIgnoreCase(risk)) lowCount++
+        }
+    }
+
+    return [
+        totalParties           : totalParties,
+        existingRelatedCount   : (n_existing_related_parties instanceof List) ? n_existing_related_parties.size() : 0,
+        newRelatedCount        : (n_new_related_parties instanceof List) ? n_new_related_parties.size() : 0,
+        googleRawHitCount      : fn.optional(n_google_search_summary.rawHitCount, 0),
+        googleRelevantHitCount : googleRelevantHitCount,
+        highRiskMediaCount     : highCount,
+        mediumRiskMediaCount   : mediumCount,
+        lowRiskMediaCount      : lowCount
+    ]
+'''
+log('n_summary={{n_summary}}')
+// Step 10-1: 
+n_screening_validation_json,tpl_screening_validation_json
+
+// Step 10: Final report
+n_report_json,tpl_name_screening_output_json,psr_json
+log('n_report_json={{n_report_json}}')
+
+n_random_3,act_func?script='''
+def r = new Random().nextInt(900) + 100
+return r.toString()
+'''
+
+//Step 11: Call report pdf generator agent
+n_pdf_url,agt_report_pdf_generator_okp?reportName='NSR1{{n_random_3}}'&reportJsonData='{{n_report_json.data}}'&caseId='{{caseId}}'&userInput='样式设计要求简约清晰、视觉美观，优先使用表格呈现结构化信息'
+log('******n_pdf_url=={{n_pdf_url}}')
+n_update_url_json,act_func?script='''
+    def reportJson = n_report_json
+    // 1. 确保 reportJson 存在
+    if(reportJson == null){
+        return [:]
+    }
+    // 2. 确保 data 存在
+    if(reportJson.data == null){
+        reportJson.data = [:]
+    }
+    // 3. 只在有 URL 时才更新
+    if(n_pdf_url != null && n_pdf_url.toString().trim() != ""){
+        reportJson.data.put("nameScreeningReportWithRationaleUrl", n_pdf_url.n_url_with_rational)
+        reportJson.data.put("nameScreeningReportUrl", n_pdf_url.n_url_no_rational)
+    }
+    // 4. 返回最终结果
+    return reportJson
+'''
+log('-------n_update_url_json===={{n_update_url_json}}')
+// Step 11: Callback report
+n_report_callback,act_api.doExecute?name="okp_save_name_screening"&params='{{n_update_url_json}}'
+log('n_report_callback={{n_report_callback}}')
+
+on_failure({
+    assign('n_report_json','{"summary":{"totalParties":0,"existingRelatedCount":0,"newRelatedCount":0,"googleRawHitCount":0,"googleRelevantHitCount":0,"highRiskMediaCount":0,"mediumRiskMediaCount":0,"lowRiskMediaCount":0},"existingRelatedParties":[],"newRelatedParties":[],"screeningScope":"Generation failed","keyFindings":[],"screeningMatches":[],"googleSearchResults":[],"googleAdverseMediaSummary":[],"recommendation":"Manual review required due to processing failure.","escalationRequired":true,"rationale":{"dataSource":[],"reason":"Agent execution failed","justification":[]}}')
+    log('agt_name_screening_simple execution failed')
+    act_flow.go?plan=end
+})
+assign('result','{{n_update_url_json}}')
+
+define('tpl_google_hit_assessment_json', '''
+You are a professional AML/KYC adverse media analyst.
+
+Your task is to assess whether a Google search result:
+1. likely belongs to the same party in the customer file; and
+2. contains meaningful negative or adverse news.
+
+# Input
+
+## Customer File Party
+{{n_google_record.partyNameEn}} / {{n_google_record.partyNameCn}}
+Party Type: {{n_google_record.partyType}}
+Relation Role: {{n_google_record.relationRole}}
+Date Of Birth: {{n_google_record.dateOfBirth}}
+Nationality: {{n_google_record.nationality}}
+ID Number: {{n_google_record.idNumber}}
+
+## Google Search Context
+Keyword EN: {{n_google_record.keywordEn}}
+Keyword ZH: {{n_google_record.keywordZh}}
+Query: {{n_google_record.query}}
+
+## Google Search Result
+Title: {{n_google_record.title}}
+Snippet: {{n_google_record.snippet}}
+Link: {{n_google_record.link}}
+
+## Additional User Requirement
+{{n_user_input}}
+
+# Decision Rules
+1. sameParty = true only if the result is likely about the same person/company in the customer file.
+2. Generic examples, templates, financial statements, audit manuals, training materials, and unrelated sample companies should usually be sameParty = false.
+3. hasNegativeNews = true only if the result suggests adverse media, enforcement, fraud, crime, lawsuit, sanctions, investigation, or similar meaningful risk.
+4. If the result only mentions a keyword loosely or is too vague, set hasNegativeNews = false.
+5. Be conservative. Do not overstate risk.
+6. A result may mention the same party but still not be negative.
+7. Use title + snippet + link context together.
+8. Consider publication date where available, and give higher weight to recent meaningful adverse information.
+
+# Output
+Return JSON only:
+
+{
+  "sameParty": true,
+  "hasNegativeNews": true,
+  "riskLevel": "medium",
+  "category": "Adverse Media",
+  "rationale": ""
+}
+''')
+
+define('tpl_screening_validation_json', '''
+    You are a professional AML/KYC screening validation analyst.
+
+    Your task is to validate and refine the preliminary Google adverse-media assessment using:
+    1. customer file party information
+    2. Google assessment result
+    3. structured screening results from professional screening systems such as FIRCOSOFT / FATIVA
+
+    # Input
+
+
+    ## Google Assessment Result
+    {{n_google_search_summary}}
+    ## Google Final Hits
+    {{n_google_final_hits}}
+
+    ## Structured Screening Result
+    {{n_name_screening_result}}
+
+    ## Additional User Requirement
+    {{n_user_input}}
+
+    # Validation Principles
+    1. Structured screening results from FIRCOSOFT / FATIVA have higher priority than Google search results.
+    2. Google search is supplementary evidence only.
+    3. If structured screening shows confirmed sanctions / watchlist / high-risk adverse media, the final result must reflect higher risk.
+    4. If Google result appears negative but structured screening clearly indicates mismatch or no relevant hit, keep a conservative conclusion and explain the reason.
+    5. If Google result and structured screening are both supportive, strengthen the confidence.
+    6. Do not overstate risk based on Google alone.
+    7. Be conservative, evidence-based, and explain conflicts clearly.
+
+    # Decision Rules
+    1. finalSameParty:
+    - true if the overall evidence supports that the result relates to the same party
+    - false if structured or identity evidence strongly suggests mismatch
+
+    2. finalHasNegativeNews:
+    - true only if the combined evidence supports meaningful adverse / risk information
+    - false if evidence is weak, vague, unrelated, or contradicted by stronger evidence
+
+    3. finalRiskLevel:
+    - high if structured screening contains confirmed high-risk findings or strong combined evidence
+    - medium if adverse concerns exist but evidence is less severe or not fully confirmed
+    - low if the result is weakly relevant or low materiality
+    - none if no meaningful adverse finding remains after validation
+
+    4. finalCategory:
+    choose the most appropriate category, such as:
+    - Sanctions
+    - PEP
+    - Adverse Media
+    - Financial Crime
+    - Law Enforcement and Regulatory Lists
+    - Violations
+    - None
+
+    # Output
+    Return JSON only:
+
+    {
+    "finalSameParty": true,
+    "finalHasNegativeNews": true,
+    "finalRiskLevel": "medium",
+    "finalCategory": "Adverse Media",
+    "validationDecision": "CONFIRMED",
+    "rationale": "",
+    "evidenceSummary": ""
+    }
+''')
+
+define('tpl_name_screening_output_json', '''
+You are a professional AML/KYC name screening reporting engine.
+
+Your task is to generate the FINAL structured name screening output strictly following the required JSON schema.
+
+# Input
+
+## Case ID
+{{caseId}}
+
+## Customer Profile
+{{n_customer_profile}}
+
+## Existing Related Parties
+{{n_existing_related_parties}}
+
+## New Related Parties
+{{n_new_related_parties}}
+
+## Screening Population
+{{n_screening_population}}
+
+## Structured Screening Result
+{{n_name_screening_result}}
+
+## Google Search Summary
+{{n_google_search_summary}}
+
+## Google Final Hits
+{{n_google_final_hits}}
+
+## Screening Validation Result
+{{n_screening_validation_json}}
+
+## Additional User Requirement
+{{n_user_input}}
+
+## Knowledge Base (Policy / Regulation / SOP)
+{{n_kb_result}}
+
+--------------------------------------------------
+# CRITICAL OUTPUT RULES (MUST FOLLOW)
+--------------------------------------------------
+
+1. Output MUST be valid JSON only.
+2. DO NOT add explanation text outside JSON.
+3. DO NOT change any key names.
+4. Top-level output MUST strictly follow the required schema.
+5. nameScreeningReportUrl MUST be empty string "".
+6. nameScreeningReportWithRationaleUrl MUST be empty string "".
+7. Populate entities based on:
+   - primary customer
+   - existing related parties
+   - new related parties if any
+8. If a section has no data, still keep the required key and provide:
+   - empty array [] for arrays
+   - empty string "" for strings
+   - 0 for numeric values where appropriate
+
+--------------------------------------------------
+# TRACEABILITY RULES (VERY IMPORTANT)
+--------------------------------------------------
+
+For every field object, the minimum required key is:
+- value
+
+Additional traceability keys must be added ONLY if supported by the target schema example.
+
+Allowed traceability keys:
+- aiRationale
+- knowledgeBaseUsed
+- dataSource
+
+Do NOT add extra keys beyond:
+- value
+- aiRationale
+- knowledgeBaseUsed
+- dataSource
+- sortOrder
+
+--------------------------------------------------
+# TRACEABILITY FIELD RULES
+--------------------------------------------------
+
+## 1. aiRationale
+Use only when needed by the schema or when the value is not self-evident.
+
+Requirements:
+- MUST explain why the value or decision is assigned
+- MUST be derived from screening evidence, identity comparison, structured screening result, or policy logic
+- MUST NOT hallucinate facts
+- MUST NOT mention "AI", "LLM", or "model"
+- Keep concise and professional
+
+Typical usage:
+- decision
+- aiDecision
+- justificationReason
+- result explanation
+- counts or statuses that need interpretation
+
+## 2. knowledgeBaseUsed
+Use only when the schema example indicates this field is expected or when policy / SOP / KB genuinely supports the conclusion.
+
+Requirements:
+- MUST ONLY come from provided knowledge base ({{n_kb_result}})
+- If no KB is actually used, omit this field unless the schema clearly expects it
+- MUST NOT fabricate policy / regulation names
+- Format should be short and specific, e.g.
+  "AML Screening Policy Section 3.2"
+  "Name Screening SOP v2.1"
+
+## 3. dataSource
+Use whenever the schema example indicates it should be present.
+
+Allowed values must come only from the actual source system or dataset, such as:
+- ALNOVA
+- NSS
+- World-Check
+- Google Search
+- Fircosoft
+- FATIVA
+- PD System
+- AML Keyword Dictionary
+
+If multiple sources are needed, separate them with comma.
+
+--------------------------------------------------
+# ENTITY CONSTRUCTION RULES
+--------------------------------------------------
+
+1. The first entity should usually be the primary customer.
+2. Additional entities should represent related parties.
+3. entityType should reflect the business role, such as:
+   - Customer
+   - UBO
+   - Director
+   - Shareholder
+   - Related Party
+4. sortOrder must be sequential starting from 1.
+5. basicInfo should reflect entity-specific profile information.
+6. hitRecords should include structured screening / World-Check / NSS style records if available.
+7. pdRecords should include Google / PD search result records if available.
+8. If an entity has no hitRecords or pdRecords, return an empty array.
+
+--------------------------------------------------
+# DECISION RULES
+--------------------------------------------------
+
+1. Structured screening systems (Fircosoft / World-Check / NSS / FATIVA) have higher priority than Google search.
+2. Google search is supplementary evidence only.
+3. If identity mismatch is clear, decision should be "False Hit" or "Clear" as appropriate.
+4. If there is confirmed adverse or sanctions/watchlist concern, do not understate the risk.
+5. Use conservative, evidence-based logic.
+
+--------------------------------------------------
+# REQUIRED OUTPUT FORMAT
+--------------------------------------------------
+
+Return JSON ONLY in the following structure:
+
+{
+  "data": {
+    "caseId": "{{caseId}}",
+    "nameScreeningReportUrl": "",
+    "nameScreeningReportWithRationaleUrl": "",
+    "entities": [
+      {
+        "entityName": {"value": ""},
+        "entityType": {"value": ""},
+        "nssHitCount": {"value": 0},
+        "nssTotalCount": {"value": 0},
+        "nssSearchDate": {"value": ""},
+        "wcHitCount": {"value": 0},
+        "wcTotalCount": {"value": 0},
+        "wcSearchDate": {"value": ""},
+        "wcStatus": {"value": ""},
+        "pdHitCount": {"value": 0},
+        "pdTotalCount": {"value": 0},
+        "pdStatus": {"value": ""},
+        "pdSearchDate": {"value": ""},
+        "googleSearchDate": {"value": ""},
+        "pdRequestId": {"value": ""},
+        "fircosoftResult": {"value": ""},
+        "fircosoftDetail": {"value": ""},
+        "fativaResult": {"value": ""},
+        "fativaDetail": {"value": ""},
+        "aiDecision": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "sortOrder": {"value": 1},
+        "basicInfo": {
+          "customerInternalNo": {"value": ""},
+          "ciRelationship": {"value": ""},
+          "customerType": {"value": ""},
+          "surname": {"value": ""},
+          "forename": {"value": ""},
+          "documentType": {"value": ""},
+          "documentNo": {"value": ""},
+          "idIssueCountry": {"value": ""},
+          "chineseName": {"value": ""},
+          "registerCountry": {"value": ""}
+        },
+        "hitRecords": [],
+        "pdRecords": []
+      }
+    ]
+  }
+}
+''')

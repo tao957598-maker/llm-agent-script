@@ -1,0 +1,56 @@
+/*
+ {
+     "title": "Generate UI report Data(mock)",
+     "description": "Generate UI report Data(mock)",
+	 "parameter": [
+	     {
+            "name":"reportType",
+            "label":"1.柱形图表 2.饼形图表 3.折线图表"
+         },
+         {
+            "name":"legend",
+            "label":"legend配置，拥有属性:name->表名/sql/api,column->字段或属性名,type->Enum: 0:table 1:sql 2:api,params->表查询参数(查询条件)/sql查询参数(占位符)/api参数(json数据)"
+         },
+         {
+            "name":"xAxis",
+            "label":"legend配置，拥有属性:name->表名/sql/api,column->字段或属性名,type->Enum: 0:table 1:sql 2:api,params->表查询参数(查询条件)/sql查询参数(占位符)/api参数(json数据)"
+         },
+         {
+            "name":"data",
+            "label":"legend配置，拥有属性:name->表名/sql/api,column->字段或属性名,type->Enum: 0:table 1:sql 2:api,params->表查询参数(查询条件)/sql查询参数(占位符)/api参数(json数据)"
+         },
+	 ],
+     "reportType":"报表类型：1.柱形图表 2.饼形图表 3.折线图表",
+     "legend":{
+         "name":"表名/sql/api/字符串",
+         "column":"字段或属性名",
+         "type":"Enum: table,sql,api,enum",
+         "params":"表查询参数(查询条件)/sql查询参数(占位符)/api参数(json数据)",
+         "dataConvertMap":"{\"student_name\":\"name\",\"score\":\"value\"}"
+     },
+     "xAxis":{
+         "name":"表名/sql/api/字符串",
+         "column":"字段或属性名",
+         "type":"Enum: table,sql,api,enum",
+         "params":"表查询参数(查询条件)/sql查询参数(占位符)/api参数(json数据)",
+         "dataConvertMap":"{\"student_name\":\"name\",\"score\":\"value\"}"
+     },
+     "data":{
+         "name":"表名/sql/api",
+         "column":"字段或属性名",
+         "type":"Enum: table,sql,api",
+         "params":"表查询参数(查询条件)/sql查询参数(占位符)/api参数(json数据)",
+         "dataConvertMap":"{\"student_name\":\"name\",\"score\":\"value\"}",
+         "dataFullMerge": "boolean数据，  false:不需要填充数据，不需要合并数据，适用于API/饼图;  true:会自动根据xAxis补充该轴为空的数据，会将数据合并成List<Map<String, Object>>"
+     }
+ }
+*/
+
+n_legend_data,act_report.generateReportData?params={{requestMap}}
+
+
+
+
+
+
+

@@ -1,0 +1,137 @@
+/*
+{
+	"title":"Testing Workflow Agent",
+	"description": "chatdoc Testing Workflow Agent",
+	"parameter":[
+		{
+			"name":"n_userInput",
+			"label":"Testing Requirements",
+			"description":"User's testing requirements input",
+			"required":true
+		},
+		{
+			"name":"n_scenario_success_size",
+			"label":"n_scenario_success_size",
+			"description":"n_scenario_success_size"
+		},
+		{
+			"name":"n_scenario_fail_size",
+			"label":"n_scenario_fail_size",
+			"description":"n_scenario_fail_size"
+		},
+		{
+			"name":"n_test_data_scenario_data",
+			"label":"n_test_data_scenario_data",
+			"description":"n_test_data_scenario_data"
+		},
+		{
+			"name":"n_report_path",
+			"label":"n_report_path",
+			"description":"report address"
+		},
+		{
+			"name":"n_failure_analysis",
+			"label":"Failure analysis",
+			"description":"Failure analysis"
+		}
+	],
+    "uiEntrance": 'components.AutoTestConfirmCard',
+	"displayOrder":0,
+	"tag":"auto_test_web",
+	"version":1
+}
+*/
+
+// 初始化报表详情
+n_report_map,act_func?script='''
+		def reportMap = new HashMap();
+		reportMap.put("runId", n_userInput.test_name);
+		
+		// 获取百分比
+		double result = Double.parseDouble(n_scenario_success_size) / n_test_data_scenario_data.size();
+        java.text.DecimalFormat df = new java.text.DecimalFormat("0.0%");
+        String percent = df.format(result);
+		reportMap.put("passRate", percent);
+
+		def planResult = "(" + n_scenario_success_size + "/"+ n_test_data_scenario_data.size() + ")" ;
+		reportMap.put("planResult", planResult)
+		def caseStatistics =  "通过 " + n_scenario_success_size + "/失败 " + n_scenario_fail_size + " 跳过 0";
+		reportMap.put("caseStatistics", caseStatistics)
+		reportMap.put("test_scope", n_userInput.test_scope)
+
+		if(null != n_failure_analysis && !"".equals(n_failure_analysis)){
+			def higth = n_failure_analysis.highPriorityIssue;
+			if(higth.length() > 20){
+				higth = higth.substring(0, 20) + "...";
+			}
+
+			def unstable = n_failure_analysis.unstableCases;
+			if(unstable.length() > 20){
+				unstable = unstable.substring(0, 20) + "...";
+			}
+
+			def optimization = n_failure_analysis.optimizationSuggestion;
+			if(optimization.length() > 20){
+				optimization = optimization.substring(0, 20) + "...";
+			}
+
+			reportMap.put("highPriorityIssue", n_failure_analysis.highPriorityIssue);
+			reportMap.put("unstableCases", n_failure_analysis.unstableCases);
+			reportMap.put("optimizationSuggestion", n_failure_analysis.optimizationSuggestion);
+			reportMap.put("higth", higth);
+			reportMap.put("unstable", unstable);
+			reportMap.put("optimization", optimization);
+		}
+
+		return reportMap;
+	'''
+
+assign('n_test_report_html', '''
+	<div style="font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:100%;border-radius:16px;border:1px solid #f3f4f6;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.06);padding:16px;box-sizing:border-box">
+	<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+		<span style="display:inline-block;padding:2px 10px;border-radius:999px;background:#ecfdf5;color:#047857;font-size:12px;border:1px solid #a7f3d0">Report</span>
+		<span style="font-size:12px;color:#9ca3af">已完成 · 总用时 0m 04s</span>
+	</div>
+	<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+		<div style="border-radius:14px;border:1px solid #f3f4f6;padding:12px;background:linear-gradient(90deg,rgba(236,253,245,.55) 0%,#fff 45%,rgba(239,246,255,.45) 100%)">
+		<div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#111827">
+			<span style="display:inline-flex;width:18px;height:18px;border-radius:50%;background:#10b981;align-items:center;justify-content:center;color:#fff;font-size:11px">✓</span>
+			测试总结
+		</div>
+		<div style="margin-top:8px;font-size:12px;color:#4b5563;line-height:1.55">
+			<div>• Run ID：<strong style="color:#374151">{{n_report_map.runId}}</strong></div>
+			<div>• Pass Rate：<strong style="color:#374151">{{n_report_map.passRate}}</strong>{{n_report_map.planResult}}</div>
+			<div>• 用例统计：{{n_report_map.caseStatistics}}</div>
+			<div>• 覆盖范围：{{n_report_map.test_scope}}</div>
+			<div>• 产出：测试总结、失败分析、报告下载与步骤详情</div>
+		</div>
+		</div>
+		<div style="border-radius:14px;border:1px solid #f3f4f6;padding:12px;background:#fff">
+		<div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#111827">
+			<span style="color:#f59e0b;font-size:14px">⚠</span>
+			失败分析
+		</div>
+		<div style="margin-top:8px;font-size:12px;color:#4b5563;line-height:1.6">
+			<div title="{{n_report_map.highPriorityIssue}}"><strong style="color:#374151">• 高优先级问题：</strong>{{n_report_map.higth}}</div>
+			<div title="{{n_report_map.unstableCases}}"><strong style="color:#374151">• 不稳定用例 / 偶发失败用例：</strong>{{n_report_map.unstable}}</div>
+			<div title="{{n_report_map.optimizationSuggestion}}"><strong style="color:#374151">• 优化建议：</strong>{{n_report_map.optimization}}</div>
+		</div>
+		</div>
+		<div style="border-radius:14px;border:1px solid #f3f4f6;padding:12px;background:#fff">
+		<div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#111827">
+			<span style="color:#2563eb;font-size:14px">📄</span>
+			报告下载
+		</div>
+		<div style="margin-top:8px;font-size:12px;color:#4b5563;line-height:1.6">
+			已生成完整报告包（含 html-report / junit.xml / trace.json）。你可以下载后离线查看或归档。
+		</div>
+		<a href="/api/agent-instance/download-result-file?fileName={{n_report_path}}" style="margin-top:10px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 16px;border-radius:10px;background:#2563eb;color:#fff!important;font-size:13px;font-weight:500;text-decoration:none">
+				下载报告
+			</a>
+		</div>
+	</div>
+	</div>
+''')
+
+//# 测试总结、失败分析与报告下载
+act_memory.assign?var=n_test_report_ui&value={{n_test_report_html}}&type=html

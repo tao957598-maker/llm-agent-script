@@ -1,0 +1,92 @@
+/*
+{
+	"title": "Word Summary",
+	"description": "Word page search and page summary and overall summary",
+    "parameter": [
+					 {
+                         "name":"folderName",
+                         "label":"文件目录名",
+                         "type":"textarea"
+                     },{
+                         "name":"fileName",
+                         "label":"文件名",
+                         "type":"textarea"
+                     } ,
+                     {
+                        "name":"kbSpaceFileId",
+                        "label":"文件ID",
+                        "type":"textarea"
+                     }
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "life": "100",
+    "uiEntrance": "test",
+	"tag":""
+} */
+
+
+//# 步骤执行
+// 使用知识库的分页读取功能，读取文档的每一页内容
+//## 步骤1：读取文档内容
+n_file_content,rag_kbs.readSectionFileByPage?kbSpaceFileId={{kbSpaceFileId!}}&isSource=true
+
+assign('n_file_name', '{{fn.str(n_file_content, "fileName")}}')
+//# 读取文档 {{n_file_name}}内容，按页分割
+assign('n_doc_pages_content', '{{fn.str(n_file_content, "pageInfo")}}')
+
+assign('page_summary_prompt', '''
+   请对json的content属性值（内容可能含有Markdown表格）生成不超过20个字符的简短总结，并标注页码。
+   结构化输出JSON格式(其中以下1、2等是指页码（pageNo属性值）)，不要添加任何其他属性：
+   [
+        {"title":"XXXX (第1页)"},
+        {"title":"XXXZ (第2页)"}
+   ]
+''')
+
+//## 步骤2：对每页内容进行总结
+n_page_content_summary,tpl_page_summary,psr_json
+define('tpl_page_summary', '''
+   Contents：
+   {{n_doc_pages_content!}}
+
+   {{fn.chatFlag('%{page_summary_prompt}%', '', '', '', 10)}}
+''')
+
+
+assign('overall_summary_prompt', '''
+   请根据以下各页总结，生成一个整体总结，并在总结中标注内容来源的页码。
+   仅输出以下JSON格式(其中以下1、2等是指页码（pageNo属性值）)，不要添加任何其他属性：
+   {
+     "title": "系统开发计划书，包含项目背景(第1页)、功能需求(第2页)、技术架构(第3页)"
+   }
+''')
+
+//## 步骤3：生成整体总结
+// 汇总所有页面的总结，并标注来源页码。
+n_overall_summary,tpl_overall_summary,psr_json
+
+define('tpl_overall_summary', '''
+   Contents：
+   {{n_page_content_summary}}
+
+   {{fn.chatFlag('%{overall_summary_prompt}%', '', '', '', 10)}}
+''')
+
+
+//## 步骤4：输出 Xmind JSON格式结果
+n_xmind_json,act_func?script='''
+    def firstNode = ["title": n_file_name, "children": []]
+    // 使用左移操作符添加元素 n_overall_summary是map（json）
+    def childNode = n_overall_summary
+    // n_page_content_summary是json数组（map数组）
+    childNode.children = n_page_content_summary
+    // 将childNode添加到firstNode的数组children中
+    firstNode.children << childNode
+    return firstNode
+'''
+
+
+
+ 
+

@@ -1,0 +1,109 @@
+/*
+{
+	"title": "基于表格生成操作代码",
+	"parameter": [
+    {
+			"name": "tableName",
+			"label": "表格名称",
+			"required": true
+		},
+		{
+			"name": "UserIntent",
+			"label": "用户意图",
+			"required": false
+		}
+	],
+	"version": 1
+}
+*/
+
+// 查询指定表格的数据
+n_data,act_kb.select?name='kb_cy_table_metadata'&column='columns'&maxSize=1&where='{"table_name":"{{tableName}}"}'
+
+// 检查是否成功获取元数据
+when('{{fn.hasValue(n_data)}}', {
+	assign('table_mate', '{{n_data}}')
+	log('成功获取页面数据：{{table_mate}}')
+},{
+	assign('error_msg', '未能获取元数据')
+	log('{{error_msg}}')
+	act_flow.go?plan=end
+})
+
+
+tpl_table_prompt, psr_all
+// 定义大模型提示词：解析用户需求(来自agent参数userInput)，将用户需求解析为json list格式
+define('tpl_table_prompt','''
+# Role
+你是一位精通python Selenium 的资深自动化测试专家。你的任务是根据用户提供的表格元数据(JSON)和自然语言测试意图,生成高质量、可执行、健壮的自动化测试代码。
+
+# Input Data
+你将接收两部分输入：
+1.Table Metadata: 用户提供了一个网页表格的元数据 JSON。该元数据包含了：
+	1）. `columns`: 表格列的定义，包含表头、数据类型。
+	2）. `interactiveElements`: 每列中可交互元素（按钮、链接、复选框）的模板信息，包含定位器 (`locators`)。
+	3）. **重要提示**: 元数据中的 `tablePosition.row` 仅是采集时的快照示例，**严禁**在生成的代码中硬编码行号（如 `nth-child(2)` 或 `row[1]`）。必须通过“唯一键列”的值来动态定位行。
+2. User Intent: 用户的自然语言描述，例如 "查询姓名为'张三'的用户并点击编辑"。
+
+# 下面为User Intent：
+{{UserIntent}}
+
+# 下面为Table Metadata：
+{{table_mate}}
+
+# Output Format
+请生成完整的Python Selenium自动化测试代码，包含以下部分：
+1. 必要的导入语句
+2. WebDriver初始化和配置
+3. 基于唯一键定位目标行的函数
+4. 执行用户意图的主要测试逻辑
+5. 异常处理和错误捕获
+6. 测试完成后的清理操作
+
+# Code Requirements
+1. 代码必须是可直接执行的，不需要用户修改
+2. 使用显式等待（WebDriverWait）替代隐式等待
+3. 所有定位器必须基于Table Metadata中的信息
+4. 必须处理可能的异常情况（如元素未找到、超时等）
+5. 代码必须包含清晰的注释，解释关键步骤
+6. 遵循Python PEP 8编码规范
+7. 变量命名清晰，具有描述性
+
+
+# Example Output
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import time
+
+
+def main():
+    # 初始化WebDriver
+    driver = webdriver.Chrome()
+    driver.maximize_window()
+    
+    try:
+        # 访问目标页面
+        driver.get("https://example.com")
+        
+        # 初始化表格自动化对象
+        .....
+        
+        # 执行用户意图
+        .....
+        
+        print("测试执行成功！")
+        
+    except Exception as e:
+        print(f"测试执行失败: {str(e)}")
+    finally:
+        # 清理操作
+        driver.quit()
+
+if __name__ == "__main__":
+    main()
+''')
+
+// 打印大模型结果
+log('代码结果：{{psr_all}}')

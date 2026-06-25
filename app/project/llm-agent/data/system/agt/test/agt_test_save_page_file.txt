@@ -1,0 +1,23 @@
+/*
+{
+	"title":"Svae selenium script",
+	"description":"Save seleniumn for test requirement",
+	"parameter":"test_no=测试编号&current_step=当前验证步骤",
+	"tag":"chatdoc_QA",
+	"resultPlan":"n_python_file",
+	"life":50,
+	"version":1
+}
+*/
+// get n_global variable
+n_global_variable, act_memory.retrieve?var=global_variable&global=true
+
+// Set subfolder
+assign("subfolder","/{{n_global_variable.system}}/{{n_global_variable.programming_language}}/{{n_global_variable.module}}/page/{{n_global_variable.test_no}}")
+
+//# Collect page information again
+n_page_info, act_rpa.send?command=GetPageInfo
+// [true, "{\"success\": true, \"data\": {\"url\": \"http://172.18.2.14:5171/login\", \"page_status\": \"complete\"}}"]
+// Write python script 
+n_python_file, act_python.write?pythonType={{n_global_variable.programming_language}}&requirement={{current_step}}&application={{n_global_variable.system}}&subfolder={{subfolder}}&pythonCode={{pythonCode}}
+assign("subfolder","/{{n_global_variable.system}}/{{n_global_variable.programming_language}}/{{n_global_variable.module}}/page/{{n_global_variable.test_no}}")

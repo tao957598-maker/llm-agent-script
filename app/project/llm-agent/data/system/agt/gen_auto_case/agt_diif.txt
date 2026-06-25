@@ -1,0 +1,94 @@
+/*
+{
+	"title":"Document Summary & Test Case Generator",
+	"description":"Generate comprehensive summaries from documents and create test cases based on the content",
+	"parameter":[
+		{
+			"name":"old_kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+        {
+			"name":"new_kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"uiEntrance":"test",
+	"resultPlan":"status,n_combined_result,n_doc_mind_map",
+	"life":10000,
+	"displayOrder":30,
+	"version":2
+}
+*/
+
+
+
+//# Agent status
+assign("status", 'Agent is running')
+
+n_old_json,agt_get_pages?kbSpaceFileId={{old_kbSpaceFileId}}
+n_new_json,agt_get_pages?kbSpaceFileId={{new_kbSpaceFileId}}
+
+assign("json", '{{fn.json("old_json,n_old_json,new_json,n_new_json")}}')
+n_result, act_api.doExecuteDynamic?name="diff_json_pages"&dynamicParamData='{{json}}'
+
+// 定义Inner agent，可传入参数p1
+agent('agt_get_pages', {
+	// file name
+n_file_name, act_kb.selectBy?sql='select  knowledge_name  from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}" '
+assign("file_name", '{{n_file_name[0].knowledge_name}}')
+
+when('!fn.hasValue(Pages)', {
+  // 取全部数据
+  n_kb_data, act_kb.selectBy?sql='''select
+    *
+from
+    (SELECT
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS content
+FROM
+    kbs_doc_page_parse
+WHERE
+    documentId = "{{kbSpaceFileId}}"
+ORDER BY
+    CAST(page AS SIGNED) ASC) as a where a.content is not null'''
+
+},{
+    // 取分页数据
+ n_kb_data, act_kb.selectBy?sql='''select
+    *
+from
+    (SELECT
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS content
+FROM
+    kbs_doc_page_parse
+WHERE
+    documentId = "{{kbSpaceFileId}}" and page in ({{Pages}})
+ORDER BY
+    CAST(page AS SIGNED) ASC) as a where a.content is not null'''
+
+})
+assign("documentId", "{{kbSpaceFileId}}")
+
+// 获取查询结果
+assign("kb_list_data", '{{n_kb_data}}')
+})
+
+

@@ -1,0 +1,124 @@
+/*
+{
+	"title":"Find the shortest node in a graph",
+	"description":"In a graph, find the shortest path through a start node, intermediate nodes, and an end node.",
+	"parameter":[
+		{
+			"name":"label",
+			"label":"图谱库中定义的label",
+			"required":true
+		},
+		{
+			"name":"filterKey",
+			"label":"过滤条件",
+			"required":true
+		},
+		{
+			"name":"start",
+			"label":"起始值",
+			"required":true
+		},
+		{
+			"name":"passThrough",
+			"label":"途经值",
+			"required":false
+		},
+		{
+			"name":"end",
+			"label":"结束值",
+			"required":true
+		},
+		{
+			"name":"system_name",
+			"label":"系统名称",
+			"required":false
+		}
+	],
+	"tag":"graph",
+	"uiEntrance":"graph",
+	"displayOrder":0,
+	"version":1
+}
+*/
+when('null == system_name', {
+	assign("system_name", "")
+})
+
+when("passThrough != null", {
+    n_cypher,act_func?script='''
+                        String str;
+                        if (system_name !="") {
+                            str = """
+                                MATCH (a:`{{label}}` {`{{filterKey}}`: '{{start}}', system_name : '{{system_name}}'})
+                                WITH a
+                                MATCH (c:`{{label}}` {`{{filterKey}}`: '{{end}}' , system_name : '{{system_name}}'})
+                                WITH a, c
+                                MATCH (b:`{{label}}` {`{{filterKey}}`: '{{passThrough}}' , system_name : '{{system_name}}'})
+                            """;
+                        } else {
+                            str = """
+                                MATCH (a:`{{label}}` {`{{filterKey}}`: '{{start}}'})
+                                WITH a
+                                MATCH (c:`{{label}}` {`{{filterKey}}`: '{{end}}'})
+                                WITH a, c
+                                MATCH (b:`{{label}}` {`{{filterKey}}`: '{{passThrough}}'})
+                            """;
+                        }
+                        str += """
+                            MATCH path = (a)-[*1..8]->(c)
+                            WHERE b IN nodes(path)
+                            WITH path, length(path) AS pathLength
+                            ORDER BY pathLength asc
+                            WITH nodes(path) AS nodeList, relationships(path) AS relList, length(path) AS pathLength
+                            limit 1
+                            RETURN apoc.convert.toMap({
+                              nodes: [i IN range(0, size(relList)-1) | {
+                                node: properties(nodeList[i]),
+                                targetRelationship: {
+                                  type: type(relList[i]),
+                                  properties: properties(relList[i]),
+                                  toNode: properties(nodeList[i + 1])
+                                }
+                              }],
+                              pathLength: pathLength
+                            }) AS mapItems
+                        """;
+                        return str
+                    '''
+},{
+    n_cypher,act_func?script='''
+                            String str;
+                            if (system_name !="") {
+                                str = """
+                                    MATCH (a:`{{label}}` {`{{filterKey}}`: '{{start}}' , system_name : '{{system_name}}'})
+                                    WITH a
+                                    MATCH (c:`{{label}}` {`{{filterKey}}`: '{{end}}' , system_name : '{{system_name}}'})
+                                    WITH a, c
+                                """;
+                            } else{
+                                str = """
+                                    MATCH (a:`{{label}}` {`{{filterKey}}`: '{{start}}'})
+                                    WITH a
+                                    MATCH (c:`{{label}}` {`{{filterKey}}`: '{{end}}'})
+                                    WITH a, c
+                                """;
+                            }
+                            str += """
+                                MATCH path = shortestPath((a)-[*1..10]->(c))
+                                WITH nodes(path) AS nodeList, relationships(path) AS relList, length(path) AS pathLength
+                                RETURN apoc.convert.toMap({
+                                  nodes: [i IN range(0, size(relList)-1) | {
+                                    node: properties(nodeList[i]),
+                                    targetRelationship: {
+                                      type: type(relList[i]),
+                                      properties: properties(relList[i]),
+                                      toNode: properties(nodeList[i + 1])
+                                    }
+                                  }],
+                                  pathLength: pathLength
+                                }) AS mapItems
+                            """;
+                            return str
+                        '''
+})
+n_cypher_data,act_kb.searchGraph?cypher='{{n_cypher}}'

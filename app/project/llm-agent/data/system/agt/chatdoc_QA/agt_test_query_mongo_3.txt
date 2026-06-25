@@ -1,0 +1,135 @@
+/*
+{
+	"title":"Answer user question by mongo query",
+	"description":"Answer user question",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+        {
+            "name":"kbSpaceId",
+            "label":"Folder ID",
+            "type":"knowledge_fold"
+        }
+	],
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"mongodb_query_answer",
+    "life": "100",
+	"version":1
+}
+*/
+
+// 预置空答案
+assign("n_answer", "[]")
+
+when('fn.hasValue(kbSpaceId)',{
+    n_space_ids,act_func?script='''
+        def data = kbSpaceId
+        return data.split(',')
+    '''
+    assign('dir_list', '[]')
+    assign('file_list', '[]')
+    // 根据id拿到对应的full path
+    foreach('n_item', 'n_space_ids',{
+        assign('space_id', '{{n_item.item}}')
+        n_store_uris,act_kb.selectBy?sql='select kb_spaces_folder_id,store_uri from kb_spaces_folder_knowledge where kb_spaces_folder_id = {{space_id}}'
+        when('n_store_uris?size gt 0',{
+            n_dir_data,act_func?script='''
+                def data = n_store_uris
+                for (int i = 0; i < data.size(); i++) {
+                    def item = data[i]
+                    def path_name = item.store_uri
+                    def path_name_split = path_name.split('/')
+                    def path_name_last = path_name_split[path_name_split.length - 1]
+                    if (path_name_last.contains('.')) {
+                        file_list.add(item)
+                    }else {
+                        dir_list.add(item)
+                    }
+                }
+            '''
+        })
+    })
+    log('dir_list={{dir_list}}')
+    log('file_list={{file_list}}')
+
+    // Set mql for userInput
+    n_kb_space_paths,act_func?script='''
+        def data = dir_list
+        return data.findResults { it?.store_uri }
+    '''
+    n_kb_space_file_paths,act_func?script='''
+        def data = file_list
+        return data.findResults { it?.store_uri }
+    '''
+    // gen mql to query mongo
+    n_query_mql,agt_gen_mql?kbSpacePaths={{n_kb_space_paths}}&kbSpaceFilePaths={{n_kb_space_file_paths}}&indicatorDesc={{userInput}}
+    log('n_query_mql={{n_query_mql}}')
+    // mongo tables
+    when('n_query_mql == "db.report_data.aggregate([])"',{
+        // Empty answer
+        assign('n_answer', "[]")
+    },{
+        when('fn.hasValue(n_query_mql) && n_query_mql != "db.report_data.aggregate([])"',{
+            // Get query answer for userInput
+            n_answer_tmp, act_api.doExecuteDynamic?name=ReportDataSearch&dynamicParamData='{{fn.json("searchMQL, n_query_mql", true)}}'
+
+            //  Get query answer
+                n_result, act_func?script='''
+                def json_data = n_answer_tmp
+                n_answer.addAll(json_data.data)
+                return n_answer
+            '''
+            // Get query answer
+            assign('n_answer', "{{n_result}}")
+        },{
+            // Empty answer
+            assign('n_answer', "[]")
+        })
+    })
+    
+    log('n_answer={{n_answer}}')
+})
+
+when('n_answer?size > 0',{
+    // Extract answer fot MongoDB
+    n_answer,tpl_extract_answer,psr_all
+})
+
+// The finally result of mongo query
+assign("mongodb_query_answer", '{{n_answer}}')
+
+
+define('tpl_extract_answer', '''
+# 你是一名【结构化数据答案提取助手】。
+
+# 将提供两部分内容：
+    - 一段结构化的数据信息（JSON 数组）
+    - 一个明确的问题
+
+# 你的任务是：
+    - 精确理解问题的查询目标
+    - 仅在【数据信息】中查找与问题最匹配的记录
+    - 不得引入任何外部知识
+    - 不得进行推理、猜测或补充说明
+    - 仅返回与问题直接相关的字段
+    - 输出必须是纯 JSON 数组字符串，不得包含任何 Markdown 格式（如 ```json 或 ```），不得包含解释、注释或额外文本
+
+# 抽取规则：
+    - 必须从数据信息中查找答案，不允许编造或补充数据
+    - 如果问题明确指定某个指标（如“預測市帳率”），只返回该指标及必要的标识字段
+    - 返回格式必须是合法的 JSON 数组
+    - 每个对象中至少包含：
+        - 能唯一标识对象的字段（如 指數名稱、指數名稱_1）
+        - 问题所询问的目标字段
+    - 绝对不要使用代码块（例如不要用 ```json ... ```），只输出原始 JSON 内容
+
+# 数据信息：
+{{n_answer}}
+
+# 问题
+{{userInput}}
+
+''')

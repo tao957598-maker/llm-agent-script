@@ -1,0 +1,47 @@
+/*
+{
+	"title":"Image Format Recognizer",
+	"description":"Identify formats in images",
+	"parameter":"{\"name\":\"imagePath\",\"label\":\"图片路径\"}",
+	"uiEntrance":"chatDoc",
+	"resultPlan":"n_graph_data,result_data",
+	"life":1000,
+	"version":1
+}
+*/
+
+// 获取图片路径及内容
+assign("image_path", "{{imagePath}}")
+
+// 定义提示词
+assign('system_prompt','''
+  你是一位专业的图像结构分析专家，任务是分析一张图像，识别其内容结构类型。
+
+  任务目标
+  根据提供的图片内容，识别图片结构类型，并输出统一格式的结构判断结果。
+
+  可识别类型包括（可多选）：
+  - `table`：表格（有列标题、行数据，表格边框线）
+  - `mermaid`：流程图（有明确**箭头连接线**，注意区别与表格边框线）
+  - `ui`：页面截图或UI图（有输入框、按钮、文字、表格等）
+  - `other`：其他类型（如纯文字、图表、UI图等）
+
+  # 📝 输出格式,type类型可为多个：
+  {
+    "type": "mermaid,table",
+    "reason": "简洁说明判断依据，不超过30字"
+  }
+''')
+
+// 调用大模型输出
+n_result_data, tpl_image_chat
+assign("result_data", "{{n_result_data.type}}")
+
+// 定义输出模板
+define('tpl_image_chat', '''
+  /*{
+	 "llmType":"alias.vision"
+	}*/
+
+	{{fn.chatImageFlag('%{system_prompt}%', '', '', '%{image_path}%', 1)}}
+''')

@@ -1,0 +1,956 @@
+/*{
+	"title":"Gen testcase by KB Incremental",
+	"description":"Compare old/new kbs_doc_page_parse and regenerate only changed pages on top of the existing gen_auto_case flow",
+	"parameter":[
+		{
+			"name":"oldDocumentId",
+			"label":"Old documentId",
+			"type":"knowledge_space",
+			"required":true
+		},
+		{
+			"name":"oldVersion",
+			"label":"Old version",
+			"required":true
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"New documentId",
+			"type":"knowledge_space",
+			"required":true
+		},
+		{
+			"name":"version",
+			"label":"New version",
+			"required":true
+		},
+		{
+			"name":"pages",
+			"label":"Pages (optional scope, split by `,` )"
+		},
+		{
+			"name":"source_type",
+			"label":"source_type",
+			"type":"select",
+			"defaultValue":"web",
+			"args":[
+				{"label":"Web","value":"web"},
+				{"label":"API","value":"api"},
+				{"label":"Auto","value":"auto"}
+			]
+		}
+	],
+	"tag":"Automated Testing",
+	"resultPlan":"status,n_combined_result,n_diff_result",
+	"life":10000,
+	"version":1
+}*/
+
+// status
+assign("status", "Incremental agent is running")
+// params
+assign("old_document_id", "{{oldDocumentId}}")
+// params
+assign("old_version", "{{oldVersion}}")
+// params
+assign("new_document_id", "{{kbSpaceFileId}}")
+// params
+assign('source_type_safe', '{{fn.optional(source_type, "auto")}}')
+// params
+assign('scope_pages', '{{fn.optional(pages, "")}}')
+// params
+assign("documentId", "{{kbSpaceFileId}}")
+// params
+assign("effectiveDocumentId", "{{kbSpaceFileId}}")
+
+// validate oldDocumentId
+when('!fn.hasValue(oldDocumentId)', {
+    n_param_err_old_doc,act_func?script='throw new RuntimeException("oldDocumentId is required")'
+})
+// validate oldVersion
+when('!fn.hasValue(oldVersion)', {
+    n_param_err_old_ver,act_func?script='throw new RuntimeException("oldVersion is required")'
+})
+// validate new document
+when('!fn.hasValue(kbSpaceFileId)', {
+    n_param_err_new_doc,act_func?script='throw new RuntimeException("kbSpaceFileId is required")'
+})
+// validate version
+when('!fn.hasValue(version)', {
+    n_param_err_ver,act_func?script='throw new RuntimeException("version is required")'
+})
+
+// old file name
+n_old_file_name,act_kb.selectBy?sql='select knowledge_name from kb_spaces_folder_knowledge where id="{{old_document_id}}"'
+// new file name
+n_new_file_name,act_kb.selectBy?sql='select knowledge_name from kb_spaces_folder_knowledge where id="{{new_document_id}}"'
+// old file alias
+assign("old_file_name", "{{n_old_file_name[0].knowledge_name}}")
+// new file alias
+assign("new_file_name", "{{n_new_file_name[0].knowledge_name}}")
+
+// preflight new version data check
+n_existing_new_module_rows,act_kb.selectBy?sql='select distinct documentId as doc_id from kb_gen_test_module where version = "{{version}}" and documentId = "{{new_document_id}}"'
+// preflight new version data check
+n_existing_new_design_rows,act_kb.selectBy?sql='select distinct documentId as doc_id from kb_gen_test_module_design where version = "{{version}}" and documentId = "{{new_document_id}}"'
+// preflight new version data check
+n_existing_new_case_rows,act_kb.selectBy?sql='select distinct document_id as doc_id from kb_gen_test_case where version = "{{version}}" and document_id = "{{new_document_id}}"'
+// preflight new version cleanup summary
+n_existing_new_version_cleanup,act_func?script='''
+    def countRows = { rows ->
+        return (rows instanceof List) ? rows.size() : 0
+    }
+    def moduleCount = countRows(n_existing_new_module_rows)
+    def designCount = countRows(n_existing_new_design_rows)
+    def caseCount = countRows(n_existing_new_case_rows)
+    println("[INCREMENT-CLEANUP][PRE] version=" + version + ", documentId=" + new_document_id + ", moduleDocIds=" + moduleCount + ", designDocIds=" + designCount + ", caseDocIds=" + caseCount)
+    return [
+        has_data: (moduleCount + designCount + caseCount) > 0,
+        module_doc_ids: (n_existing_new_module_rows instanceof List) ? n_existing_new_module_rows.collect { it instanceof Map ? (it.get("doc_id") ?: "") : "" }.findAll { it != null && it.toString().trim() != "" } : [],
+        design_doc_ids: (n_existing_new_design_rows instanceof List) ? n_existing_new_design_rows.collect { it instanceof Map ? (it.get("doc_id") ?: "") : "" }.findAll { it != null && it.toString().trim() != "" } : [],
+        case_doc_ids: (n_existing_new_case_rows instanceof List) ? n_existing_new_case_rows.collect { it instanceof Map ? (it.get("doc_id") ?: "") : "" }.findAll { it != null && it.toString().trim() != "" } : [],
+        module_count: moduleCount,
+        design_count: designCount,
+        case_count: caseCount
+    ]
+'''
+// preflight cleanup summary capture
+assign('increment_new_version_cleanup_summary', '{{n_existing_new_version_cleanup}}')
+
+// preflight overwrite cleanup for exact version/documentId
+n_pre_cleanup_module_delete,act_kb.delete?name=kb_gen_test_module&where='{"version":"{{version}}","documentId":"{{new_document_id}}"}'&maxSize=1000
+// preflight overwrite cleanup for exact version/documentId
+n_pre_cleanup_design_delete,act_kb.delete?name=kb_gen_test_module_design&where='{"version":"{{version}}","documentId":"{{new_document_id}}"}'&maxSize=1000
+// preflight overwrite cleanup for exact version/documentId
+n_pre_cleanup_case_delete,act_kb.delete?name=kb_gen_test_case&where='{"version":"{{version}}","document_id":"{{new_document_id}}"}'&maxSize=1000
+// preflight overwrite cleanup logging
+act_func?script='''
+    def logCount = { rows -> (rows instanceof List) ? rows.size() : 0 }
+    println("[INCREMENT-CLEANUP][PRE-DELETE] version=" + version + ", documentId=" + new_document_id + ", module=" + logCount(n_pre_cleanup_module_delete) + ", design=" + logCount(n_pre_cleanup_design_delete) + ", case=" + logCount(n_pre_cleanup_case_delete))
+'''
+// preflight cleanup verification
+n_post_cleanup_new_module_rows,act_kb.selectBy?sql='select count(1) as cnt from kb_gen_test_module where version = "{{version}}" and documentId = "{{new_document_id}}"'
+// preflight cleanup verification
+n_post_cleanup_new_design_rows,act_kb.selectBy?sql='select count(1) as cnt from kb_gen_test_module_design where version = "{{version}}" and documentId = "{{new_document_id}}"'
+// preflight cleanup verification
+n_post_cleanup_new_case_rows,act_kb.selectBy?sql='select count(1) as cnt from kb_gen_test_case where version = "{{version}}" and document_id = "{{new_document_id}}"'
+// preflight cleanup verification summary
+act_func?script='''
+    def readCount = { rows ->
+        if (!(rows instanceof List) || rows.isEmpty()) return 0
+        def row = rows[0]
+        if (!(row instanceof Map)) return 0
+        def v = row.get("cnt")
+        try { return Integer.parseInt(v == null ? "0" : v.toString()) } catch (Throwable ignore) { return 0 }
+    }
+    def moduleCount = readCount(n_post_cleanup_new_module_rows)
+    def designCount = readCount(n_post_cleanup_new_design_rows)
+    def caseCount = readCount(n_post_cleanup_new_case_rows)
+    println("[INCREMENT-CLEANUP][POST] version=" + version + ", documentId=" + new_document_id + ", moduleCount=" + moduleCount + ", designCount=" + designCount + ", caseCount=" + caseCount)
+'''
+
+// scope pages parse
+act_func?script='''
+    def splitCommaList = { raw ->
+        def s = (raw == null ? "" : raw.toString()).trim()
+        def out = []
+        if (!s) return out
+        def current = new StringBuilder()
+        for (int i = 0; i < s.length(); i++) {
+            def ch = s.charAt(i)
+            if (ch == ',') {
+                def token = current.toString().trim()
+                if (token) out.add(token)
+                current.setLength(0)
+            } else {
+                current.append(ch)
+            }
+        }
+        def token = current.toString().trim()
+        if (token) out.add(token)
+        return out
+    }
+    def normalizePageKey = { v ->
+        def x = (v == null ? "" : v.toString()).trim().toLowerCase()
+        if (x.startsWith("page")) x = x.substring(4).trim()
+        return x
+    }
+    def singlePageText = { inputVal ->
+        def s = (inputVal == null ? "" : inputVal.toString()).trim()
+        if (!s) return ""
+        def token = s.contains(",") ? s.split(",")[0].trim() : s
+        if (!token) return ""
+        if (token.toLowerCase().startsWith("page")) {
+            token = token.substring(4).trim()
+        }
+        return token
+    }
+    def scopeRaw = splitCommaList(scope_pages)
+    def scopeKeys = new LinkedHashSet()
+    scopeRaw.each { p ->
+        def x = normalizePageKey(p)
+        if (x) scopeKeys.add(x)
+    }
+    fn.put("increment_scope_pages", scopeRaw)
+    fn.put("increment_scope_page_keys", scopeKeys)
+'''
+
+// parse rows from old document
+n_old_parse_rows,act_kb.selectBy?sql='''select
+    page,
+    analysis_content,
+    content
+from kbs_doc_page_parse
+where documentId="{{old_document_id}}"
+order by CAST(page AS SIGNED) ASC'''
+// parse rows from new document
+n_new_parse_rows,act_kb.selectBy?sql='''select
+    page,
+    analysis_content,
+    content
+from kbs_doc_page_parse
+where documentId="{{new_document_id}}"
+order by CAST(page AS SIGNED) ASC'''
+
+// build prompt input for semantic page diff
+act_func?script='''
+    def splitCommaList = { raw ->
+        def s = (raw == null ? "" : raw.toString()).trim()
+        def out = []
+        if (!s) return out
+        def current = new StringBuilder()
+        for (int i = 0; i < s.length(); i++) {
+            def ch = s.charAt(i)
+            if (ch == ',') {
+                def token = current.toString().trim()
+                if (token) out.add(token)
+                current.setLength(0)
+            } else {
+                current.append(ch)
+            }
+        }
+        def token = current.toString().trim()
+        if (token) out.add(token)
+        return out
+    }
+    def normalizePageKey = { v ->
+        def x = (v == null ? "" : v.toString()).trim().toLowerCase()
+        if (x.startsWith("page")) x = x.substring(4).trim()
+        return x
+    }
+    def singlePageText = { inputVal ->
+        def s = (inputVal == null ? "" : inputVal.toString()).trim()
+        if (!s) return ""
+        def token = s.contains(",") ? s.split(",")[0].trim() : s
+        if (!token) return ""
+        if (token.toLowerCase().startsWith("page")) {
+            token = token.substring(4).trim()
+        }
+        return token
+    }
+    def scopeKeys = fn.get("increment_scope_page_keys")
+    if (!(scopeKeys instanceof Set)) scopeKeys = new LinkedHashSet()
+    def pickBestContent = { r ->
+        if (!(r instanceof Map)) return ""
+        def analysis = r.get("analysis_content")
+        def content = r.get("content")
+        def picked = fn.hasValue(analysis) ? analysis : content
+        return picked == null ? "" : picked.toString().trim()
+    }
+    def aggregateRowsByPage = { rows ->
+        def pageMap = new LinkedHashMap()
+        (rows instanceof List ? rows : []).each { r ->
+            if (!(r instanceof Map)) return
+            def pk = normalizePageKey(r.get("page"))
+            if (!pk) return
+            if (!scopeKeys.isEmpty() && !scopeKeys.contains(pk)) return
+            def pageLabel = singlePageText.call(r.get("page"))
+            def content = pickBestContent(r)
+            if (!fn.hasValue(content)) return
+            def bucket = pageMap.get(pk)
+            if (bucket == null) {
+                bucket = [page: pageLabel, parts: []]
+                pageMap.put(pk, bucket)
+            }
+            if (!fn.hasValue(bucket.page) && fn.hasValue(pageLabel)) {
+                bucket.page = pageLabel
+            }
+            bucket.parts.add(content)
+        }
+        def out = new LinkedHashMap()
+        pageMap.each { k, bucket ->
+            def joined = (bucket.parts instanceof List ? bucket.parts : []).join("\n")
+            out.put(k, [
+                page: (bucket.page ?: "").toString().trim(),
+                content: joined,
+                part_count: (bucket.parts instanceof List ? bucket.parts.size() : 0)
+            ])
+        }
+        return out
+    }
+    def oldRows = n_old_parse_rows
+    if (!(oldRows instanceof List)) oldRows = []
+    def newRows = n_new_parse_rows
+    if (!(newRows instanceof List)) newRows = []
+    def oldMap = aggregateRowsByPage(oldRows)
+    def newMap = aggregateRowsByPage(newRows)
+    def commonPages = []
+    def addPages = []
+    def deletePages = []
+    def promptLines = []
+    promptLines.add("Compare the following page pairs semantically.")
+    promptLines.add("Return a pure JSON array only.")
+    promptLines.add("Each item must contain page, status, and reason.")
+    promptLines.add("Use Same when the page meaning, structure, and paragraph semantics are the same even if formatting, OCR noise, or punctuation differs.")
+    promptLines.add("Use Update when the page meaning or structure changed materially.")
+    promptLines.add("Pages that exist only in the new document are Add.")
+    promptLines.add("Pages that exist only in the old document are Delete.")
+    newMap.each { k, n ->
+        def o = oldMap.remove(k)
+        if (o == null) {
+            addPages.add(n.page)
+        } else {
+            commonPages.add([
+                page_key: k,
+                page: n.page,
+                old_content: o.content,
+                new_content: n.content,
+                old_len: o.content.length(),
+                new_len: n.content.length(),
+                old_parts: (o.part_count ?: 0),
+                new_parts: (n.part_count ?: 0)
+            ])
+            promptLines.add("=== PAGE " + n.page + " ===")
+            promptLines.add("OLD:")
+            promptLines.add(o.content)
+            promptLines.add("NEW:")
+            promptLines.add(n.content)
+            promptLines.add("")
+        }
+    }
+    oldMap.each { k, o ->
+        deletePages.add(o.page)
+    }
+    def promptData = promptLines.join("\n").trim()
+    fn.put("increment_add_pages", addPages)
+    fn.put("increment_delete_pages", deletePages)
+    fn.put("increment_common_pages", commonPages)
+    fn.put("increment_page_diff_prompt_data", promptData)
+    fn.put("increment_page_diff_prompt_pages", commonPages.collect { it.page })
+'''
+
+define('tpl_increment_page_diff', '''
+You are comparing old and new document pages for incremental testcase generation.
+
+Decide the semantic status for each common page pair.
+
+Rules:
+- Use `Same` when the meaning, structure, and paragraph semantics are the same even if spacing, punctuation, OCR noise, or minor formatting differ.
+- Use `Update` when the meaning or structure changed materially, sections were added or removed, or the page content is clearly different.
+- Use `Add` only for pages present only in the new document.
+- Use `Delete` only for pages present only in the old document.
+- Prefer semantic equivalence over literal string comparison.
+- Return pure JSON only.
+- Return an array of objects.
+- Each object must have keys: `page`, `status`, `reason`.
+- `status` must be one of `Same`, `Update`, `Add`, `Delete`.
+- Keep `reason` short.
+- If there are no common pages, return `[]`.
+
+Page pairs:
+{{increment_page_diff_prompt_data}}
+''')
+
+// semantic page diff by LLM
+n_diff_llm_result,tpl_increment_page_diff,psr_json
+
+// diff pages and change types
+n_diff_result,act_func?script='''
+    def splitCommaList = { raw ->
+        def s = (raw == null ? "" : raw.toString()).trim()
+        def out = []
+        if (!s) return out
+        def current = new StringBuilder()
+        for (int i = 0; i < s.length(); i++) {
+            def ch = s.charAt(i)
+            if (ch == ',') {
+                def token = current.toString().trim()
+                if (token) out.add(token)
+                current.setLength(0)
+            } else {
+                current.append(ch)
+            }
+        }
+        def token = current.toString().trim()
+        if (token) out.add(token)
+        return out
+    }
+    def extractLlmRows = { raw ->
+        if (raw instanceof List) return raw
+        if (raw instanceof Map) {
+            def candidateKeys = ["data", "items", "rows", "result", "list", "value"]
+            for (def key : candidateKeys) {
+                def candidate = raw.get(key)
+                if (candidate instanceof List) return candidate
+            }
+            if (raw.containsKey("page") || raw.containsKey("status") || raw.containsKey("change_type")) {
+                return [raw]
+            }
+        }
+        return []
+    }
+    def normalizePageKey = { v ->
+        def x = (v == null ? "" : v.toString()).trim().toLowerCase()
+        if (x.startsWith("page")) x = x.substring(4).trim()
+        return x
+    }
+    def commonPages = fn.get("increment_common_pages")
+    if (!(commonPages instanceof List)) commonPages = []
+    def addPages = fn.get("increment_add_pages")
+    if (!(addPages instanceof List)) addPages = []
+    def deletePages = fn.get("increment_delete_pages")
+    if (!(deletePages instanceof List)) deletePages = []
+    def llmRows = extractLlmRows(n_diff_llm_result)
+    if (!(llmRows instanceof List)) llmRows = []
+    def llmMap = new LinkedHashMap()
+    llmRows.each { item ->
+        if (!(item instanceof Map)) return
+        def pageRaw = item.get("page")
+        if (!fn.hasValue(pageRaw)) pageRaw = item.get("page_number")
+        if (!fn.hasValue(pageRaw)) pageRaw = item.get("page_no")
+        if (!fn.hasValue(pageRaw)) pageRaw = item.get("pageNo")
+        def key = normalizePageKey(pageRaw)
+        if (!key) return
+        llmMap.put(key, item)
+    }
+    def sameKeys = new LinkedHashSet()
+    def addKeys = new LinkedHashSet()
+    def updateKeys = new LinkedHashSet()
+    def deleteKeys = new LinkedHashSet()
+    def addPagesOut = []
+    def modifyPages = []
+    def deletePagesOut = []
+    def pageDetails = []
+    addPages.each { p ->
+        def key = normalizePageKey(p)
+        if (!key) return
+        addKeys.add(key)
+        addPagesOut.add((p == null ? "" : p.toString()).trim())
+        pageDetails.add([page: (p == null ? "" : p.toString()).trim(), type: "Add", old_len: 0, new_len: 0, old_parts: 0, new_parts: 0])
+    }
+    commonPages.each { item ->
+        if (!(item instanceof Map)) return
+        def key = normalizePageKey(item.get("page"))
+        if (!key) return
+        def pageLabel = (item.get("page") ?: "").toString().trim()
+        def llm = llmMap.get(key)
+        def status = llm == null ? "Update" : (llm.get("status") ?: llm.get("change_type") ?: "Update").toString().trim()
+        if (status.equalsIgnoreCase("Same")) {
+            sameKeys.add(key)
+            pageDetails.add([page: pageLabel, type: "Same", old_len: (item.old_len ?: 0), new_len: (item.new_len ?: 0), old_parts: (item.old_parts ?: 0), new_parts: (item.new_parts ?: 0)])
+        } else {
+            updateKeys.add(key)
+            modifyPages.add(pageLabel)
+            pageDetails.add([page: pageLabel, type: "Update", old_len: (item.old_len ?: 0), new_len: (item.new_len ?: 0), old_parts: (item.old_parts ?: 0), new_parts: (item.new_parts ?: 0)])
+        }
+    }
+    deletePages.each { p ->
+        def key = normalizePageKey(p)
+        if (!key) return
+        deleteKeys.add(key)
+        deletePagesOut.add((p == null ? "" : p.toString()).trim())
+        pageDetails.add([page: (p == null ? "" : p.toString()).trim(), type: "Delete", old_len: 0, new_len: 0, old_parts: 0, new_parts: 0])
+    }
+    def regenPages = []
+    regenPages.addAll(addPagesOut)
+    regenPages.addAll(modifyPages)
+    regenPages = regenPages.findAll { it != null && it.toString().trim() != "" }.unique()
+    fn.put("increment_add_page_keys", addKeys)
+    fn.put("increment_update_page_keys", updateKeys)
+    fn.put("increment_delete_page_keys", deleteKeys)
+    fn.put("increment_regen_pages", regenPages)
+    fn.put("increment_regen_pages_csv", regenPages.join(","))
+    fn.put("increment_diff_map", [
+        Same: sameKeys as List,
+        Add: addPagesOut.unique(),
+        Update: modifyPages.unique(),
+        Delete: deletePagesOut.unique(),
+        Regen: regenPages
+    ])
+    def page1Detail = pageDetails.findAll { it instanceof Map && (it.page ?: "").toString().trim() == "1" }
+    println("[INCREMENT-DIFF] oldDocumentId=" + old_document_id + ", newDocumentId=" + new_document_id + ", version=" + version + ", scopePages=" + scope_pages)
+    println("[INCREMENT-DIFF] llmRawType=" + (n_diff_llm_result == null ? "null" : n_diff_llm_result.getClass().getName()) + ", llmRowsType=" + llmRows.getClass().getName() + ", llmPages=" + llmRows.size() + ", commonPages=" + commonPages.size() + ", addPages=" + addPages.size() + ", deletePages=" + deletePages.size())
+    if (llmRows.size() > 0) {
+        def llmPreview = []
+        llmRows.take(3).each { item ->
+            if (item instanceof Map) {
+                llmPreview.add([
+                    page: (item.get("page") ?: item.get("page_number") ?: item.get("page_no") ?: item.get("pageNo") ?: "").toString(),
+                    status: (item.get("status") ?: item.get("change_type") ?: "").toString(),
+                    reason: (item.get("reason") ?: "").toString()
+                ])
+            } else {
+                llmPreview.add(item)
+            }
+        }
+        println("[INCREMENT-DIFF] llmPreview=" + llmPreview)
+    }
+    println("[INCREMENT-DIFF] summary=" + [Same: sameKeys.size(), Add: addKeys.size(), Update: updateKeys.size(), Delete: deleteKeys.size(), Regen: regenPages.size()])
+    println("[INCREMENT-DIFF] regenPages=" + regenPages)
+    println("[INCREMENT-DIFF] page1Details=" + page1Detail)
+    return [
+        Same: sameKeys.size(),
+        Add: addKeys.size(),
+        Update: updateKeys.size(),
+        Delete: deleteKeys.size(),
+        Regen: regenPages.size(),
+        SamePages: sameKeys as List,
+        AddPages: addPagesOut.unique(),
+        UpdatePages: modifyPages.unique(),
+        DeletePages: deletePagesOut.unique(),
+        RegenPages: regenPages,
+        PageDetails: pageDetails
+    ]
+'''
+
+// run existing flow only for changed pages
+when('fn.hasValue(increment_regen_pages_csv)', {
+    n_increment_child,agt_gen_test_case_entry?kbSpaceFileId='{{new_document_id}}'&source_type='{{source_type_safe}}'&pages='{{increment_regen_pages_csv}}'&version='{{version}}'&resumeMode='full'&change_type='Same'
+}, {
+    n_increment_child_skip,act_func?script='return ""'
+})
+
+// old module rows
+n_old_module_rows,act_kb.selectBy?sql='select * from kb_gen_test_module where version = "{{old_version}}" and documentId = "{{old_document_id}}"'
+// old design rows
+n_old_design_rows,act_kb.selectBy?sql='select * from kb_gen_test_module_design where version = "{{old_version}}" and documentId = "{{old_document_id}}"'
+// old case rows
+n_old_case_rows,act_kb.selectBy?sql='select * from kb_gen_test_case where version = "{{old_version}}" and document_id = "{{old_document_id}}"'
+
+// temporary child module rows
+n_tmp_module_rows,act_kb.selectBy?sql='select * from kb_gen_test_module where version = "{{version}}" and documentId = "{{new_document_id}}"'
+// temporary child design rows
+n_tmp_design_rows,act_kb.selectBy?sql='select * from kb_gen_test_module_design where version = "{{version}}" and documentId = "{{new_document_id}}"'
+// temporary child case rows
+n_tmp_case_rows,act_kb.selectBy?sql='select * from kb_gen_test_case where version = "{{version}}" and document_id = "{{new_document_id}}"'
+
+// overwrite cleanup before final import
+n_overwrite_cleanup_module,act_kb.delete?name=kb_gen_test_module&where='{"version":"{{version}}","documentId":"{{new_document_id}}"}'&maxSize=1000
+// overwrite cleanup before final import
+n_overwrite_cleanup_design,act_kb.delete?name=kb_gen_test_module_design&where='{"version":"{{version}}","documentId":"{{new_document_id}}"}'&maxSize=1000
+// overwrite cleanup before final import
+n_overwrite_cleanup_case,act_kb.delete?name=kb_gen_test_case&where='{"version":"{{version}}","document_id":"{{new_document_id}}"}'&maxSize=1000
+// overwrite cleanup before final import logging
+act_func?script='''
+    def logCount = { rows -> (rows instanceof List) ? rows.size() : 0 }
+    println("[INCREMENT-CLEANUP][OVERWRITE] version=" + version + ", documentId=" + new_document_id + ", module=" + logCount(n_overwrite_cleanup_module) + ", design=" + logCount(n_overwrite_cleanup_design) + ", case=" + logCount(n_overwrite_cleanup_case))
+'''
+// child skip means temp rows are stale leftovers from prior runs, so clear them before merge
+when('!fn.hasValue(increment_regen_pages_csv)', {
+    act_func?script='''
+        fn.put("n_tmp_module_rows", [])
+        fn.put("n_tmp_design_rows", [])
+        fn.put("n_tmp_case_rows", [])
+        println("[INCREMENT-CLEANUP][TMP-CLEAR] child skipped, temp rows cleared before merge")
+    '''
+})
+
+// build final module rows
+n_module_final_rows,act_func?script='''
+    def splitCommaList = { raw ->
+        def s = (raw == null ? "" : raw.toString()).trim()
+        def out = []
+        if (!s) return out
+        def current = new StringBuilder()
+        for (int i = 0; i < s.length(); i++) {
+            def ch = s.charAt(i)
+            if (ch == ',') {
+                def token = current.toString().trim()
+                if (token) out.add(token)
+                current.setLength(0)
+            } else {
+                current.append(ch)
+            }
+        }
+        def token = current.toString().trim()
+        if (token) out.add(token)
+        return out
+    }
+    def normalizePageKey = { v ->
+        def x = (v == null ? "" : v.toString()).trim().toLowerCase()
+        if (x.startsWith("page")) x = x.substring(4).trim()
+        return x
+    }
+    def singlePageText = { inputVal ->
+        def s = (inputVal == null ? "" : inputVal.toString()).trim()
+        if (!s) return ""
+        def token = s.contains(",") ? s.split(",")[0].trim() : s
+        if (!token) return ""
+        if (token.toLowerCase().startsWith("page")) {
+            token = token.substring(4).trim()
+        }
+        return token
+    }
+    def pageAction = { row ->
+        def pageText = singlePageText.call(row instanceof Map ? (row.get("page") ?: row.get("PAGE") ?: "") : "")
+        def addKeys = fn.get("increment_add_page_keys")
+        if (!(addKeys instanceof Set)) addKeys = new LinkedHashSet()
+        def updateKeys = fn.get("increment_update_page_keys")
+        if (!(updateKeys instanceof Set)) updateKeys = new LinkedHashSet()
+        def deleteKeys = fn.get("increment_delete_page_keys")
+        if (!(deleteKeys instanceof Set)) deleteKeys = new LinkedHashSet()
+        if (pageText && addKeys.contains(pageText)) return "Add"
+        if (pageText && updateKeys.contains(pageText)) return "Update"
+        if (pageText && deleteKeys.contains(pageText)) return "Delete"
+        return "Same"
+    }
+    def cloneRow = { src, changeType, docField ->
+        def out = new LinkedHashMap(src)
+        out.remove("id")
+        out.remove("ID")
+        out.put(docField, "{{new_document_id}}")
+        out.put("version", "{{version}}")
+        out.put("change_type", changeType)
+        def pageVal = (out.get("page") == null ? "" : out.get("page").toString()).trim()
+        out.put("page", singlePageText.call(pageVal))
+        return out
+    }
+    def bucketRowsByPage = { rows ->
+        def buckets = new LinkedHashMap()
+        (rows instanceof List ? rows : []).each { r ->
+            if (!(r instanceof Map)) return
+            def pageText = singlePageText.call(r.get("page") ?: r.get("PAGE") ?: "")
+            def key = normalizePageKey(pageText)
+            if (!key) return
+            def bucket = buckets.get(key)
+            if (bucket == null) {
+                bucket = []
+                buckets.put(key, bucket)
+            }
+            bucket.add(r)
+        }
+        return buckets
+    }
+    def buildFinalRows = { oldRows, tempRows, docField ->
+        def oldBuckets = bucketRowsByPage(oldRows)
+        def tempBuckets = bucketRowsByPage(tempRows)
+        def orderedKeys = new LinkedHashSet()
+        orderedKeys.addAll(oldBuckets.keySet())
+        orderedKeys.addAll(tempBuckets.keySet())
+        def out = []
+        orderedKeys.each { key ->
+            def oldBucket = oldBuckets.get(key) ?: []
+            def tempBucket = tempBuckets.get(key) ?: []
+            def probe = oldBucket ? oldBucket[0] : (tempBucket ? tempBucket[0] : null)
+            if (!(probe instanceof Map)) return
+            def action = pageAction(probe)
+            def chosen = (action == "Add" || action == "Update") ? tempBucket : oldBucket
+            (chosen instanceof List ? chosen : []).each { row ->
+                if (row instanceof Map) {
+                    out.add(cloneRow(row, action, docField))
+                }
+            }
+        }
+        def pageSample = []
+        out.take(5).each { row ->
+            if (row instanceof Map) pageSample.add(row.get("page"))
+        }
+        println("[INCREMENT-FINAL][" + docField + "] oldPages=" + oldBuckets.size() + ", tempPages=" + tempBuckets.size() + ", out=" + out.size() + ", pages=" + pageSample)
+        return out
+    }
+    def base = n_old_module_rows
+    if (!(base instanceof List)) base = []
+    def temp = n_tmp_module_rows
+    if (!(temp instanceof List)) temp = []
+    def finalRows = buildFinalRows(base, temp, "documentId")
+    fn.put("n_module_final_rows", finalRows)
+    return finalRows
+'''
+
+// build final design rows
+n_design_final_rows,act_func?script='''
+    def splitCommaList = { raw ->
+        def s = (raw == null ? "" : raw.toString()).trim()
+        def out = []
+        if (!s) return out
+        def current = new StringBuilder()
+        for (int i = 0; i < s.length(); i++) {
+            def ch = s.charAt(i)
+            if (ch == ',') {
+                def token = current.toString().trim()
+                if (token) out.add(token)
+                current.setLength(0)
+            } else {
+                current.append(ch)
+            }
+        }
+        def token = current.toString().trim()
+        if (token) out.add(token)
+        return out
+    }
+    def normalizePageKey = { v ->
+        def x = (v == null ? "" : v.toString()).trim().toLowerCase()
+        if (x.startsWith("page")) x = x.substring(4).trim()
+        return x
+    }
+    def singlePageText = { inputVal ->
+        def s = (inputVal == null ? "" : inputVal.toString()).trim()
+        if (!s) return ""
+        def token = s.contains(",") ? s.split(",")[0].trim() : s
+        if (!token) return ""
+        if (token.toLowerCase().startsWith("page")) {
+            token = token.substring(4).trim()
+        }
+        return token
+    }
+    def pageAction = { row ->
+        def pageText = singlePageText.call(row instanceof Map ? (row.get("page") ?: row.get("PAGE") ?: "") : "")
+        def addKeys = fn.get("increment_add_page_keys")
+        if (!(addKeys instanceof Set)) addKeys = new LinkedHashSet()
+        def updateKeys = fn.get("increment_update_page_keys")
+        if (!(updateKeys instanceof Set)) updateKeys = new LinkedHashSet()
+        def deleteKeys = fn.get("increment_delete_page_keys")
+        if (!(deleteKeys instanceof Set)) deleteKeys = new LinkedHashSet()
+        if (pageText && addKeys.contains(pageText)) return "Add"
+        if (pageText && updateKeys.contains(pageText)) return "Update"
+        if (pageText && deleteKeys.contains(pageText)) return "Delete"
+        return "Same"
+    }
+    def cloneRow = { src, changeType, docField ->
+        def out = new LinkedHashMap(src)
+        out.remove("id")
+        out.remove("ID")
+        out.put(docField, "{{new_document_id}}")
+        out.put("version", "{{version}}")
+        out.put("change_type", changeType)
+        def pageVal = (out.get("page") == null ? "" : out.get("page").toString()).trim()
+        out.put("page", singlePageText.call(pageVal))
+        return out
+    }
+    def bucketRowsByPage = { rows ->
+        def buckets = new LinkedHashMap()
+        (rows instanceof List ? rows : []).each { r ->
+            if (!(r instanceof Map)) return
+            def pageText = singlePageText.call(r.get("page") ?: r.get("PAGE") ?: "")
+            def key = normalizePageKey(pageText)
+            if (!key) return
+            def bucket = buckets.get(key)
+            if (bucket == null) {
+                bucket = []
+                buckets.put(key, bucket)
+            }
+            bucket.add(r)
+        }
+        return buckets
+    }
+    def buildFinalRows = { oldRows, tempRows, docField ->
+        def oldBuckets = bucketRowsByPage(oldRows)
+        def tempBuckets = bucketRowsByPage(tempRows)
+        def orderedKeys = new LinkedHashSet()
+        orderedKeys.addAll(oldBuckets.keySet())
+        orderedKeys.addAll(tempBuckets.keySet())
+        def out = []
+        orderedKeys.each { key ->
+            def oldBucket = oldBuckets.get(key) ?: []
+            def tempBucket = tempBuckets.get(key) ?: []
+            def probe = oldBucket ? oldBucket[0] : (tempBucket ? tempBucket[0] : null)
+            if (!(probe instanceof Map)) return
+            def action = pageAction(probe)
+            def chosen = (action == "Add" || action == "Update") ? tempBucket : oldBucket
+            (chosen instanceof List ? chosen : []).each { row ->
+                if (row instanceof Map) {
+                    out.add(cloneRow(row, action, docField))
+                }
+            }
+        }
+        def pageSample = []
+        out.take(5).each { row ->
+            if (row instanceof Map) pageSample.add(row.get("page"))
+        }
+        println("[INCREMENT-FINAL][" + docField + "] oldPages=" + oldBuckets.size() + ", tempPages=" + tempBuckets.size() + ", out=" + out.size() + ", pages=" + pageSample)
+        return out
+    }
+    def base = n_old_design_rows
+    if (!(base instanceof List)) base = []
+    def temp = n_tmp_design_rows
+    if (!(temp instanceof List)) temp = []
+    def finalRows = buildFinalRows(base, temp, "documentId")
+    fn.put("n_design_final_rows", finalRows)
+    return finalRows
+'''
+
+// build final case rows
+n_case_final_rows,act_func?script='''
+    def splitCommaList = { raw ->
+        def s = (raw == null ? "" : raw.toString()).trim()
+        def out = []
+        if (!s) return out
+        def current = new StringBuilder()
+        for (int i = 0; i < s.length(); i++) {
+            def ch = s.charAt(i)
+            if (ch == ',') {
+                def token = current.toString().trim()
+                if (token) out.add(token)
+                current.setLength(0)
+            } else {
+                current.append(ch)
+            }
+        }
+        def token = current.toString().trim()
+        if (token) out.add(token)
+        return out
+    }
+    def normalizePageKey = { v ->
+        def x = (v == null ? "" : v.toString()).trim().toLowerCase()
+        if (x.startsWith("page")) x = x.substring(4).trim()
+        return x
+    }
+    def singlePageText = { inputVal ->
+        def s = (inputVal == null ? "" : inputVal.toString()).trim()
+        if (!s) return ""
+        def token = s.contains(",") ? s.split(",")[0].trim() : s
+        if (!token) return ""
+        if (token.toLowerCase().startsWith("page")) {
+            token = token.substring(4).trim()
+        }
+        return token
+    }
+    def pageAction = { row ->
+        def pageText = singlePageText.call(row instanceof Map ? (row.get("page") ?: row.get("PAGE") ?: "") : "")
+        def addKeys = fn.get("increment_add_page_keys")
+        if (!(addKeys instanceof Set)) addKeys = new LinkedHashSet()
+        def updateKeys = fn.get("increment_update_page_keys")
+        if (!(updateKeys instanceof Set)) updateKeys = new LinkedHashSet()
+        def deleteKeys = fn.get("increment_delete_page_keys")
+        if (!(deleteKeys instanceof Set)) deleteKeys = new LinkedHashSet()
+        if (pageText && addKeys.contains(pageText)) return "Add"
+        if (pageText && updateKeys.contains(pageText)) return "Update"
+        if (pageText && deleteKeys.contains(pageText)) return "Delete"
+        return "Same"
+    }
+    def cloneRow = { src, changeType, docField ->
+        def out = new LinkedHashMap(src)
+        out.remove("id")
+        out.remove("ID")
+        out.put(docField, "{{new_document_id}}")
+        out.put("version", "{{version}}")
+        out.put("change_type", changeType)
+        def pageVal = (out.get("page") == null ? "" : out.get("page").toString()).trim()
+        out.put("page", singlePageText.call(pageVal))
+        return out
+    }
+    def bucketRowsByPage = { rows ->
+        def buckets = new LinkedHashMap()
+        (rows instanceof List ? rows : []).each { r ->
+            if (!(r instanceof Map)) return
+            def pageText = singlePageText.call(r.get("page") ?: r.get("PAGE") ?: "")
+            def key = normalizePageKey(pageText)
+            if (!key) return
+            def bucket = buckets.get(key)
+            if (bucket == null) {
+                bucket = []
+                buckets.put(key, bucket)
+            }
+            bucket.add(r)
+        }
+        return buckets
+    }
+    def buildFinalRows = { oldRows, tempRows, docField ->
+        def oldBuckets = bucketRowsByPage(oldRows)
+        def tempBuckets = bucketRowsByPage(tempRows)
+        def orderedKeys = new LinkedHashSet()
+        orderedKeys.addAll(oldBuckets.keySet())
+        orderedKeys.addAll(tempBuckets.keySet())
+        def out = []
+        orderedKeys.each { key ->
+            def oldBucket = oldBuckets.get(key) ?: []
+            def tempBucket = tempBuckets.get(key) ?: []
+            def probe = oldBucket ? oldBucket[0] : (tempBucket ? tempBucket[0] : null)
+            if (!(probe instanceof Map)) return
+            def action = pageAction(probe)
+            def chosen = (action == "Add" || action == "Update") ? tempBucket : oldBucket
+            (chosen instanceof List ? chosen : []).each { row ->
+                if (row instanceof Map) {
+                    out.add(cloneRow(row, action, docField))
+                }
+            }
+        }
+        def pageSample = []
+        out.take(5).each { row ->
+            if (row instanceof Map) pageSample.add(row.get("page"))
+        }
+        println("[INCREMENT-FINAL][" + docField + "] oldPages=" + oldBuckets.size() + ", tempPages=" + tempBuckets.size() + ", out=" + out.size() + ", pages=" + pageSample)
+        return out
+    }
+    def base = n_old_case_rows
+    if (!(base instanceof List)) base = []
+    def temp = n_tmp_case_rows
+    if (!(temp instanceof List)) temp = []
+    def finalRows = buildFinalRows(base, temp, "document_id")
+    fn.put("n_case_final_rows", finalRows)
+    return finalRows
+'''
+
+// module chunks
+n_module_final_chunks,act_func?script='''
+    def full = fn.get("n_module_final_rows")
+    if (full == null || !(full instanceof List)) full = []
+    int batchSize = 200
+    def chunks = []
+    for (int i = 0; i < full.size(); i += batchSize) {
+        int end = Math.min(i + batchSize, full.size())
+        def part = new ArrayList()
+        for (int j = i; j < end; j++) part.add(full.get(j))
+        chunks.add(part)
+    }
+    return chunks
+'''
+// module import
+foreach('n_module_final_chunk', 'n_module_final_chunks', {
+    act_kb.defineAndImportData?tableName='kb_gen_test_module'&data='{{n_module_final_chunk.item}}'
+})
+
+// design chunks
+n_design_final_chunks,act_func?script='''
+    def full = fn.get("n_design_final_rows")
+    if (full == null || !(full instanceof List)) full = []
+    int batchSize = 200
+    def chunks = []
+    for (int i = 0; i < full.size(); i += batchSize) {
+        int end = Math.min(i + batchSize, full.size())
+        def part = new ArrayList()
+        for (int j = i; j < end; j++) part.add(full.get(j))
+        chunks.add(part)
+    }
+    return chunks
+'''
+// design import
+foreach('n_design_final_chunk', 'n_design_final_chunks', {
+    act_kb.defineAndImportData?tableName='kb_gen_test_module_design'&data='{{n_design_final_chunk.item}}'
+})
+
+// case chunks
+n_case_final_chunks,act_func?script='''
+    def full = fn.get("n_case_final_rows")
+    if (full == null || !(full instanceof List)) full = []
+    int batchSize = 200
+    def chunks = []
+    for (int i = 0; i < full.size(); i += batchSize) {
+        int end = Math.min(i + batchSize, full.size())
+        def part = new ArrayList()
+        for (int j = i; j < end; j++) part.add(full.get(j))
+        chunks.add(part)
+    }
+    return chunks
+'''
+// case import
+foreach('n_case_final_chunk', 'n_case_final_chunks', {
+    act_kb.defineAndImportData?tableName='kb_gen_test_case'&data='{{n_case_final_chunk.item}}'
+})
+
+// summary
+assign('combined_result', '# {{new_file_name}}\n\nIncremental result for {{old_file_name}} -> {{new_file_name}}.\n- Same pages: {{n_diff_result.Same}}\n- Add pages: {{n_diff_result.Add}}\n- Update pages: {{n_diff_result.Update}}\n- Delete pages: {{n_diff_result.Delete}}\n- Regen pages: {{n_diff_result.Regen}}')
+// combined result
+n_combined_result,act_memory.assign?value='''{{combined_result}}'''&type=md
+// final summary
+assign('status', 'Incremental generation completed')

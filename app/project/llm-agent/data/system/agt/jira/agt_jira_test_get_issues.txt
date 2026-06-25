@@ -1,0 +1,16 @@
+/*
+ {
+	 "title": "自动化测试-jira获取issues",
+	 "description": "获取项目issues，根据project获取",
+	 "parameter": "project=待获取ISSUE的系统名称",
+	 "llmType": "",
+	 "resultPlan": "n_jira_get_issues",
+	 "life": "100"
+ }
+*/
+
+// 获取getIssues data
+n_jira_get_issues, act_func?name='Jira.getIssues(project)'
+
+// 调用import data function to db
+// n_jira_save, act_kb.defineAndImportData?tableName='kb_{{project}}'&data={{n_jira_project_issues}}

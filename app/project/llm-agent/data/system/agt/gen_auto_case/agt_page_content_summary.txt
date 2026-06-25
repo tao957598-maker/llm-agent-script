@@ -1,0 +1,82 @@
+/*
+{
+	"title": "Page Content Classification and Summary Agent",
+    "description": "Classify and summarize page content",
+	"parameter": [
+		{
+			"name": "page_content",
+			"label": "页面内容文本"
+		}
+	],
+	"version": "1"
+}
+*/
+
+n_dbg_psum_web_in,act_func?script='''
+try {
+  def pc = page_content
+  println("[agt_page_content_summary] page_content_binding=" + (pc != null) + (pc instanceof Map ? (" page=" + pc.get("page")) : ""))
+} catch (Throwable t) {
+  println("[agt_page_content_summary] page_content_binding_error=" + t.message)
+}
+return ""
+'''
+
+// tpl_page_summary
+n_page_content_summary,tpl_page_summary,psr_json
+
+
+define('tpl_page_summary', '''
+# 需求文档处理流程
+请根据以下提供的需求文档内容，逐页分析并整理每一页的测试点和测试内容。对于每一页，请明确以下信息：
+## 输出JSON格式存储整理后的需求内容：
+必须返回json数组list [map]格式,输出内容为英文
+```json
+[{
+  "page": 1,
+  "requirement_type": "Functional",
+  "section": "用户认证",
+  "title": "登录功能需求",
+  "description": "系统应允许已注册用户使用邮箱和密码登录",
+  "business_rules": [
+    "密码必须加密存储",
+    "登录失败3次后锁定账户30分钟"
+  ],
+  "acceptance_criteria": [
+    "当输入正确凭证时，系统应授予访问权限",
+    "当输入错误凭证时，系统应显示适当错误消息"
+  ],
+  "dependencies": ["REQ-005", "REQ-008"]
+}]
+```
+
+## 核心字段设计
+
+| 字段名 | 类型 | 描述 | 测试用例生成用途 |
+|--------|------|------|------------------|
+| page | Integer | 文档页码，使用输入 page_content.page 的原始数字 | 需求追溯 |
+| requirement_type | String | 需求类型分类 | 标识是"背景(Background)"、"功能(Functional)"还是"合规(Compliance)"需求,还是其它Other |
+| section | String | 所属章节/模块 | 测试模块分类 |
+| title | String | 需求标题 | 测试用例命名 |
+| description | String | 需求详细描述 | 测试场景依据 |
+| business_rules | Array | 业务规则列表 | 验证点提取 |
+| acceptance_criteria | Array | 验收标准 | 测试断言基础 |
+| dependencies | Array | 依赖需求列表 | 测试前置条件 |
+| testability | Boolean | 是否可直接生成测试案例 | 快速过滤不可测试内容（如当前页面应标记为false） |
+
+# 重要过滤规则（必须遵守）
+1) 忽略“目录/章节导航/TOC/索引”类内容（例如仅列标题而无具体需求的段落）。
+2) 忽略“项目管理/任务跟踪/子任务列表/Epic/Sprint/状态/负责人/创建更新时间/评论/链接/工单字段”等 Jira 元数据或管理信息。
+3) 只提取可测试的产品/系统需求、业务规则、验收标准、页面交互与按钮行为等；如果整页都是管理信息，请返回空数组 []。
+4) 对于同一页中语义重复/改写的点，合并为一条，避免重复输出。
+
+# 页面Contents：
+{{page_content}}
+
+    
+''')
+
+
+
+
+

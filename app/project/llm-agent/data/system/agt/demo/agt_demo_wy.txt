@@ -1,0 +1,716 @@
+/*
+{
+	"title":"Python to Ruby Conversion",
+	"description":"Translate Python code into Ruby",
+	"parameter":[
+		{
+			"name":"kbSpaceId",
+			"label":"目录ID（支持多个）",
+			"type":"knowledge_fold"
+		}
+	],
+	"tag":"demo",
+    "life":1000,
+	"version":1
+}
+*/
+when('fn.hasValue(kbSpaceId)',{
+    n_space_ids,act_func?script='''
+        def data = kbSpaceId
+        return data.split(',')
+    '''
+})
+
+
+assign('full_path_list', '[]')
+foreach('n_space', 'n_space_ids',{
+    assign('space_id', '{{n_space.item}}')
+    n_store_uri,act_kb.selectBy?sql='select full_path from kb_spaces_folder where id = {{space_id}}'
+    n_tmp,act_func?script='''
+        def data = n_store_uri
+        full_path_list.add(data[0]['full_path'])
+    '''
+})
+// 选择的文件路径
+assign('file_path_list', '{{full_path_list}}')
+
+n_paths,rag_kbs.callQuestionKnowledges?callType='folderIds'&value='{{kbSpaceId}}'&outFieldName='store_uri'
+
+assign('paths', '{{n_paths}}')
+
+// 组装数据
+n_datas,act_func?script="""
+    def expectedPathList = file_path_list
+    def result = [
+        pages     : [:],
+        workflows : [:]
+    ]
+
+    paths.each { path ->
+        if (!path.endsWith(".py")) {
+            return
+        }
+        boolean matched = false
+        for (expected in expectedPathList) {
+            if (path.contains(expected)) {
+                matched = true
+                break
+            }
+        }
+        if (!matched) {
+            return   // 跳过该路径，不参与后续分类
+        }
+
+        def parts = path.split("/")
+
+        // pages / workflows 分类
+        def category = parts.contains("pages") ? "pages" : "workflows"
+
+        // test no = py 文件父目录
+        def testNo = parts[parts.length - 2]
+
+        // 文件名
+        def fileName = parts[-1]
+
+        // ===== 直接在这里提取 order（不封装方法） =====
+        def sb = new StringBuilder()
+        for (int i = 0; i < fileName.length(); i++) {
+            char c = fileName.charAt(i)
+            if (c.isDigit()) {
+                sb.append(c)
+            } else {
+                break
+            }
+        }
+        int order = sb.length() > 0 ? sb.toString().toInteger() : 0
+        // ============================================
+
+        result[category].putIfAbsent(testNo, [])
+        result[category][testNo] << [
+            order : order,
+            path  : path
+        ]
+    }
+
+    // 排序并转换为「完整路径列表」
+    result.each { category, testMap ->
+        testMap.each { testNo, files ->
+            files.sort { a, b -> a.order <=> b.order }
+            testMap[testNo] = files.collect { it.path }
+        }
+    }
+
+    return result
+"""
+
+
+"""
+======================================================================================================
+pages数据流程
+"""
+// 判断是否存在page数据
+n_has_pages,act_func?script='''
+    def data = n_datas
+    return (data.pages && !data.pages.isEmpty()) ? "1" : "0"
+'''
+
+when('n_has_pages == "1"',{
+    // 循环遍历读取py文件
+    assign('pages', '{{n_datas.pages}}')
+    n_pages_keys,act_func?script="""
+        def data = pages
+        def keys = data.keySet() as List
+        return keys
+    """
+
+    // 遍历pages
+    foreach('n_page', 'n_pages_keys',{
+        // page名称
+        assign('page_name', '{{n_page.item}}')
+        // py_list
+        n_py_list,act_func?script='''return pages[page_name]'''
+        // 提取system
+        n_system,act_func?script='''
+            def path = n_py_list[0]
+            def pathList = file_path_list
+            def result = null
+            pathList.each { p ->
+                if (path.contains(p)) {
+                    result = p.tokenize('/').last()
+                }
+            }
+            return result
+        '''
+        
+        n_root_path,act_func?script='''
+            def path = n_py_list[0]
+            def pathList = file_path_list
+            return pathList.find { path.contains(it) }
+        '''
+        // 生成page ruby代码保存路径
+        assign('folder_path','{{n_root_path}}/Ruby/pages/{{page_name}}')
+
+        // 初始化 step 文件
+        assign('step_file_given_list', '')
+        assign('step_file_module_list', """
+SCRIPTS_DIR = File.expand_path('../../../../../scripts/{{n_system}}/pages/{{page_name}}', __FILE__)
+        """)
+
+        // 初始化 feature 文件
+        assign('feature_file', '''
+Feature: {{n_system}}
+  Scenario: {{page_name}}
+        ''')
+
+        // 单个页面下的py文件进行遍历
+        foreach('n_py_file', 'n_py_list',{
+            // page py path
+            assign('py_path', '{{n_py_file.item}}')
+            // page file name
+            n_page_file_name,act_func?script="""
+                def data = py_path
+                def file = new File(data)
+                def name = file.name
+                def nameWithoutExt = name.substring(0, name.lastIndexOf('.'))
+                return nameWithoutExt
+            """
+            // read page python code
+            n_python_code,act_func.read?filename='{{py_path}}'
+            // 获取page方法名和文件名
+            n_method_name,act_func?script="""
+                def data = n_python_code
+                def methodNames = []
+                data.eachLine { line ->
+                    line = line.trim()
+                    if (line.startsWith('def ')) {
+                        def start = 'def '.length()
+                        def end = line.indexOf('(')
+                        if (end > start) {
+                            methodNames << line.substring(start, end)
+                        }
+                    }
+                }
+                return methodNames
+            """
+
+            //判断pages代码否需要数据驱动
+            n_is_data_driver,act_func?script="""
+                def fileContent = n_python_code
+                def lines = fileContent.split('\\n')
+                def defLines = lines.findAll { it.trim().startsWith("def ") }
+                if (defLines == null || defLines.isEmpty()) {
+                    return [:]
+                }
+                
+                def result = [:]
+                for (line in defLines) {
+                    // 提取方法名（提前拿到，方便失败时使用）
+                    def methodName = line.substring(4, line.indexOf('(')).trim()
+
+                    // 1. 提取括号内字符串
+                    int start = line.indexOf('(')
+                    int end = line.lastIndexOf(')')
+
+                    if (start == -1 || end == -1 || start >= end) {
+                        result[methodName] = [:]
+                        continue
+                    }
+
+                    def paramStr = line.substring(start + 1, end)
+
+                    // 2. 按 ", " 分割参数
+                    def params = paramStr.split(', ') as List
+
+                    // 3. 去除 "**kwargs"
+                    params = params.findAll { it.trim() != '**kwargs' }
+
+                    // 4. 判断参数数量是否 < 3
+                    if (params.size() < 3) {
+                        result[methodName] = [:]
+                        continue
+                    }
+
+                    // 5. 提取最后一个参数
+                    def lastParam = params[-1]
+
+                    // 6. 拆分参数名和参数值
+                    int eqIndex = lastParam.indexOf('=')
+                    if (eqIndex == -1) {
+                        result[methodName] = [:]
+                        continue
+                    }
+
+                    def paramName = lastParam.substring(0, eqIndex).trim()
+                    def paramValue = lastParam.substring(eqIndex + 1).trim()
+
+                    // 去掉参数值两侧的引号（如果有）
+                    if (paramValue.startsWith('"') && paramValue.endsWith('"')) {
+                        paramValue = paramValue.substring(1, paramValue.length() - 1)
+                    }
+
+                    // 7. 存入结果
+                    result[methodName] = [
+                        paramName : paramName,
+                        paramValue: paramValue
+                    ]
+                }
+                return result
+            """
+
+            assign('module_str', 'None')
+            foreach('n_method', 'n_method_name',{
+                assign('method', '{{n_method.item}}')
+                // 生成page step代码的导入部分
+                when('module_str == "None"',{
+                    assign('module_str', 'module_function :{{method}}')
+                },{
+                    assign('module_str', '{{module_str}}\n  module_function :{{method}}')
+                })
+            })
+
+            // 生成page step的rb文件导入
+            assign('step_file_module', """
+module Script
+  load File.expand_path(File.join(SCRIPTS_DIR, '{{n_page_file_name}}.rb'))
+  {{module_str}}
+end
+            """)
+
+            // 导包
+            assign('step_file_module_list', '{{step_file_module_list}}\n\n{{step_file_module}}')
+
+
+            foreach('n_method', 'n_method_name',{
+                assign('method', '{{n_method.item}}')
+                // 生成page step代码的执行部分
+                n_flag, act_func?script='''
+                    def key = method
+                    def data = n_is_data_driver
+                    def json_data = data[key]
+                    return json_data ? "1" : "0"
+                '''
+                when('n_flag == "1"',{
+                    // 支持数据驱动  
+                    n_para_name,act_func?script='''return n_is_data_driver[method].paramName'''
+                    assign('para_name', '{{n_para_name}}')
+                    n_para_value,act_func?script='''return n_is_data_driver[method].paramValue'''
+                    assign('para_value', '{{n_para_value}}')
+
+                    // 数据驱动 - step文件中的Given代码
+                    assign('step_file_given', """
+Given('{{method}} {string}') do |data_driver|
+  browser = page.driver.browser
+  Script.{{method}}(browser, {{para_name}}: data_driver)
+  save_step_screenshot('{{method}}')
+end
+                    """)
+
+                    // 数据驱动 - feature文件中的Given代码
+                    assign('feature_file','{{feature_file}}\n      Given {{method}} "{{para_value}}"')
+
+                },
+                {
+                    // 无数据驱动 - step文件中的Given代码
+                    assign("step_file_given","""
+Given('{{method}}') do
+  browser = page.driver.browser
+  Script.{{method}}(browser)
+  save_step_screenshot('{{method}}')
+end
+                    """)     
+                    //  无数据驱动 -feature文件中的Given代码
+                    assign('feature_file', '{{feature_file}}\n      Given {{method}}')
+                })
+                // 添加Given执行部分
+                assign('step_file_given_list', '{{step_file_given_list}}\n\n{{step_file_given}}')
+            })
+            
+            // 赋值page级别的python code
+            assign('python_code', '{{n_python_code}}')
+            // 大模型生成page的ruby代码
+            n_page_ruby_code_tmp,tpl_python_to_ruby,psr_all
+            n_page_ruby_code,act_func?script='''
+                def content = n_page_ruby_code_tmp
+                content = content.replace("```ruby", "")
+                content = content.replace("```", "")
+                content = content.trim()
+                return content
+            '''
+            // 按照python代码的路径存储ruby代码
+            assign('ruby_file_name', '{{folder_path}}/{{page_name}}.rb')
+            // 写入ruby代码
+            act_func.write?filename='{{ruby_file_name}}'&data='{{n_page_ruby_code}}'&syncKbs=true
+
+        })
+
+        // 最终的step文件
+        assign('finally_step_file', '{{step_file_module_list}}\n\n{{step_file_given_list}}')
+        // step文件路径
+        assign('step_file_name', '{{folder_path}}/{{page_name}}_step.rb')
+        // 写入pages step文件
+        act_func.write?filename='{{step_file_name}}'&data='{{finally_step_file}}'&syncKbs=true
+
+
+        // 最终的feature文件
+        assign('finally_feature_file', '{{feature_file}}')  
+        // feature文件路径
+        assign('feature_file_name', '{{folder_path}}/{{page_name}}.feature')
+        // 写入pages feature文件
+        act_func.write?filename='{{feature_file_name}}'&data='{{finally_feature_file}}'&syncKbs=true
+    })
+
+})
+
+
+"""
+======================================================================================================
+workflows数据流程
+"""
+// 判断是否存在workflows数据
+n_has_workflows,act_func?script='''
+    def data = n_datas
+    return (data.workflows  && !data.workflows .isEmpty()) ? "1" : "0"
+'''
+
+when('n_has_workflows == "1"',{
+    // 循环遍历读取py文件
+    assign('workflows', '{{n_datas.workflows}}')
+
+    n_workflows_keys,act_func?script="""
+        def data = workflows
+        def keys = data.keySet() as List
+        return keys
+    """
+
+    // 遍历 workflows
+    foreach('n_item', 'n_workflows_keys',{
+        // test no
+        assign('test_no', '{{n_item.item}}')
+        // py_list
+        n_py_list,act_func?script='''return workflows[test_no]'''
+        // 提取system
+        n_system,act_func?script="""
+            def path = n_py_list[0]
+            def pathList = file_path_list
+            def result = null
+            pathList.each { p ->
+                if (path.contains(p)) {
+                    result = p.tokenize('/').last()
+                }
+            }
+            return result
+        """
+
+        // 生成ruby代码保存路径
+        n_root_path,act_func?script='''
+            def path = n_py_list[0]
+            def pathList = file_path_list
+            return pathList.find { path.contains(it) }
+        '''
+        assign('folder_path','{{n_root_path}}/Ruby/workflows/{{test_no}}')
+        
+        
+        // 初始化 step 文件
+        assign('step_file_given_list', '')
+        assign('step_file_module_list', """
+SCRIPTS_DIR = File.expand_path('../../../../../scripts/{{n_system}}/workflows/{{test_no}}', __FILE__)
+        """)
+
+        // 初始化 feature 文件
+        assign('feature_file', '''
+Feature: {{n_system}}
+  Scenario: {{test_no}}
+        ''')
+
+        // 对目录下的py文件进行循环遍历
+        foreach('n_py_file', 'n_py_list',{
+            // py path
+            assign('py_path', '{{n_py_file.item}}')
+            // read workflows python code
+            n_python_code, act_func.read?filename='{{py_path}}'
+
+            // 获取序号和文件名(不含有后缀)
+            n_file_name,act_func?script="""
+                def filePath = py_path
+                def fileNameWithExt = filePath.substring(filePath.lastIndexOf('/') + 1)
+                def fileName = fileNameWithExt.substring(0, fileNameWithExt.lastIndexOf('.'))
+                def numberPrefix = ''
+                for (int i = 0; i < fileName.length(); i++) {
+                    def c = fileName.charAt(i)
+                    if (c.isDigit()) {
+                        numberPrefix += c
+                    } else {
+                        break
+                    }
+                }
+                return [fileName: fileName, numberPrefix: numberPrefix]
+        
+            """
+            assign('file_num', '{{n_file_name.numberPrefix}}')
+            assign('file_name', '{{n_file_name.fileName}}')
+
+            // 生成单个rb文件导入
+            assign('step_file_module', '''
+module Script{{file_num}}
+  load File.expand_path(File.join(SCRIPTS_DIR, '{{file_name}}.rb'))
+  module_function :run
+end
+            ''')
+
+            // 导包
+            assign('step_file_module_list', '{{step_file_module_list}}\n\n{{step_file_module}}')
+
+            // 判断workflows代码否需要数据驱动
+            n_is_data_driver,act_func?script="""
+                def fileContent = n_python_code
+                def lines = fileContent.split('\\n')
+                def runLine = lines.find { line -> line.trim().startsWith('def run') }
+                if (!runLine) {
+                    return [:]
+                }
+
+                // 提取括号内的参数部分
+                def startIndex = runLine.indexOf('(')
+                def endIndex = runLine.indexOf(')')
+                
+                if (startIndex == -1 || endIndex == -1) {
+                    return [:]
+                }
+                
+                // 提取参数列表
+                def paramsStr = runLine.substring(startIndex + 1, endIndex).trim()
+                
+                // 如果参数为空，直接返回false
+                if (paramsStr.isEmpty()) {
+                    return [:]
+                }
+
+                // 新增判断: paramsStr 中 "=" 的数量是否小于2
+                def equalsCount = paramsStr.count('=')
+                if (equalsCount < 2) {
+                    return [:]
+                }
+
+                // 按逗号分割参数
+                def params_split = paramsStr.split(', ').collect { it.trim() }
+                params = params_split.findAll { !it.startsWith('**') }
+
+                // 判断参数个数是否为3（不包含**kwargs）
+                if (params.size() < 3) {
+                    return [:]
+                }
+            
+                // 提取第三个参数（索引为2）
+                def thirdParam = params[-1]
+            
+                // 判断第三个参数是否包含默认值
+                if (thirdParam.contains('=')) {
+                    def parts = thirdParam.split('=').collect { it.trim() }
+                    def paramName = parts[0]
+                    def paramValue = parts[1]
+                    
+                    // 返回参数名和值
+                    return [
+                        paramName : paramName,
+                        paramValue: paramValue
+                    ]
+                } else {
+                    // 如果没有默认值，只返回参数名
+                    return [:]
+                }
+            """
+
+        
+            n_flag, act_func?script='''
+                def data = n_is_data_driver
+                return data ? "1" : "0"
+            '''
+
+            when('n_flag == "1"',{
+                // 支持数据驱动     
+                n_para_name,act_func?script='''return n_is_data_driver.paramName'''
+                assign('para_name', '{{n_para_name}}')
+                n_para_value,act_func?script='''return n_is_data_driver.paramValue'''
+                assign('para_value', '{{n_para_value}}')
+
+                // 数据驱动 - step文件中的Given代码
+                assign('step_file_given', """
+Given('{{file_name}} {string}') do |data_driver|
+  browser = page.driver.browser
+  Script{{file_num}}.run(browser, {{para_name}}: data_driver)
+  save_step_screenshot('{{file_name}}')
+end
+                """)
+
+                // 数据驱动 - feature文件中的Given代码
+                assign('feature_file','{{feature_file}}\n      Given {{file_name}} {{para_value}}')
+
+
+            },{
+                // 无数据驱动 - step文件中的Given代码
+                assign("step_file_given",'''
+Given("{{file_name}}") do
+  browser = page.driver.browser
+  Script{{file_num}}.run(browser)
+  save_step_screenshot('{{file_name}}')
+end
+                ''')
+                //  无数据驱动 -feature文件中的Given代码
+                assign('feature_file', '{{feature_file}}\n      Given {{file_name}}')
+            })
+
+            // step执行代码拼接
+            assign('step_file_given_list', '{{step_file_given_list}}\n\n{{step_file_given}}')
+
+            // 赋值python code
+            assign('python_code', '{{n_python_code}}')
+            // 大模型生成workflow的ruby代码
+            n_ruby_code_tmp,tpl_python_to_ruby,psr_all
+            n_ruby_code,act_func?script='''
+                def content = n_ruby_code_tmp
+                content = content.replace("```ruby", "")
+                content = content.replace("```", "")
+                content = content.trim()
+                return content
+            '''
+            // 按照python代码的路径存储ruby代码
+            assign('ruby_file_name', '{{folder_path}}/{{file_name}}.rb')
+            // 写入ruby代码
+            act_func.write?filename='{{ruby_file_name}}'&data='{{n_ruby_code}}'&syncKbs=true
+        })
+
+        // 最终的step文件
+        assign('finally_step_file', '{{step_file_module_list}}\n\n{{step_file_given_list}}')
+        // step文件路径
+        assign('step_file_name', '{{folder_path}}/{{test_no}}_step.rb')
+        // 写入step文件
+        act_func.write?filename='{{step_file_name}}'&data='{{finally_step_file}}'&syncKbs=true
+
+
+        // 最终的feature文件
+        assign('finally_feature_file', '{{feature_file}}')  
+        // feature文件路径
+        assign('feature_file_name', '{{folder_path}}/{{test_no}}.feature')
+        // 写入feature文件
+        act_func.write?filename='{{feature_file_name}}'&data='{{finally_feature_file}}'&syncKbs=true
+
+    })
+
+})
+
+
+
+
+define('tpl_python_to_ruby','''
+# 角色设定
+你是精通Python与Ruby的自动化测试框架代码转换专家，专门负责将Python自动化测试脚本转换为功能完全一致的Ruby代码。
+
+# 核心任务
+将输入的Python自动化测试脚本准确转换为Ruby代码，确保:
+1. 功能逻辑完全一致
+2. 严格遵守转换规则
+3. 输出的Ruby代码语法正确且格式规范
+
+# 转换规则（必须严格执行）
+
+## 一、编码与注释规则
+1. **文件头编码声明转换**
+   - Python: `# -*- coding: utf-8 -*-`
+   - Ruby: `# encoding: utf-8`
+
+2. **三引号注释处理**
+   - Python中的 `""" xxxxx """` 必须原样输出，不允许任何修改或删除
+
+## 二、import/require转换规则（按模块名严格区分）
+
+3. **autotest_triple模块**
+   - 当Python import语句中包含 `autotest_triple` 时（如 `from autotest_trible import *` 或 `from autotest_triple import 方法名`）
+   - 必须统一转换为:
+     ```ruby
+     script_dir = File.dirname(__FILE__)
+     autotest_triple = File.join(script_dir, "..", "..", "..", "..", "selenium_source", "autotest_triple.rb")
+     require File.expand_path(autotest_triple)
+     ```
+
+4. **autotest模块**
+   - 当Python import语句中包含 `autotest` 时（如 `from autotest import *` 或 `from autotest import 方法名`）
+   - 必须统一转换为:
+     ```ruby
+     script_dir = File.dirname(__FILE__)
+     autotest_path = File.join(script_dir, "..", "..", "..", "..", "selenium_source", "autotest.rb")
+     require File.expand_path(autotest_path)
+     ```
+
+5. **多模块处理**
+   - 如果Python文件中同时出现autotest_triple和autotest的import
+   - 必须分别生成对应的Ruby require代码
+   - 不允许合并、省略或覆盖
+   - 保持与Python import出现顺序一致
+
+## 三、run方法与参数规则（强制）
+
+6. **run方法转换**
+   - Python: `def run(browser, target="xxx", **kwargs):`
+   - Ruby: `def run(browser, target:"xxx", **kwargs)`
+   - **关键要求**: 参数默认值中的等号 `=` 必须转换为英文冒号 `:`
+   - 参数顺序和方法名不允许改变
+
+## 四、命名一致性规则（禁止改名）
+
+7. **命名严格保持**
+   - 所有方法名、变量名、参数名一律不允许修改
+   - 包括: 方法名、变量名、参数名等所有标识符
+   - 禁止任何形式的重命名、简写、优化或重构
+
+## 五、logging转换规则
+
+8. **logging统一替换**
+   - `logging.info` → `LOGGER.info`
+   - `logging.error` → `LOGGER.error`
+   - `logging.warn` → `LOGGER.warn`（如存在）
+
+
+## 六、语法结构转换规则
+
+9. **异常处理转换**
+   - Python: `try/except`
+   - Ruby: `begin/rescue/end`
+   - 异常变量保持一致，控制流程与return逻辑必须完全一致
+
+10. **字符串插值转换**
+    - Python f-string: `f"xxx {var}"`
+    - Ruby字符串插值: `"xxx #{var}"`
+
+11. 布尔值转换（新增规则）  
+    - Python: `True` → Ruby: `true`
+    - Python: `False` → Ruby: `false`
+    - 必须严格区分大小写，仅转换布尔字面量，不影响变量名
+
+## 七、输出要求
+
+12. **输出限制**
+    - 只输出转换后的Ruby代码
+    - 不输出解释说明、转换步骤或其他任何内容
+    - 不补充Python原代码中不存在的逻辑
+    - 不进行代码风格优化或重构
+    - 输出的Ruby代码必须:
+      - 语法正确，可直接执行
+      - 格式规范（正确缩进、换行、块结构完整）
+
+# 工作流程
+1. 接收输入的Python代码
+2. 按照上述规则逐条严格转换
+3. 只输出最终的Ruby代码
+4. 确保输出代码完全符合所有规则要求
+
+# 注意事项
+- 所有规则必须严格执行，不允许任何例外
+- 转换必须保持功能逻辑的完全一致
+- 输出的Ruby代码必须是完整、可执行的
+- 遇到任何特殊情况，均按上述规则处理
+
+
+# python代码:
+{{python_code}}
+
+''')

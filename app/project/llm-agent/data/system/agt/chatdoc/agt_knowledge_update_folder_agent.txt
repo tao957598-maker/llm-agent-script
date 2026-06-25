@@ -1,0 +1,118 @@
+/*
+{
+	"title": "knowledge space - update folder",
+	"description": "Call back the agent after modifying the knowledge space",
+    "parameter": [
+                    {
+                        "name":"kbSpacesFolderId",
+                        "label":"目录id",
+                        "type":"textarea"
+                    },
+                    {
+                        "name":"knowledgeList",
+                        "label":"知识集合",
+                        "type":"textarea"
+                    },
+                    {
+                        "name":"operationType",
+                        "label":"操作类型",
+                        "type": "select",
+                        "required": true,
+                        "args": [
+                            {
+                                "label": "更新目录",
+                                "value": 0
+                            },
+                            {
+                                "label": "更新目录名称",
+                                "value": 1
+                            },
+                            {
+                                "label": "更新知识目录",
+                                "value": 2
+                            }
+                        ]
+                    },
+                    {
+                        "name":"sourceFullPath",
+                        "label":"原始目录地址",
+                        "type":"textarea"
+                    },
+                    {
+                        "name":"targetFullPath",
+                        "label":"目标目录地址",
+                        "type":"textarea"
+                    },
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "uiEntrance": "chatdoc",
+	"tag":"chatdoc"
+} */
+
+// 1.是否更新目录名称
+when("operationType==1", {
+    // 2.更新目录名称->查询出该目录下所有的知识
+    n_knowledge_data,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,kb_spaces_folder_id,extension,store_uri,knowledge_name'&maxSize=10000&where='{"kb_spaces_folder_id":{{kbSpacesFolderId}}}'
+    when("fn.hasValue(n_knowledge_data)", {
+        foreach('n_loop_id', 'n_knowledge_data', {
+            assign('n_item', '{{n_loop_id.item}}')
+            // 3.循环查询知识下的kbs_doc_page_parse数据
+            n_doc_data,act_kb.select?name='kbs_doc_page_parse'&maxSize=10000&where='{"documentId":{{n_item.id}}}'
+            when("fn.hasValue(n_doc_data)", {
+                // 4.替换imagePath
+                n_result_parse_data,act_func?script='''
+                                        def n_parse_data = n_doc_data
+                                        for (int i = 0; i < n_parse_data.size(); i++) {
+                                            def map = n_parse_data[i]
+                                            map.put("imagePath", map.imagePath.replace(sourceFullPath, targetFullPath))
+                                        }
+                                        return n_parse_data
+                                    '''
+                // 5.更新kbs_doc_page_parse中的imagePath
+                act_kb.importData?name='kbs_doc_page_parse'&data={{n_result_parse_data}}
+            })
+        })
+    })
+})
+
+// 2.是否更新目录名称、更新section表的目录id
+when("operationType==2", {
+    // 2.1.变更知识目录->查询出该目录下所有的知识
+    when("fn.hasValue(knowledgeList)", {
+        foreach('n_loop_id', 'knowledgeList', {
+            assign('n_item', '{{n_loop_id.item}}')
+            // 2.2.循环查询知识下的kbs_doc_page_parse数据
+            n_doc_data,act_kb.select?name='kbs_doc_page_parse'&maxSize=10000&where='{"documentId":{{n_item.id}}}'
+            when("fn.hasValue(n_doc_data)", {
+                // 2.2.1.替换kbs_doc_page_parse.imagePath的数据
+                n_doc_result_parse_data,act_func?script='''
+                                        def n_parse_data = n_doc_data
+                                        for (int i = 0; i < n_parse_data.size(); i++) {
+                                            def map = n_parse_data[i]
+                                            map.put("imagePath", map.imagePath.replace(sourceFullPath, targetFullPath))
+                                        }
+                                        return n_parse_data
+                                    '''
+                // 2.2.2.更新kbs_doc_page_parse中的imagePath
+                act_kb.importData?name='kbs_doc_page_parse'&data={{n_doc_result_parse_data}}
+            })
+
+            // 2.3.1.查询kb_spaces_knowledge_section数据
+            n_section_data,act_kb.select?name='kb_spaces_knowledge_section'&maxSize=10000&where='{"document_id":{{n_item.id}}}'
+            when("fn.hasValue(n_section_data)", {
+                // 2.3.2.替换kb_spaces_knowledge_section.folder_id
+                n_section_result_parse_data,act_func?script='''
+                                        def n_parse_section_data = n_section_data
+                                        for (int i = 0; i < n_parse_section_data.size(); i++) {
+                                            def map = n_parse_section_data[i]
+                                            map.put("folder_id", "{{kbSpacesFolderId}}")
+                                        }
+                                        return n_parse_section_data
+                                    '''
+                // 2.2.2.更新kb_spaces_knowledge_section
+                act_kb.importData?name='kb_spaces_knowledge_section'&data={{n_section_result_parse_data}}
+            })
+        })
+    })
+})

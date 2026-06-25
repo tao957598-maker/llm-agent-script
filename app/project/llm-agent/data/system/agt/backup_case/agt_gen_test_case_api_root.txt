@@ -1,0 +1,37 @@
+/*{
+	"title":"API Test Case Root",
+	"description":"API-specific root entry. Currently reuses stable generic pipeline for compatibility.",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		},
+		{
+			"name":"skip_delete",
+			"label":"Skip delete in this run (true/false)"
+		}
+	],
+	"resultPlan":"status,n_combined_result,n_doc_mind_map",
+	"version":1
+}*/
+// Agent status
+assign("status", "Agent is running")
+// force api source type
+assign("source_type", "api")
+
+// Delegate to stable root pipeline to avoid impacting existing web logic.
+// Future API-specialized sub-agents can be swapped in this file only.
+n_api_result,agt_gen_test_case_root?kbSpaceFileId={{kbSpaceFileId}}&pages={{pages}}&version={{version}}&source_type=api&skip_delete={{skip_delete}}
+
+assign("n_combined_result", "{{n_api_result.n_combined_result}}")
+assign("n_doc_mind_map", "{{n_api_result.n_doc_mind_map}}")

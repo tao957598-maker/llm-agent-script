@@ -1,0 +1,89 @@
+/*
+{
+	"title":"知识空间-知识向量提示",
+	"version":1
+}
+*/
+/
+
+// 1.查询知识信息
+n_data,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,extension,store_uri,knowledge_name'&maxSize=1&where='{"id":{{knowledgeId}}}'
+// 2.获取top0数据
+n_first_data,act_func?script='''
+                            return n_data[0]
+                        '''
+    // 3.通过文件类型，获取对应的api后缀
+    agt_gen_api_postfix?extension={{n_first_data.extension}}
+
+    // 4.获取api编码
+    n_api_code,act_func?script='''
+                        def api_code = 'ink_upload_api'
+                        api_code += "_" + apiPostfix
+                        return api_code
+                    '''
+
+// 5.调用Ink院的接口，将知识进行分片
+n_api_data,act_api.doExecute?name={{n_api_code}}&fileNames='{{n_first_data.store_uri}}'
+when("n_api_data.success==true", {
+    // 6.获取首个切片数据，用来做知识分析
+    n_question,act_func?script='''
+        def data = n_api_data.parsed_content[0].content
+        return data
+    '''
+
+    // 7.获取行业内置种类
+    n_industry_items,act_kbs.industryList
+
+    // 8.使用向量文本，通过gpt匹配已经配置内置种类
+    n_result_data,tpl_knowledge_prompt
+},{
+    assign('n_result_data', 'fail, please try again later.')
+})
+
+define('tpl_knowledge_prompt', '''
+    请结合"以下信息"判断文本属于哪种类型，并使用下面列出的"JSON格式"返回识别结果
+    1.当前已经配置行业信息，分类为:{{n_industry_items}}
+    2.需要判断的文本信息为：{{n_question}}
+
+    # JSON格式:
+    数据结果可以从industryItems中获取,需要返回对应的id及分类信息,同时添加属性msg,用来返回分析结果
+    返回JSON: {{fn.task().result('{industry}')}}
+''')
+
+assign('return', '{{n_result_data}}')
+
+agent('agt_gen_api_postfix', {
+    when("extension=='txt'", {
+        assign('apiPostfix', 'general')
+    })
+    when("extension=='text'", {
+        assign('apiPostfix', 'general')
+    })
+    when("extension=='md'", {
+        assign('apiPostfix', 'general')
+    })
+    when("extension=='docx'", {
+        assign('apiPostfix', 'word')
+    })
+    when("extension=='doc'", {
+        assign('apiPostfix', 'word')
+    })
+    when("extension=='msg'", {
+        assign('apiPostfix', 'email')
+    })
+    when("extension=='eml'", {
+        assign('apiPostfix', 'email')
+    })
+    when("extension=='xlsx'", {
+        assign('apiPostfix', 'excel')
+    })
+    when("extension=='html'", {
+        assign('apiPostfix', 'html')
+    })
+    when("extension=='pdf'", {
+        assign('apiPostfix', 'pdf')
+    })
+    when("extension=='pptx'", {
+        assign('apiPostfix', 'ppt')
+    })
+})

@@ -1,0 +1,129 @@
+/*
+ {
+	 "title": "Generate plan steps",
+	 "description": "Generic solution according to user requirement: {{current_step}}",
+	 "parameter": [
+		 {
+			 "name":"system",
+			 "label":"系统名称"
+		 },
+		 {
+			 "name":"current_step",
+			 "label":"当前测试步骤"
+		 }
+	 ],
+	 "llmType": ""
+ }
+*/
+// Load business information from KB
+n_envinfo, act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'
+
+// Set system language
+assign('language', '{{fn.str(n_envinfo, "language")}}')
+
+// Get current date
+assign('time_str', '{{fn.today()}}', 'max_actions_per_step', '10')
+
+assign('default_step_description', '''
+    - 在当前标签页中导航到URL
+    - 返回'XXX'
+    - 点击元素'XXX'
+	- 选择下拉框'XXX'的选项'xxx'
+    - 给元素'XXX'输入输入文本'XXX'
+''')
+
+// Returns the important rules for the agent.
+assign('important_rules', '''
+### 1. RESPONSE FORMAT（响应格式）：
+始终以以下格式响应有效的JSON：
+
+```json
+{
+    "thought": {
+        "language": "steps要求的语言",
+        "keywords": "页面截图或元素中的关键信息"
+    },
+    "steps": ["步骤1", "步骤2", ...]
+}
+```
+
+- **steps**：按顺序执行的步骤。每个步骤应包含用户或系统的具体行为，文本或元素用单引号标记。**注意：实际步骤的语言采用：{{fn.optional(language, '中文')}}**
+例如：
+
+{{default_step_description}}
+	
+### 2. STEPS（步骤规则）：
+    - 步骤按列表中出现的顺序执行
+    - 每个步骤应逻辑上从前一个步骤开始
+    - 步骤应描述用户或系统的具体行为，且尽量拆分为带有序号的小步骤
+    - 仅仅拆分或者合并步骤，不要随意加入新逻辑。
+    - 将补充解释纳入到关联的步骤中，确保最终的步骤列表包含足够的信息。但注意，宁愿保持原有不清晰的描述，也不可加入猜测的信息。
+    
+    - 拆分步骤时，确保每个步骤都对应一个明确的用户操作或系统响应
+    - 可能带来页面变动的操作，需要拆分到独立的步骤中。比如：页面导航，点击按钮，点击菜单，链接，导航，切换选择，输入文本。
+    - 点击或选择菜单的操作时，因为涉及到子菜单的显示隐藏，一个步骤中不可以有2个click动作，需要做拆分
+
+    - 不会产生页面变化的操作，无需拆分。比如：单纯的验证步骤，元素定位步骤(描述中包含元素定位的信息即可)
+
+### 3. ELEMENT INTERACTION（页面元素交互）：
+元素交互的结构为JSON格式：
+
+```json
+[{
+    "tag": "标签类型",
+    "name": "元素名称",
+    "type": "元素类型",
+    "children": [ "子元素信息" ]
+}]
+```
+### 4. NAVIGATION & ERROR HANDLING（导航与错误处理）：
+- 如果找不到适当的元素，使用其他功能或方法完成任务。
+- 如果步骤卡住，尝试使用替代方案。
+- 对于弹出窗口、cookies等，使用接受或关闭操作来处理。
+
+**注意**：响应必须严格符合指定的JSON格式，且每个步骤必须有效。
+''')
+
+// SystemMessage
+assign('system_message', '''
+	你是一个国际化的精确的浏览器自动化代理，通过结构化命令与网站进行交互。你的角色是：
+	1. 分析提供的网页元素和结构
+	2. 分析用户任务以及页面信息，给出行动规划(STEPS)
+	3. 用包含STEPS的有效JSON进行响应
+
+	当前日期和时间：{{time_str}}
+
+	{{important_rules}}
+
+	记住：你的响应必须是符合指定格式的有效JSON。JSON中的每个步骤必须有效。
+''')
+
+//# Collect page information
+n_collect_page, act_rpa.send?command=CollectPageInfo,act_func?name=StepTestInfo
+// TODO Collect page URL
+
+//# Analysis steps
+tpl_test_chat
+
+// Update steps
+act_plan.update?agent=agt_test_steps_run&var=n_test_step&plan={{tpl_test_chat.steps}}&index={{n_test_step.index}}
+
+// Switch to current step
+act_plan.switchStep?agent=agt_test_steps_run&var=n_test_step&index={{n_test_step.index}}
+
+// Return result
+assign('return', '{{tpl_test_chat.steps}}')
+
+define('tpl_test_chat', '''
+	请按照用户需求规划测试步骤:
+    # 用户需求
+    {{current_step}}
+
+    # 当前页面的元素：
+    {{StepTestInfo.simplepageinfoNoId}}
+    
+    # 错误信息
+    {{sys_hint}}
+
+	{{fn.chatFlag('%{system_message}%', '', '', '', 1)}}
+''')

@@ -1,0 +1,22 @@
+/*
+{
+	"title":"agt_prompt_test",
+	"description":"测试prompt-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"tpl_do_the_math",
+	"version":5
+}
+*/
+// 赋值 
+assign("a", "8") 
+assign("b", "9") 
+
+// 数学加减乘除计算
+tpl_do_the_math, psr_all 
+ 
+define('tpl_do_the_math', ''' 
+	{{a}}
+	请帮我计算值：8*12+3
+''')

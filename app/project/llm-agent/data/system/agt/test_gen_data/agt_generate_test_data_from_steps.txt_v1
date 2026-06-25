@@ -1,0 +1,72 @@
+/*
+{
+  "title": "Generate Test Data from Test Steps",
+  "description": "test case",
+  "parameter": [
+    {
+      "name": "userInput",
+      "label": "输入需要生成测试数据的测试步骤说明",
+      "type": "textarea"
+    },
+    {
+      "name": "outputTable",
+      "label": "数据存储表格",
+      "type": "input"
+    }
+  ],
+  "life": "1000"
+}
+*/
+
+
+// 获取查询 SQL 并执行
+agt_auto_sql1.knowledge?userInput='{{userInput}}'
+n_kb_data, act_kb.selectBy?sql='{{sys_last_result}}'
+n_data_item, act_func?js='''
+   (function() {
+      let arrList = {{n_kb_data}}
+      let newArr = []
+      for(let i=0;i<arrList.length;i++){
+        let jsonArr = JSON.parse(arrList[i].data)
+        for(let j=0;j<jsonArr.length;j++){
+          newArr.push(jsonArr[j])
+        }
+      }
+
+    let obj = {
+      "test_no": arrList[0].test_no,
+      "system_name": arrList[0].system_name,
+      "metadata_id": arrList[0].metadata_id,
+      "test_method": arrList[0].test_method,
+      "data": JSON.stringify(newArr)
+    }
+    return  JSON.stringify(obj)
+  })();
+'''
+
+assign("n_result_data", "{{n_data_item}}")
+// get test_no
+n_test_no, act_func?script='''return n_result_data.test_no'''
+
+// 查询test step语句
+assign("n_userInput", "在kb_test_metadata表查询test_no为{{n_test_no}}的第一条数据")
+
+// 取test step数据sql
+agt_auto_sql1.knowledge?userInput='{{n_userInput}}'
+
+// data from kb_test_metadata
+n_test_metadata,act_kb.selectBy?sql='{{sys_last_result}}'
+
+// 输出 test step
+n_step_data, act_func?script='''return n_test_metadata[0].steps'''
+
+
+
+// 得到测试数据
+n_test_data, act_func?script='''return [n_result_data.put('test_step', n_step_data)]'''
+assign("case_item", "{{n_result_data}}")
+
+
+// 保存到数据库
+assign("newTableName", "{{outputTable}}")
+act_kb.defineAndImportData?tableName='{{newTableName}}'&data='{{case_item}}'

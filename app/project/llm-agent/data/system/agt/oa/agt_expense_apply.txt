@@ -1,0 +1,19 @@
+/*
+ {
+	 "title": "OA费用报销申请",
+	 "description": "OA日常费用申请流程",
+	 "parameter": [],
+	 "llmType": "",
+	 "resultPlan": "",
+	 "uiEntrance": "",
+	 "tag": "OA",
+	 "life": "100",
+	 "showResultPlan": false
+ }
+*/
+
+//## 发起日常费用申请流程
+act_flow.iframe?pageCode=daily_fee_apply_form
+
+// 结果
+act_memory.assign?var=result&value='<a href="/approval" target="_blank">查看申请单</a>'

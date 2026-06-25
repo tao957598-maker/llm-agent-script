@@ -1,0 +1,177 @@
+/*
+{
+	"title": "OpsClaw DECIDER",
+	"description": "OpsClaw DECIDER - ReAct 决策器：基于计划、记忆、Observation 与候选工具生成标准化决策 JSON，并做 schema 校验。",
+	"parameter": [
+		{"name":"userInput", "label":"用户输入", "required":true},
+		{"name":"loginUserName", "label":"登录用户名"},
+		{"name":"contextSystem", "label":"当前系统"},
+		{"name":"contextEnv", "label":"当前环境"},
+		{"name":"allow_high_risk_action_safe", "label":"是否允许高风险动作"},
+		{"name":"n_plan_tasks_summary", "label":"计划摘要"},
+		{"name":"n_load_memory_result", "label":"记忆加载结果"},
+		{"name":"n_api_candidates", "label":"API 候选"},
+		{"name":"n_dynamic_toolset_guide", "label":"动态工具集说明"},
+		{"name":"n_tool_routing_guide", "label":"工具路由规则"},
+		{"name":"react_last_observation", "label":"最近一次 Observation"},
+		{"name":"react_last_thought", "label":"最近一次 Thought"},
+		{"name":"react_last_success", "label":"最近一次工具执行是否成功"},
+		{"name":"react_last_done", "label":"最近一次工具执行是否终止流程"},
+		{"name":"react_last_final_result", "label":"最近一次工具执行最终结果"},
+		{"name":"react_last_exit_reason", "label":"最近一次工具执行退出原因"}
+	],
+	"resultPlan": "n_react_decision",
+	"discoverable": false,
+	"tag": "opsclaw"
+}
+*/
+
+define('tpl_decider_react', '''
+你是 opsclaw_assistant 的 ReAct 决策器。
+
+请基于当前计划、最近一次 Observation、历史记忆和候选工具，输出一个 JSON 决策。
+
+只允许以下 action：
+1. FINISH：已经可以直接回答用户。
+2. RUN_TOOL：执行一个低/中风险工具。
+3. ASK_CONFIRM：需要人工确认后再执行工具。
+
+字段要求：
+- thought: 简洁说明当前判断依据。
+- action: FINISH / RUN_TOOL / ASK_CONFIRM
+- toolType: 仅允许 API / AGENT / PYTHON；FINISH 时可为空。
+- toolCode: 具体工具编码；FINISH 时可为空。
+- parameters: JSON 对象；无参数时返回 {}。
+- riskLevel: LOW / MEDIUM / HIGH
+- answer: 仅在 FINISH 时填写最终回答。
+
+决策约束：
+1. `act_api.search` 已经在 ReAct 前完成，`n_api_candidates` 是“直接走 API”的主要依据。
+2. 默认优先级（从高到低）：
+   - 先判断是否可以 `FINISH`
+   - 其次若 `n_api_candidates` 为空或无明显匹配 → 优先 `RUN_TOOL + AGENT(agt_all_scenario_dynamic_toolset.toolset)`
+   - 再考虑 `RUN_TOOL + API`（仅当有高匹配且风险可控时）
+   - 最后考虑 `RUN_TOOL + PYTHON`
+3. 只有在 `n_api_candidates` 有高匹配 API 且该 API 为只读/低风险时，才直接执行 API，不要调用动态工具集。
+4. 若 `n_api_candidates` 中有高匹配 API 但涉及写操作/脚本执行：
+   - 若 `allowHighRiskAction == true` → 可执行（标记 HIGH）
+   - 若 `allowHighRiskAction == false` → 返回 `ASK_CONFIRM`
+5. 若用户问题是在“找工具/找 agent/不确定调用什么”，或候选 API 过弱 → 优先动态工具集（与第2条一致）。
+6. 若选择 `agt_all_scenario_dynamic_toolset.toolset`，parameters 至少包含 `userInput`。该 agent 内部会自行处理高风险确认，上层无需提前 ASK_CONFIRM。
+7. 当前骨架中不要主动选择 RPA 类高风险动作。
+8. 如果已有 Observation 足够回答，则直接 FINISH。
+9. 如果候选工具明显不匹配，也直接 FINISH，并说明当前无法安全执行。
+
+输出时请在 thought 中明确写出本轮路由依据，至少覆盖以下之一：
+- "已有明确 API 候选，直接执行"
+- "API 候选不足，升级到动态工具集"
+- "已有 Observation 足够，直接结束"
+- "任务存在不确定性，需要人工确认"
+
+# 用户输入
+{{userInput}}
+
+# 计划摘要
+{{n_plan_tasks_summary!}}
+
+# 用户上下文
+- loginUserName: {{loginUserName!}}
+- contextSystem: {{contextSystem!}}
+- contextEnv: {{contextEnv!}}
+- allowHighRiskAction: {{allow_high_risk_action_safe}}
+
+# opsclaw 记忆检索结果
+{{n_load_memory_result.context!}}
+
+# opsclaw 人格配置（profile.md）
+{{n_load_memory_result.profile!}}
+
+# opsclaw 关键记忆（key-memories.md）
+{{n_load_memory_result.keyMemories!}}
+
+# API 候选
+{{n_api_candidates!}}
+
+# 动态工具集 agent
+{{n_dynamic_toolset_guide}}
+
+# 工具路由规则
+{{n_tool_routing_guide}}
+
+# 最近一次工具执行状态
+- react_last_success: {{react_last_success!}}
+- react_last_done: {{react_last_done!}}
+- react_last_final_result: {{react_last_final_result!}}
+- react_last_exit_reason: {{react_last_exit_reason!}}
+
+# 最近一次 Observation
+{{react_last_observation!}}
+
+# 最近一次 Thought
+{{react_last_thought!}}
+
+# 已沉淀经验
+{{sys_hint_agt!}}
+
+仅返回 JSON，例如：
+{
+  "thought": "已有明确 API 候选，直接执行",
+  "action": "RUN_TOOL",
+  "toolType": "API",
+  "toolCode": "demo_api",
+  "parameters": {},
+  "riskLevel": "LOW",
+  "answer": ""
+}
+
+{{fn.chatFlag('tpl_decider_react', 'userInput', 'n_react_decision', '', 30)}}
+''')
+
+// 优先基于结构化工具执行状态判断是否可以直接结束，避免解析 observation 文本
+assign('n_obs_done_check', 'false')
+log("---------react_last_success= {{react_last_success}}, react_last_done={{react_last_done}}, react_last_exit_reason={{react_last_exit_reason}}")
+when('react_last_success == "true" && react_last_done != "true"', {
+	assign('n_obs_answer', '{{react_last_observation!}}')
+	assign('n_react_decision', '{{fn.json("thought, 上一轮工具执行成功，已有 Observation 可直接结束, action, FINISH, toolType, , toolCode, , parameters, {}, riskLevel, LOW, answer, n_obs_answer")}}')
+	assign('n_obs_done_check', 'true')
+	log('[OPENCLAW_DECIDER] 检测到上一轮工具执行成功，直接FINISH')
+})
+when('react_last_done == "true" && fn.hasValue(react_last_final_result)', {
+	assign('n_obs_answer', '{{react_last_final_result}}')
+	assign('n_react_decision', '{{fn.json("thought, 上一轮流程已终止，直接返回最终结果, action, FINISH, toolType, , toolCode, , parameters, {}, riskLevel, LOW, answer, n_obs_answer")}}')
+	assign('n_obs_done_check', 'true')
+	log('[OPENCLAW_DECIDER] 检测到上一轮流程已终止，直接FINISH')
+})
+
+when('n_obs_done_check != "true"', {
+	n_react_decision, tpl_decider_react, psr_json, vrf_func.run?script='''
+        def r = fn.get("n_react_decision")
+        if (r == null) {
+            r = fn.get("sys_last_result")
+        }
+        if (r == null) return fn.result(false, "决策结果为空，请输出 JSON")
+        def action = null
+        def toolType = null
+        def toolCode = null
+        if (r instanceof Map) {
+            action = r.get("action")
+            toolType = r.get("toolType")
+            toolCode = r.get("toolCode")
+        } else if (r instanceof CharSequence) {
+            def raw = r.toString()
+            def actionMatcher = raw =~ /"action"\s*:\s*"([^"]+)"/
+            if (actionMatcher.find()) action = actionMatcher.group(1)
+            def toolTypeMatcher = raw =~ /"toolType"\s*:\s*"([^"]*)"/
+            if (toolTypeMatcher.find()) toolType = toolTypeMatcher.group(1)
+            def toolCodeMatcher = raw =~ /"toolCode"\s*:\s*"([^"]*)"/
+            if (toolCodeMatcher.find()) toolCode = toolCodeMatcher.group(1)
+        }
+        if (action == null) return fn.result(false, "action 不能为空")
+        def allowed = ["FINISH", "RUN_TOOL", "ASK_CONFIRM"]
+        if (!allowed.contains(action.toString())) return fn.result(false, "action 仅允许 FINISH/RUN_TOOL/ASK_CONFIRM")
+        if (!action.toString().contains("FINISH")) {
+            if (toolType == null || toolCode == null) return fn.result(false, "toolType/toolCode 不能为空")
+        }
+        return fn.result(true, r)
+     '''
+})

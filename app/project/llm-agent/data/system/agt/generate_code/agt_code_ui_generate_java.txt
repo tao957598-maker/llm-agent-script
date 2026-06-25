@@ -1,0 +1,111 @@
+/*
+{
+	"title": "Generate Java code from UI design.",
+	"description": "Automatically generate Java code based on UI design.",
+	"parameter": [
+         {
+            "name":"metaDataId",
+            "label":"UI页面id",
+            "type":"textarea"
+         },
+         {
+             "name":"packageName",
+             "label":"代码存放的包路径",
+             "type":"textarea"
+          },
+          {
+               "name":"workspace",
+               "label":"工作区目录",
+               "type":"textarea"
+         },
+	 ],
+    "uiEntrance": "gen_code",
+    "tag":"Testing Model",
+    "displayOrder":8
+}
+*/
+
+// 1.通过API工具,查询出对应的UI展示页面的属性
+n_api_data,act_api.doExecute?name='ui_dev_page'&params='{"pageCode":"{{pageCode}}"}'
+
+when("!fn.hasValue(workspace) || !fn.hasValue(packageName)", {
+    // 2.通过UI配置TAG标签，寻找产品配置
+    n_product_data,act_api.doExecute?name='product_list'&params='{"data":{"name":'{{n_api_data.data.tag}}'}}'
+    when("fn.hasValue(n_product_data.data)", {
+        assign('workspace', '{{n_product_data.data[0].workspacePath}}')
+        assign('packageName', '{{n_product_data.data[0].packageName}}')
+    })
+})
+
+// 3.验证UI是否有columns、是否有配置workspace、是否有配置packageName
+when("fn.hasValue(n_api_data.data.exPropertyList) && fn.hasValue(workspace) && fn.hasValue(packageName)", {
+    // 4.通过UI定义的属性列表，转成freemarker使用的Entity数据格式
+    n_entity_data,act_code.generateEntityContent?dataList='{{n_api_data.data.exPropertyList}}'&packageName='{{packageName}}'&tableName='{{n_api_data.data.pageCode}}'
+    when("n_entity_data !=null", {
+        // 4.1.通过freemarker模板，转成content
+        n_entity_content,act_code.generateFreeMarkerContent?templateName='entity.ftl'&templateParams={{n_entity_data}}
+    })
+
+    // 5.通过UI定义的属性列表，转成freemarker使用的DTO数据格式
+    n_dto_data,act_code.generateDTOContent?dataList='{{n_api_data.data.exPropertyList}}'&packageName='{{packageName}}'&tableName='{{n_api_data.data.pageCode}}'
+    when("n_dto_data !=null", {
+        // 5.1.通过freemarker模板，转成content
+        n_dto_content,act_code.generateFreeMarkerContent?templateName='dto.ftl'&templateParams={{n_dto_data}}
+    })
+
+    // 6.通过UI定义的属性列表，转成freemarker使用的Convert数据格式
+    n_convert_data,act_code.generateConvertDTOContent?dataList='{{n_api_data.data.exPropertyList}}'&packageName='{{packageName}}'&tableName='{{n_api_data.data.pageCode}}'
+    when("n_convert_data !=null", {
+        // 6.1.通过freemarker模板，转成content
+        n_convert_content,act_code.generateFreeMarkerContent?templateName='converter.ftl'&templateParams={{n_convert_data}}
+    })
+
+    // 7.通过UI定义的属性列表，转成freemarker使用的service数据格式
+    n_service_data,act_code.generateClassContent?dataList='{{n_api_data.data.exPropertyList}}'&packageName='{{packageName}}'&tableName='{{n_api_data.data.pageCode}}'
+    when("n_service_data !=null", {
+        // 7.1.通过freemarker模板，转成content
+        n_service_content,act_code.generateFreeMarkerContent?templateName='service.ftl'&templateParams={{n_service_data}}
+    })
+
+    // 8.通过UI定义的属性列表，转成freemarker使用的controller数据格式
+    n_controller_data,act_code.generateClassContent?dataList='{{n_api_data.data.exPropertyList}}'&packageName='{{packageName}}'&tableName='{{n_api_data.data.pageCode}}'
+    when("n_controller_data !=null", {
+        // 8.1.通过freemarker模板，转成content
+        n_controller_content,act_code.generateFreeMarkerContent?templateName='controller.ftl'&templateParams={{n_controller_data}}
+    })
+
+    // 9.通过UI定义的属性列表，转成freemarker使用的junit数据格式
+    n_junit_data,act_code.generateClassContent?dataList='{{n_api_data.data.exPropertyList}}'&packageName='{{packageName}}'&tableName='{{n_api_data.data.pageCode}}'
+    when("n_junit_data !=null", {
+        // 9.1.通过freemarker模板，转成content
+        n_junit_content,act_code.generateFreeMarkerContent?templateName='junit.ftl'&templateParams={{n_junit_data}}
+    })
+
+    // 10.将entity.java写入到文件
+    act_code.writeWorkSpace?workspace='{{workspace}}'&packAgeName='main.java.{{packageName}}.domain'&tableName='{{n_api_data.data.pageCode}}'&suffix='.java'&content={{n_entity_content}}
+
+    // 11.将DTO.java写入到文件
+    act_code.writeWorkSpace?workspace='{{workspace}}'&packAgeName='main.java.{{packageName}}.dto'&tableName='{{n_api_data.data.pageCode}}'&suffix='DTO.java'&content={{n_dto_content}}
+
+    // 12.将Convert.java写入到文件
+    act_code.writeWorkSpace?workspace='{{workspace}}'&packAgeName='main.java.{{packageName}}.converter'&tableName='{{n_api_data.data.pageCode}}'&suffix='Converter.java'&content={{n_convert_content}}
+
+    // 13.将service.java写入到文件
+    act_code.writeWorkSpace?workspace='{{workspace}}'&packAgeName='main.java.{{packageName}}.service'&tableName='{{n_api_data.data.pageCode}}'&suffix='Service.java'&content={{n_service_content}}
+
+    // 14.将controller.java写入到文件
+    act_code.writeWorkSpace?workspace='{{workspace}}'&packAgeName='main.java.{{packageName}}.web'&tableName='{{n_api_data.data.pageCode}}'&suffix='Controller.java'&content={{n_controller_content}}
+
+    // 15.将junit.java写入到文件
+    act_code.writeWorkSpace?workspace='{{workspace}}'&packAgeName='test.java.{{packageName}}.test'&tableName='{{n_api_data.data.pageCode}}'&suffix='Test.java'&content={{n_junit_content}}
+
+    // 16.通过api，获取metadata中dc的属性信息
+    n_fc_data,act_api.doExecute?name='ui_fc_config'&params='{"metaDataId":'{{metaDataId}}'}'
+    when("fn.hasValue(n_fc_data.data)", {
+        // 16.1.将dc生成的json,写入到指定的文件
+        act_code.writeWorkSpace?workspace='{{workspace}}'&packAgeName='main.web.ui.{{n_api_data.data.pageCode}}'&tableName='designer'&suffix='.json'&content={{n_fc_data.data}}
+    })
+},{
+    // 4.当前未配置需要的工作区或类路径或UI页面属性信息
+    log("当前未配置需要的工作区或类路径或UI页面属性信息，请在UI界面TAG标签处或者产品管理配置相关信息")
+})

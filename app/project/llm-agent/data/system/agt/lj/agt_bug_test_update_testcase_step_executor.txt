@@ -1,0 +1,21 @@
+/*
+{
+	"title":"agt_bug_test_update_testcase_step_executor",
+	"description":"测试更新Plan时，同时通过agt更新知识库kb_testcase_step - executor字段-lj",
+	"parameter":"{\"current_step\":\"12222\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_similar_file,resultTip",
+	"version":1
+}
+*/
+assign('steps',"[{\"id\":254462103824039936,\"create_time\":\"2025-9-9 17:26:12.915\",\"dynamic_plan_id\":254462103821942784,\"execution_result\":\"{\\\"hasDialog\\\":\\\"false\\\",\\\"python_file\\\":{\\\"requirement\\\":\\\"1. Navigate to the URL: http://189.1.224.215:8888/index.\\\",\\\"normalizedRequirement\\\":\\\"Navigate to the URL: http://189.1.224.215:8888/index.\\\",\\\"pythonType\\\":\\\"selenium\\\",\\\"filename\\\":\\\"CloudBank11/1NavigatetotheURdb5251443bdad8a863c08d549651f319.py\\\",\\\"resultCode\\\":1,\\\"jsonFile\\\":false}}\",\"execution_result_image\":\"selenium/result/tmp/CloudBank11/1NavigatetotheURdb5251443bdad8a863c08d549651f319.png\",\"plan_executor\":\"agt_test_selenium.test1\",\"plan_item\":\"1. Navigate to the URL: http://189.1.224.215:8888/index.\",\"result_type\":1,\"plan_parameter\":\"\",\"sort_no\":0,\"status\":1,\"create_by\":244403322305052672},{\"id\":254462103824039937,\"create_time\":\"2025-9-9 17:26:12.915\",\"dynamic_plan_id\":254462103821942784,\"execution_result\":\"/selenium/CloudBank11/2Entertheusernamea18ef5d2430e1e2e745d01df6ab33d6.py\",\"execution_result_image\":\"selenium/result/tmp/CloudBank11/2Entertheusernamea18ef5d2430e1e2e745d01df6ab33d6.png\",\"plan_executor\":\"agt_test_selenium.test1\",\"plan_item\":\"2. Enter the username 'peter.li' in the username field.\",\"result_type\":1,\"plan_parameter\":\"\",\"sort_no\":1,\"status\":1,\"create_by\":244403322305052672},{\"id\":254462103824039938,\"create_time\":\"2025-9-9 17:26:12.915\",\"dynamic_plan_id\":254462103821942784,\"execution_result\":\"selenium/CloudBank11/3Enterthepasswor9c2733f2308dfadccfd686571abb7576.py\",\"execution_result_image\":\"selenium/result/CloudBank11/3Enterthepasswor9c2733f2308dfadccfd686571abb7576.png\",\"plan_executor\":\"agt_test_selenium.test1\",\"plan_item\":\"3. Enter the password 'gientech@123' in the password field.\",\"result_type\":1,\"plan_parameter\":\"\",\"sort_no\":2,\"status\":1,\"create_by\":244403322305052672},{\"id\":254462103824039939,\"create_time\":\"2025-9-9 17:26:12.915\",\"dynamic_plan_id\":254462103821942784,\"execution_result\":\"/selenium/CloudBank11/4Clickthesigninbdc5a0d935db59fdba7f746d884f72a57.py\",\"execution_result_image\":\"selenium/result/tmp/CloudBank11/4Clickthesigninbdc5a0d935db59fdba7f746d884f72a57.png\",\"plan_executor\":\"agt_test_selenium.test1\",\"plan_item\":\"4. Click the sign-in button if exist.\",\"result_type\":1,\"plan_parameter\":null,\"sort_no\":3,\"status\":1,\"create_by\":244403322305052672}]")
+assign('test_no','CloudBank0630')
+assign('system_name','CloudBank')
+// test_no来自share memory
+// Load history data
+n_load_target_data, act_kb.select?name='kb_testcase_step'&where='{"test_no":"{{test_no}}","system_name":"{{system}}"}'&column='system_name,test_no,step,result'
+
+act_kb.convert?data={{steps}}&converter=mergeList&storeColumn='system_name,test_no,step,result,executor'&parameters='{"uniqueKey":"step","targetData": {{n_load_target_data}},"test_no":"{{test_no}}","system_name":"{{system}}"}'
+
+act_kb.importData?name=kb_testcase_step&data={{sys_last_result}}&uniqueKey='system_name,test_no,step'

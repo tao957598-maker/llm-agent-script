@@ -1,0 +1,30 @@
+/*
+ {
+	 "title": "自动化测试-update issue",
+	 "description": "列表数据参数说明：issueKey: issuekey必填;status:psss填完成 fail填进行中",
+	  "parameter": [
+     	 	{
+     	 		"name":"issueKey",
+     	 		"label":"jira issue key"
+     	 	},
+     	 	{
+     	 		"name":"status",
+     	 		"label":"issue状态"
+     	 	},
+     	 	{
+     	 		"name":"testReportPath",
+     	 		"label":"测试报告存放地址",
+     	 	}
+     	 ],
+	 "llmType": "",
+	 "resultPlan": "",
+	 "life": "100"
+ }
+*/
+
+// 获取getIssues data   name数据库表 column列名  where条件
+// n_jira_project_issues, act_kb.select?name=kb_LLMAG&column='*'&where='{"summary":"summary"}'
+
+// 调用import data function to jira
+assign('map1', '{"issueKey":"{{issueKey}}","status":"{{status}}","testReportPath":"{{testReportPath}}"}')
+act_func?name='Jira.updateIssue(map1)'

@@ -1,0 +1,44 @@
+/*
+{
+	"title":"agt_bug_test_assign_null_groovy",
+	"description":"测试when assign空值 groovy获取报错",
+	"parameter":"{\"name\":\"current_uri\",\"label\":\"uri\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_parameters",
+	"version":1
+}
+*/
+
+// current_uri
+when('!fn.hasValue(current_uri)', {
+  assign("current_uri", "")
+})
+// cookie
+when('!fn.hasValue(cookie)', {
+  assign("cookie", "")
+})
+
+n_parameters,act_func?script='''
+		def params = [:] 
+		//params.action_type = 'open_url'
+		params.run_success = '2'
+		params.current_uri = current_uri
+		params.target_uri = current_uri
+	
+		return params
+	'''
+
+assign("content", """
+2
+# Below is 20.0% of the tokens from the previous block.：
+ Management Functionality- System shall provide a "Me" menu for user account management- Users shall be able to securely log out of the system via "Logout" option## 4. Non-Functional Requirements### 4.1 Performance Requirements- System response time shall be within 3 seconds for most operations### 4.2 Security Requirements- User passwords shall be stored encrypted- Session timeout mechanism shall be implemented
+# Now begins the content of this block.：
+- Transfer operations shall include confirmation steps### 4.3 Usability Requirements- Interface shall be intuitive with key functions (deposit, transfer) easily accessible- Operational workflows shall be logical with clear steps## 5. User Interface Requirements### 5.1 Login Page- Username input field- Password input field- Sign-in button### 5.2 Main Dashboard- Account overview section- Main menu (including Deposit, Transfer, Me options)### 5.3 Deposit Page- Account type selection dropdown- Amount input field- Deposit confirmation button- View details link### 5.4 Transfer Page- Recipient selection dropdown- Source account selection dropdown- Amount input field- Transfer confirmation button## 6. Testing Requirements- Shall support automated testing (e.g., Selenium)- Test cases shall cover main flows: login, deposit, transfer, logout- Test data shall include key fields: username, password, account type, amount## 7. Deployment Requirements- System shall support deployment on standard cloud environments (e.g., Huawei Cloud)- Code paths shall be standardized for reusability (e.g., /dev/llm-git/automated-test/selenium/)## 8. Future Enhancements- Add multi-currency support- Implement transaction history query- Mobile responsiveness- Enhanced security verification (e.g., two-factor authentication)
+""")
+
+n_parameters1,act_func?script='''
+	// 这里一定要\\\\,如果传给java时，那么就少了一层即变成了一个 。也就说传给java后一定时转义字符 （agent groovy script->解码-java->groovy shell(只接受转义字符)
+    def regex = "# Below is[\\\\s\\\\S]*?(?:Now begins the content of this block\\\\.?[：:]\\\\r?\\\\n|overlapping row\\\\(s\\\\) from the next block[：:]\\\\r?\\\\n)"
+	return fn.replaceFirst(content, regex, "")
+'''

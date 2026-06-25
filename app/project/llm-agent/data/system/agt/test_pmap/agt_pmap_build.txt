@@ -1,0 +1,236 @@
+/*
+ {
+	 "title": "PAMP构建",
+	 "description": "静态构建，包含ResolveActionPreconditionsAgent（Action Precheck）和按钮的前置字段检索Agent",
+	 "parameter": [
+        {
+            "name": "application",
+            "label": "应用名称",
+            "required": true
+        },
+        {
+            "name": "test_no",
+            "label": "测试用例编号",
+            "required": true
+        }
+    ],
+	 "llmType": "",
+	 "resultPlan": "n_python_file",
+	 "life": "50"
+ }
+*/
+
+// CB0226_4  Cloud Bank 
+
+
+// 11增加agent代码 去 kb_testcase_step 根据 application 和 test_no 查询出步骤数据 1
+n_steps_metadata,act_kb.select?name=kb_testcase_step&column='step,script_path'&where='{{fn.json("test_no,test_no,application,system,version,version")}}'
+
+n_steps,act_func.run?script='def stepList = n_steps_metadata.collect { it.step }
+return stepList
+'
+
+n_form_steps,tpl_get_step,psr_json
+
+foreach('n_step', 'n_form_steps', {
+  assign('step', '{{n_step.item}}')
+  when('step.confidence>0.8',{
+  
+    n_index,act_func.run?script='return step.step_id-1'
+    assign('step_name', '{{n_steps[n_index]}}')
+    assign('script_path', '{{n_steps_metadata[n_index].script_path}}')
+    n_python_file,act_python.read?path={{script_path}}
+    
+    n_action_id,tpl_get_step_action_id,psr_json
+    assign('action_id', '{{n_action_id.action_id}}')
+
+    n_action_metadata,act_kb.select?name='kb_page_action_min_preconditions'&schema='auto_test'&column='preconditions'&where='{{fn.json("action_id,action_id,application,system,version,version")}}'
+    n_matched_steps,tpl_get_all_steps,psr_json
+
+    assign('all_codes', '[]')
+    foreach('n_matched_step', 'n_matched_steps.matchedSteps', {
+      assign('stematched_stepp', '{{n_matched_step.item}}')
+      n_index,act_func.run?script='return stematched_stepp.stepNumber-1'
+      assign('script_path', '{{n_steps_metadata[n_index].script_path}}')
+      n_python_file,act_python.read?path={{script_path}}
+      act_func.run?script='all_codes.add(n_python_file)'
+      })
+
+    n_code,tpl_get_pmap_code,psr_python
+    assign('pmap_code', '{{n_code}}')
+    // TODO
+    act_kb.merge?name=kb_page_action_min_preconditions&schema='auto_test'&columnValues={{fn.json('code,pmap_code', true)}}&where='{{fn.json("action_id,action_id,application,system,version,version")}}'
+
+
+
+
+
+
+  })
+
+})
+
+define('tpl_get_pmap_code', '''
+# 代码片段
+{{all_codes}}
+# 根据提供的代码片段，返回一份代码
+优化方案核心思路：
+合并逻辑：将三个独立的 run 函数合并为一个 run 函数。
+参数化：将硬编码的参数 提取为函数参数。
+原子性操作：在一个 try...except 块中完成整个登录流程，避免中间步骤失败后脚本继续执行导致的无效报错。
+不需要解释如何使用
+
+'''
+)
+
+define('tpl_get_all_steps', '''
+- Role: 软件测试分析专家与数据结构化工程师
+- Background: 用户需要从完整的测试用例步骤中，依据给定的前置条件（preconditions）精准定位与之逻辑关联且连续执行的步骤序列，最终输出符合规范的JSON格式数据。此需求常见于测试用例优化、回归测试范围界定、缺陷影响分析等场景。
+- Profile: 你是一位深耕软件测试领域十余年的资深分析师，精通测试用例设计方法论，对前置条件与测试步骤的因果依赖关系具有敏锐的洞察力，擅长将复杂的测试流程转化为结构清晰、机器可读的数据格式。
+- Skills: 你具备测试用例解析能力、逻辑依赖分析能力、连续性判定能力、JSON结构化输出能力，以及边界情况处理能力。
+- Goals:
+  1. 精准解析用户提供的preconditions信息，提取关键状态、数据、环境要素
+  2. 遍历测试用例全部步骤，识别与preconditions存在直接逻辑关联的步骤
+  3. 判定关联步骤的连续性，截取从首个关联步骤开始至连续中断为止的完整序列
+  4. 将筛选结果封装为标准JSON格式，确保字段完整、层级清晰
+- Constrains:
+  1. 仅返回与preconditions直接相关的连续步骤，不得包含无关步骤
+  2. 连续性判定以步骤执行顺序为准，一旦出现逻辑断裂即终止截取
+  3. JSON输出必须严格遵循指定字段结构，禁止添加未定义字段
+  4. 若preconditions与任何步骤均无关联，返回空结果并附说明
+  5. 不得擅自修改原始步骤的描述内容，保持数据真实性
+- OutputFormat: 标准JSON格式，包含以下字段：
+  - matchedSteps: 筛选出的连续步骤数组（每个步骤含stepNumber, description）
+  - matchRange: 匹配范围标识（startStep, endStep）
+  - continuityStatus: 连续性状态（complete/fragmented/none）
+  - analysisNotes: 分析说明
+
+- Workflow:
+  1. 解析preconditions核心要素：提取关键状态条件、前置数据状态、环境配置要求，建立匹配基准
+  2. 逐步骤扫描与标记：按序遍历测试用例步骤，标记与preconditions存在逻辑关联的步骤，记录其序号位置
+  3. 连续性验证与截取：检测标记步骤的序号连续性，识别最长连续序列，验证序列内部逻辑一致性
+  4. 结构化封装与输出：将筛选结果按JSON Schema组装，添加元数据与说明，完成格式校验
+
+# `preconditions`
+{{n_action_metadata}}
+# 测试用例中的步骤
+{{n_steps}}
+# 目标步骤
+{{step}}
+ 
+```
+
+''')
+
+define('tpl_get_step_action_id', '''
+# 根据给出的信息,提取该步骤的元素id
+返回数据json格式:
+```json
+{'action_id': '元素id'}
+```
+
+
+# step_name
+{{step_name}}
+
+# 步骤的python代码
+{{n_python_file}}
+
+''')
+
+
+// 结合需求分析页面元素
+define('tpl_get_step', '''
+- Role: 软件测试数据分析师与自动化测试专家
+- Background: 用户在软件测试过程中积累了大量测试步骤数据，需要从中精准识别出涉及表单提交按钮点击的操作步骤，以便进行测试用例优化、自动化脚本生成或测试覆盖率分析。
+- Profile: 你是一位深耕软件测试领域多年的资深专家，精通测试用例设计、自动化测试框架构建以及测试数据的结构化分析。你擅长从繁杂的测试步骤中提炼关键操作节点，尤其擅长识别表单交互中的提交行为模式。
+- Skills: 你具备正则表达式模式匹配、自然语言处理、测试步骤语义分析、JSON数据结构化输出以及测试场景模式识别的专业能力。
+- Goals: 
+ 1. 精准解析用户输入的测试步骤数据
+ 2. 识别所有可能涉及表单提交按钮点击的操作步骤
+ 3. 提取关键元数据（步骤编号、操作描述、目标元素、上下文场景）
+ 4. 以标准化JSON列表格式返回识别结果
+- Constrains: 
+ - 仅识别明确的或高度疑似表单提交按钮点击操作，避免过度推断
+ - 输出JSON必须符合RFC 8259标准，确保可解析性
+ - 不得修改或臆测原始数据中不存在的信息
+ - 对模糊描述需标注置信度等级（high/medium/low）
+- OutputFormat: 结构化JSON列表，每个元素包含字段：step_id（步骤标识）、action_description（原始描述）、element_type（识别元素类型）、confidence（置信度）、context（上下文信息）、reasoning（识别依据）
+- Workflow:
+ 1. 接收并解析用户输入的测试步骤数据，识别数据格式（纯文本、表格、JSON等）
+ 2. 逐条分析每个测试步骤的语义内容，匹配表单提交按钮的典型特征词（如"提交"、"submit"、"保存"、"确认"、"点击...按钮"等）及上下文语境
+ 3. 综合判断操作类型，标注置信度等级：high（明确匹配）、medium（高度疑似）、low（可能相关）
+ 4. 提取并结构化关键信息，生成符合规范的JSON列表输出
+- Examples:
+ - 例子1：输入数据
+   ```
+   步骤1：打开登录页面
+   步骤2：输入用户名"admin"
+   步骤3：输入密码"123456"
+   步骤4：点击【登录】按钮
+   步骤5：验证跳转至首页
+   ```
+   输出结果：
+   ```json
+   [
+     {
+       "step_id": 步骤4序号,
+       "action_description": "点击【登录】按钮",
+       "element_type": "form_submit_button",
+       "confidence": 1,
+       "context": "登录表单提交流程",
+       "reasoning": "明确包含'点击'动作与'登录'按钮，处于表单输入后的典型提交位置"
+     }
+   ]
+   ```
+ - 例子2：输入数据
+   ```
+   1. 进入用户注册页面
+   2. 填写手机号
+   3. 获取验证码并填入
+   4. 设置密码
+   5. 勾选同意协议
+   6. 按下确认键完成注册
+   7. 等待系统响应
+   ```
+   输出结果：
+   ```json
+   [
+     {
+       "step_id": 6,
+       "action_description": "按下确认键完成注册",
+       "element_type": "form_submit_button",
+       "confidence": 0.96,
+       "context": "用户注册表单提交流程",
+       "reasoning": "'确认键'为典型提交按钮表述，'完成注册'明确指示表单提交意图"
+     }
+   ]
+   ```
+ - 例子3：输入数据
+   ```
+   Step 1: Navigate to checkout page
+   Step 2: Fill shipping address
+   Step 3: Select payment method
+   Step 4: Click "Place Order" button
+   Step 5: Verify order confirmation
+   ```
+   输出结果：
+   ```json
+   [
+     {
+       "step_id": 4,
+       "action_description": "Click \"Place Order\" button",
+       "element_type": "form_submit_button",
+       "confidence": 0.95,
+       "context": "订单结算表单提交流程",
+       "reasoning": "'Place Order'为电商场景标准提交按钮文案，配合'Click'动作明确指向表单提交"
+     }
+   ]
+   ```
+
+# 输入数据
+{{n_steps}}
+''')
+
+
+

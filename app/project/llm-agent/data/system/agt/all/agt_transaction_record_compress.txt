@@ -1,0 +1,58 @@
+/*
+{
+	"title":"agt_transaction_record_compress",
+	"description":"根据CaseID 获取 transaction 交易记录，需要传入caseId",
+	"parameter":"{\"name\":\"caseId\",\"label\":\"case id\",\"required\":true,\"maxLength\":5000,\"hidden\":false,\"readOnly\":false,\"type\":\"text\"}",
+	"tag":"All",
+	"displayOrder":0,
+	"version":31
+}
+*/
+assign("customerParams", '{"caseId": "{{caseId}}"}')
+// 获取交易记录ByCaseId
+n_transactionHistory, act_api.doExecuteDynamic?name='okp_agent_tool_transactions'&dynamicParamData='{{customerParams}}'
+log("transaction_record=={{n_transactionHistory}}")
+
+assign("n_transaction_record","{{n_transactionHistory.data}}")
+	n_data, act_func?script='''
+    // =============================
+    // 1. 保留字段列表
+    // =============================
+    def keep_fields = [
+        "transDate",
+        "accountNumber",
+        "currencyCode",
+        "currencyAmount",
+        "riskClassification"
+    ]
+    // =============================
+    // 2. 输出结果 list
+    // =============================
+    def result_list = []
+    // =============================
+    // 3. 遍历交易数据
+    // =============================
+    for (item in n_transaction_record) {
+        def map = [:]
+        for (f in keep_fields) {
+            if (item?.containsKey(f)) {
+                map[f] = item[f]
+            }
+        }
+        result_list << map
+    }
+    // =============================
+    // 4. 返回结果
+    // =============================
+    return [
+        "result": result_list
+    ]
+'''
+
+assign("result", "{{n_data}}")
+
+
+on_failure({
+	assign("result", "{{n_data}}")
+	act_flow.go?plan=end
+})

@@ -1,0 +1,22 @@
+/*
+{
+	"title":"单元测试：Other休眠测试用",
+	"description":"欢迎使用睡眠测试的Agent",
+	"parameter":"sleepSeconds=休眠时间秒",
+	"version":1
+}
+*/
+/
+//#$ 欢迎使用单元测试：Other休眠测试用
+assign("dashboardtips", '''
+	This dashboard is now publicly accessible and will remain available
+''')
+
+//## Other: Run code successfully, go to end
+// n_flow_goend, act_flow.go?plan=end
+
+//# [Other Agent] middle test
+assign("middle", "aaaaaaaaaaa")
+
+//## [Other Agent] 睡眠第【end】步
+n_end_wait, act_flow.wait?second=2

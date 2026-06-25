@@ -1,0 +1,35 @@
+/*  
+{
+	"title": "人工节点&参数提取",
+	"description": "根据用户输入userInput，提取出需要的参数并进行确认",
+	"parameter": "userInput=用户输入&requiredParams=需要的参数",
+	"resultPlan": "n_param_confirm"
+} 
+*/
+
+// 人工节点
+manual("{{userInput}}")
+
+when('needManualConfirm', {
+    // 根据用户输入提取需要的参数
+    n_extracted, tpl_extract_params
+
+    // ## 参数确认
+    n_param_confirm, act_flow.pageConfirm?toolType={{toolType}}&toolCode={{toolCode}}&params={{n_extracted}}
+})
+
+
+define('tpl_extract_params', '''
+	请根据用户输入，提取出需要的参数，使用json返回结果。当参数没有匹配到时，返回空值。
+	
+	用户输入：
+	{{userInput}}
+	
+	需要的参数：
+	{{requiredParams}}
+	
+	返回示例：
+	{
+		"reqKey", "extractedValue"
+	}
+''')

@@ -1,0 +1,33 @@
+/*
+{
+	"title":"Update All Spider Data",
+	"description":"更新所有爬虫相关数据",
+	"parameter":[
+		{
+			"name":"system_name",
+			"label":"system_name",
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"dependency":"ac",
+	"tag":"spider",
+	"displayOrder":2,
+	"version":2
+}
+*/
+
+// 开始执行后续步骤 图谱 / 权限校验 / 页面智能解析 
+assign('n_system_name', '{{system_name}}')
+
+// 更新图谱, 1: 全量刷数据 0：仅更新未入图谱的数据
+agt_gen_spider_content?system_name={{n_system_name}}&is_update_all="0"
+
+// 更新页面权限校验
+agt_cookie_auth_probe?system_name={{n_system_name}}
+
+// 智能解析html页面
+agt_parse_content?system_name={{n_system_name}}
+
+
+

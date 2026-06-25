@@ -1,0 +1,49 @@
+/*
+{
+	"title":"自动化测试(pipeline)",
+	"description":"",
+	"parameter":[
+		{
+			"name":"system",
+			"label":"系统名称",
+			"required":true
+		},
+		{
+			"name":"test_no",
+			"label":"测试编号",
+			"required":true
+		},
+		{
+			"name":"steps",
+			"label":"测试步骤",
+			"type":"textarea"
+		},
+		{
+			"name":"version",
+			"label":"版本",
+			"required":true
+		}
+	],
+	"resultPlan":"",
+	"life":1000,
+	"version":6
+}
+*/
+//# Execute based on exploration mode
+assign('explore_mode', '1')
+//# Load business information from knowledge base
+n_envinfo, act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'
+
+// Change page view to full screen
+act_flow.changeView?field=isFullScreen&value=true
+
+// steps 调整成二维数组：执行+验证、验证。
+// 		总是在下一步的执行时，并行去验证上一步的结果。如果遇到用户的验证步骤，那么无并行。
+//$ final result
+n_step_list_tmp, agt_execution_stage?steps={{steps}}
+
+//# Update test result in knowledge base
+act_kb.merge?name=kb_testcase&columnValues='{"test_result":"Pass"}'&where='{"test_no":"{{test_no}}"}'
+
+//# 后处理Agent，参数已修改
+n_post_result, agt_post_process_stage?system={{system}}&test_no={{test_no}}&steps={{steps}}&version={{version}}

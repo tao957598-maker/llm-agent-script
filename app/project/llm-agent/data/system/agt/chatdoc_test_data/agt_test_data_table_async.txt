@@ -1,0 +1,119 @@
+/*
+{
+	"title":"Test Data Table Generation",
+	"description":"矩阵测试数据生成",
+	"parameter":[
+		{
+			"name":"test_model",
+			"label":"测试模式",
+			"type":"textarea"
+		},
+		{
+			"name":"steps",
+			"label":"步骤",
+			"type":"textarea"
+		},
+		{
+			"name":"test_no",
+			"label":"test_no",
+			"type":"textarea"
+		},
+		{
+			"name":"n_system",
+			"label":"n_system",
+			"type":"textarea"
+		},
+		{
+			"name":"metadata_id",
+			"label":"metadata_id",
+			"type":"textarea"
+		}
+	],
+	"resultPlan":"n_kb_data,n_final_data",
+	"life":1000,
+	"version":1
+}
+*/
+assign("test_model", "{{test_model}}")
+assign("steps", "{{steps}}")
+assign("test_no", "{{test_no}}")
+assign("n_system", "{{n_system}}")
+assign("metadata_id", "{{metadata_id}}")
+
+n_final_data, tpl_llm_test_data_no_result,psr_json
+assign("final_design_result",'{{n_final_data}}')
+
+
+
+// 判断每步是否为输入项，并生成测试数据矩阵
+define("tpl_llm_test_data_no_result", '''
+你是一位资深测试专家，为以下按编号列出的操作步骤内容，生成标准化的测试数据，输出测试数据矩阵：
+
+角色定义：
+- 测试数据生成专家
+- 熟悉14种测试方法, 如：等价类划分法, 边界值分析法, 判定表法, 因果图法, 正交试验法, 状态迁移法, 场景法, 错误推测法, 随机测试法, 组合测试法, 变异测试法, 模糊测试法, 基于模型的测试法, 探索性测试法
+  对应英文："Equivalence Partitioning", "Boundary Value Analysis", "Decision Table Testing", "Cause-Effect Graphing", "Orthogonal Array Testing", "State Transition Testing", "Scenario Testing", "Error Guessing", "Random Testing", "Combinatorial Testing", "Mutation Testing", "Fuzz Testing", "Model-Based Testing", "Exploratory Testing"
+- 严格遵循测试规范
+- 根据给出的测试方法规则，给出对应的json数据
+
+基于数据生成规则：
+  - 每种方法独立生成一组数据
+  - 禁止生成带HTML/XML标签的数据（包括但不限于<script>、<div>、<script>alert(...)</script>等）
+  - 禁止生成可能引发安全问题的特殊字符组合
+  - 字符串长度控制在合理范围内
+  - 输出结果必须为 "{" 开头 "}"结尾，是一个完整的dict， test_method输出为英文
+
+
+数据生成：
+1. 解析操作步骤,提取明确为"输入"类的操作步骤：
+  - 输入类：测试方法清单，生成测试数据
+  - 非输入类操作：用 `null` 占位，不能省略
+  - 保持每组数据维度一致
+
+2. 直接输出json结构数据,不必解释：
+根据您提供的JSON数据，以下是各字段的格式说明：
+
+## 字段格式说明
+
+| 字段名 | 数据类型 | 示例值 | 说明 |
+|--------|----------|--------|------|
+| `test_no` | 字符串 | "1.0" | 测试编号，支持版本号格式 |
+| `metadata_id` | 字符串 | "元数据ID" | 元数据的唯一标识符 |
+| `system_name` | 字符串 | "系统名称" | 被测系统的名称 |
+| `test_method` | 字符串 | "边界值分析法" | 测试方法描述 |
+| `data` | 字符串 | "[{"1":null, "2":"admin", "3":"123456"}]" | **包含转义的JSON字符串**，内部是测试数据数组 |
+
+  示例1：
+  输入测试方法：等价类划分法
+  输出：
+  {
+    "test_no": "1.0",
+    "metadata_id": "元数据ID",
+    "system_name": "系统名称",
+    "test_method": "等价类划分法",
+    "data": "[{"1":null, "2":"admin", "3":"123456"}]"
+  }
+  示例2：
+  输入测试方法：边界值分析法
+  输出：
+  {
+    "test_no": "1.0",
+    "metadata_id": "元数据ID",
+    "system_name": "系统名称",
+    "test_method": "边界值分析法",
+    "data": "[{"1":null, "2":"admin", "3":"123456"}]"
+  }
+
+传参规范：
+操作步骤：1.打开浏览器，访问URL: http://189.1.224.215:8888/index。
+2.在弹出的登录框中输入用户名：peter.li。
+3.在弹出的登录框中输入密码：gientech@123。
+4.点击登录框中的“登录”按钮。
+
+测试方法：{{test_model}}
+操作步骤：{{steps}}
+测试编号：{{test_no}}
+系统名称：{{n_system}}
+元数据ID：{{metadata_id}}
+
+''')

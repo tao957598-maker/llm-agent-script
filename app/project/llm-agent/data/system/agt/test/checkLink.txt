@@ -1,0 +1,19 @@
+/*
+{
+	"title": "Test chatdoc open link ",
+	"description": "Test chatdoc open link by default！",
+    "parameter": [
+					{
+						"name":"reportId",
+						"label":"User requiredment!",
+						"type":"text"
+					}
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "life": "100"
+} */
+//## Check download link
+assign('resultTip', '<a class="download-link" href="/kbs-template/download-report?fileName=/kbs/User/admin/report/report-金融行业智能报表-V1.0-001_20251125093006_20251125093007.pdf" target="_blank">Report generated successfully, please click to download.</a >')
+
+

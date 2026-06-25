@@ -1,0 +1,56 @@
+/*
+{
+	"title":"agt_bug_test_pythonread",
+	"description":"测试agt_bug_test_pythonread 异常不捕获-lj",
+	"parameter":"{\"current_step\":\"12222\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"result",
+	"version":1
+}
+*/
+ // 1. Open homepage: https://quartz.treasury-factory.com/user/login.
+// 1. Open homepage: https://quartz.treasury-factory.com/user/login
+
+//assign('current_step', """
+//1.在浏览器中打开网址：http://189.1.224.215:8888/
+//""")
+// act_python.readSimilar?pythonType='selenium'&requirement={{current_step}}&application=&subfolder="agt_test_steps_hsbc1103"&score='0.05'
+
+
+
+assign('current_step', """
+4.user name input `lht444`
+""") 
+act_python.readSimilar?pythonType='selenium'&requirement={{current_step}}&application="客户信息管理系统"&subfolder="客户信息-客户创建-客户名称栏位检查"
+
+
+//assign('current_step', """
+//33.Click 'Online security' button[id_3459464225]
+//""") 
+//act_python.readSimilar?pythonType='selenium'&requirement={{current_step}}&application="harvey_0820"&subfolder="harvey_0820"
+
+
+// n_python_file, act_python.read?pythonType='selenium'&requirement="8.click `My Received Tasks` button"&subfolder="agt_test_steps0913"
+
+
+// Try to use the standard analysis procedure
+on_failure({
+	// Force to success status
+	act_flow.success
+})
+
+assign('result', 'success') 
+
+
+{
+    "score": 0.05,
+    "application": "FAAP",
+    "filePath": "/FAAP/Selenium/workflows/def_module/draft_steps/agt_test_steps_20260112",
+    "requirement": "2.input user name `lht`",
+    "pageObjectPath": "/FAAP/Selenium/pages/login",
+    "pythonType": "selenium"
+}
+
+
+n_similar_file, act_python.readSimilar?pythonType={{pythonType}}&requirement={{current_step}}&filePath={{n_global_variable.script_subfolder}}&score='0.05'&application={{system}}&pageObjectPath={{page_subfolder}}

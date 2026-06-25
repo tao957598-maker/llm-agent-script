@@ -1,0 +1,67 @@
+/*
+{
+	"title":"Testing Workflow Agent",
+	"description": "chatdoc Testing Workflow Agent",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"Testing Requirements",
+			"description":"User's testing requirements input",
+			"required":true
+		}
+	],
+    "uiEntrance": 'components.AutoTestConfirmCard',
+	"displayOrder":0,
+	"tag":"auto_test_web",
+	"version":1
+}
+*/
+
+// Define LLM prompt to create testing workflow plan
+define('tpl_create_workflow', '''
+Based on the user's testing requirements, create a workflow plan for automated testing.
+
+User Requirements: {{userInput}}
+
+Please create a workflow plan in JSON format with the following structure:
+{
+  "workflow": [
+    {"step": 1, "task": "agt_internal_gen_plan_tasks", "description": "Generate requirement analysis and test task decomposition."},
+	{"step": 2, "task": "agt_internal_gen_test_case", "description": "Generate comprehensive summaries from documents and create test cases based on the content"},
+	{"step": 3, "task": "agt_internal_gen_test_data", "description": "Generate test data for the test cases"},
+	{"step": 4, "task": "agt_internal_gen_test_drive_data", "description": "Generate test drive data"},
+	{"step": 5, "task": "agt_internal_gen_plan_and_run", "description": "Generate plan task and execute."},
+    {"step": 6, "task": "agt_internal_gen_test_report", "description": "Generate test execution report"}
+  ],
+  "priority": "high",
+  "estimated_time": "2 hours"
+}
+
+Return only the JSON, no explanations.
+
+remark:
+	1.If test_type in User Requirements is API, then the task agt_internal_gen_test_drive_data should not be selected.
+	2.If test_type in User Requirements is API and data_execution_method is MANUAL_SELECTION, then the task agt_internal_gen_test_case should not be selected
+	3.If test_type in User Requirements is WEB, then select all tasks.
+	4.Also reorder the steps.
+''')
+
+tpl_create_workflow, psr_json
+
+// 工作流生成完成，开始写入结构化计划
+assign('n_workflow_plan', '{{tpl_create_workflow}}')
+// 解析执行任务清单
+n_plan_tasks, act_plan.parse?task='{{n_workflow_plan.workflow}}'
+
+n_thinking_data,act_func?script='''
+			def str = "";
+			def size = n_plan_tasks.items.size();
+			for(int i = 0; i < n_plan_tasks.items.size(); i++){
+				str += n_plan_tasks.items[i].step + "/" + size + " " + n_plan_tasks.items[i].description + "\\n";
+			}
+			return str;
+		'''
+
+//## 已完成 深度思考
+act_memory.assign?var=n_plan_summary&value='{{n_thinking_data}}'&type=all
+assign('n_plan_tasks', '{{n_plan_tasks}}')

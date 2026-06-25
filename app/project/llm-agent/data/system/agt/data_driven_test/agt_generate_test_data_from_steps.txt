@@ -1,0 +1,133 @@
+/*
+{
+	"title":"Smart Test Data Selector Engine",
+	"description":"AI-enhanced test data selection system that intelligently identifies and extracts optimal test datasets from test steps",
+	"parameter":[
+        {
+			"name":"test_no",
+			"label":"Test No",
+			"type":"textarea"
+		},
+        {
+			"name":"system",
+			"label":"system"
+		},
+        {
+			"name":"test_method",
+			"label":"Test Method",
+			"type":"textarea"
+		},
+		{
+			"name":"outputTable",
+			"label":"Data Storage Table",
+			"type":"input",
+			"defaultValue":"kb_test_data_scenario"
+		}
+	],
+	"tag":"Automated Testing",
+	"resultPlan":"userInput, n_kb_data",
+	"life":1000,
+	"displayOrder":61,
+	"version":1
+}
+*/
+
+
+when('fn.hasValue(test_no)', {
+    assign("test_no_input", "test no为{{test_no}}")
+},
+{
+    assign("test_no_input", "")
+})
+when('fn.hasValue(system)', {
+    assign("system_input", "system为{{system}}")
+},
+{
+    assign("system_input", "")
+})
+
+when('fn.hasValue(test_method)', {
+    assign("test_method_input", "Test_Method为{{test_method}}")
+
+},
+{
+    assign("test_method_input", "")
+})
+
+when('fn.hasValue(score)', {
+    assign("score_input", "score{{test_no}}")
+},
+{
+    assign("score_input", "")
+})
+
+
+// userInput
+assign("userInput", "基于`kb_test_steps_data`表 \n帮我取{{system_input}},{{test_no_input}}、{{test_method_input}}、{{score_input}}")
+
+// 获取查询 SQL 并执行
+n_sql,agt_auto_sql1.knowledge?userInput='{{userInput}}'
+
+// n_kb_data
+n_kb_data, act_kb.selectBy?sql='{{n_sql}}'
+
+n_data_item, act_func?js='''
+(function() {
+    let arrList = {{n_kb_data}};
+    let nData_Arr = [];
+    let nResult_Arr = [];
+    let nTitle_Arr = [];
+    let n_Method_Arr = [];
+    for(let i = 0; i < arrList.length; i++) {
+        let jsonArr = JSON.parse(arrList[i].data);
+        for(let j = 0; j < jsonArr.length; j++) {
+            nData_Arr.push(jsonArr[j]);
+            nResult_Arr.push(arrList[i].expected_result);
+            nTitle_Arr.push(arrList[i].title);
+            n_Method_Arr.push(arrList[i].test_method);
+            
+        }
+       
+        
+    }
+    
+    let obj = {
+        "title": JSON.stringify(nTitle_Arr),
+        "test_no": arrList[0].test_no,
+        "system_name": arrList[0].system_name,
+        "metadata_id": arrList[0].metadata_id,
+        "test_method": JSON.stringify(n_Method_Arr),
+        "data": JSON.stringify(nData_Arr),
+        "expected_result": JSON.stringify(nResult_Arr)
+    };
+    
+    return JSON.stringify(obj);
+})();
+'''
+
+assign("n_result_data", "{{n_data_item}}")
+// get test_no
+n_test_no, act_func?script='''return n_result_data.test_no'''
+
+// 查询test step语句 
+assign("n_userInput", "在kb_test_metadata表查询application为{{system}} test_no为{{n_test_no}}的create_time 为最新的第一条数据")
+
+// 取test step数据sql
+agt_auto_sql1.knowledge?userInput='{{n_userInput}}'
+
+// data from kb_test_metadata
+n_test_metadata,act_kb.selectBy?sql='{{sys_last_result}}'
+
+// 输出 test step
+n_step_data, act_func?script='''return n_test_metadata[0].steps'''
+
+
+
+// 得到测试数据
+n_test_data, act_func?script='''return [n_result_data.put('test_step', n_step_data)]'''
+assign("case_item", "{{n_result_data}}")
+
+
+// 保存到数据库
+assign("newTableName", "{{outputTable}}")
+act_kb.defineAndImportData?tableName='{{newTableName}}'&data='{{case_item}}'

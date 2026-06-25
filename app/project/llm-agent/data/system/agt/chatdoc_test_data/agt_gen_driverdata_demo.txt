@@ -1,0 +1,124 @@
+/*
+{
+	"title":"Driver Data Table Generation",
+	"description":"驱动数据矩阵生成",
+	"parameter":[
+		{
+			"name":" test_no",
+			"label":"Test_No"
+		},
+		{
+			"name":"constraints",
+			"label":" Constraints",
+			"type":"textarea"
+		}
+	],
+	"resultPlan":"n_kb_data, n_final_data",
+	"life":1000,
+	"version":1
+}
+*/
+/
+
+// 获取Test_No
+assign("userInput", "在kb_testcase表查询test_no为{{test_no}}的第一条数据")
+// 获取Constraints
+assign("constraints", "{{constraints}}")
+
+
+// 查询元数据语句
+agt_auto_sql1.knowledge?userInput='{{userInput}}'
+n_kb_data,act_kb.selectBy?sql='{{sys_last_result}}'
+
+// 数据拼接
+n_data_item,act_func?script='''
+  def result = [:]      
+  result.test_no = n_kb_data[0].test_no    
+  result.title = n_kb_data[0].title
+  result.constraints = constraints
+  result.steps = n_kb_data[0].steps
+  result.expected_result = n_kb_data[0].expected_result
+  result.metadata_id = n_kb_data[0].id
+  return result
+'''
+
+// 大模型生成驱动数据矩阵
+n_final_data, tpl_llm_test_data
+
+
+// 保存数据库
+act_kb.defineAndImportData?tableName='kb_test_steps_data'&data='{{n_final_data}}'
+
+// 判断每步是否为输入项，并生成测试数据矩阵
+define("tpl_llm_test_data", '''
+- Role: 测试数据生成专家
+- Background: 基于测试用例和指定的测试方法生成多样化的测试数据
+- Profile: 你是一位专业的测试工程师，精通各种测试方法
+- Skills: 能够根据测试用例和测试方法生成有效的测试数据
+- Goals: 生成符合测试用例要求的测试数据
+- Constrains: 
+  1. 确保生成的测试数据符合测试方法的原理
+  2. 使用的测试方法（必须全部包含）：[等价类划分法, 边界值分析法, 判定表法, 因果图法, 正交试验法, 状态迁移法, 场景法, 错误推测法, 随机测试法, 组合测试法, 变异测试法, 模糊测试法, 基于模型的测试法, 探索性测试法]
+  3. 每个步骤都需要生成测试数据，
+  4. 非输入类的操作用'null'占位，不能省略，
+  5. 每个测试步骤都必须有对应的数据项，包括非输入操作用'null'占位,
+    5.1: data字段中的JSON数组必须包含与测试步骤数量完全一致的元素,
+    5.2: 每个数据项对应一个测试步骤，按步骤顺序排列,
+  6. 禁止生成带HTML/XML标签的数据（包括但不限于<script>、<div>、<script>alert(...)</script>等）
+  7. 禁止生成可能引发安全问题的特殊字符组合
+  8. 字符串长度控制在合理范围内
+  
+- OutputFormat: JSON格式的测试数据
+
+# 测试用例信息
+{{test_case}}
+
+
+# 生成要求
+1. 为每种测试方法生成至少一组测试数据
+2. 每组数据包含输入值和预期结果
+3. expected_result字段使用布尔值：如果预期结果与测试用例中expected_result意思一致，则输出true，否则输出false
+4. 输出格式为标准合法的JSON，不要解释
+
+- Examples:
+  test_case：
+    [ 
+	  1.open url xxx
+      2.input user name `admin`
+      3.input password `123456`
+	]
+	  
+  输出json结构数据:
+	[
+		{
+			"test_no": "test_record_xxx", # 用例编号
+			"metadata_id": "元数据ID",
+			"system_name": "系统名称",
+			"test_method": "等价类划分法", # 生成该数据所有使用的测试用例设计方法
+			"title":"1.用户名和密码均正确时可以正常登录"  # 用来简单描述生成的数据的测试内容，由index作为序号开头
+		"data": "[{"1":null, "2":\"admin\", "3":\"123456\"}]" # 生成的测试数据,
+			"expected_result": true, # 布尔值：true表示与测试用例预期结果一致，false表示不一致
+			"index": 1 # 生成数据的序号
+		},
+		{
+			"test_no": "test_record_xxx",
+			"metadata_id": "元数据ID",
+			"system_name": "系统名称",
+			"test_method": "边界值分析法",
+			"title":"用户名短一位为OKPT02，密码正确时登录失败"
+		"data": "[{"1":null, "2":\"admin\", "3":\"123456\"}]"
+			"expected_result":"false",
+			"index": 2
+		}
+		...... # 此处省略其他测试方法生成的测试数据
+	 ]
+ 
+''')
+  
+传参规范：
+用例编号：{{n_data_item.test_no}}
+测试标题：{{n_data_item.title}}
+约束条件：{{n_data_item.constraints}}
+测试步骤：{{n_data_item.steps}}
+期望结果：{{n_data_item.expected_result}}
+元数据ID：{{n_data_item.metadata_id}}

@@ -1,0 +1,242 @@
+/*
+{
+	"title":"Knowledge Base Test Cases to Jira",
+	"description":"Import knowledge base test case data to Jira for test case management",
+	"parameter":[
+		{
+			"name":"jira_project_name",
+			"label":"Jira project name"
+		},
+		{
+			"name":"application",
+			"label":"Application",
+			"type":"varchar",
+			"length":50
+		},
+		{
+			"name":"steps",
+			"label":"Steps",
+			"type":"text",
+			"charset":"utf8mb4",
+			"collate":"utf8mb4_0900_ai_ci"
+		},
+		{
+			"name":"test_no",
+			"label":"Test No",
+			"type":"varchar",
+			"length":50
+		}
+	],
+	"tag":"Automated Testing",
+	"resultPlan":"result,jira_project_name,n_result_issue_data",
+	"life":100,
+	"displayOrder":50,
+	"version":1
+}
+*/
+//# Tip
+assign("result", 'Agent is running')
+
+
+when('!fn.hasValue(jira_project_name)', {
+    // End the task and jump to the end step
+    act_flow.go?step='end'
+})
+assign("project", '{{jira_project_name}}')
+
+// Query kb_testcase data
+assign("query", '{{fn.json("test_no,test_no,application,application")}}')
+// n_select_data,act_kb.select?name=kb_testcase&where='{{fn.json("test_no,test_no,steps,steps,application,application")}}'
+n_select_data,act_kb.select?name=kb_testcase&where='{{fn.json("test_no,test_no,application,application")}}'
+
+assign("steps", "{{select_data[0].steps}}")
+assign("select_data", '{{n_select_data}}')
+
+// Query system configuration
+n_jira_config,act_kb.readCfg?type='jira_config'&key='1'
+n_doc_config,act_kb.readCfg?type='doc.path'&key='1'
+assign("jiraConfig", "{{n_jira_config}}")
+
+assign("issueKey", "{{select_data[0].jira_no}}")
+when('fn.hasValue(issueKey)', {
+  // If the `jira_no` field has a value, execute the code here
+  assign("test_result", "{{select_data[0].test_result}}")
+  when('fn.hasValue(test_result)', {
+  // test_result has a value
+  when('test_result == "Pass"', {
+    // get isstus status list
+     //## 正在上传到Jira
+    n_status_list, act_api.doExecute?name="jira_get_issue_status_id"&params='{"jira_config":{{jiraConfig}},"issue_key":"{{issueKey}}"}'
+    assign("status_list", '{{n_status_list}}')
+    assign("select_status", 'Done')
+    // select transition status
+    n_transition_data ,tpl_select_status_id
+    assign('medata_dc', '{}')
+    act_func?script="medata_dc.put('issueKey', '''{{issueKey}}''')"
+    act_func?script="medata_dc.put('transitionData',tpl_select_status_id)"
+    // get transitionIssueData
+    assign('transitionIssueData', '{{medata_dc}}')
+
+    act_api.doExecute?name="jira_transition_issue"&params='{"jira_config":{{jiraConfig}},"transition_issue_data":{{transitionIssueData}}}'
+
+    })
+  })
+
+    assign("test_no1", '''{{select_data.test_no}}''')
+    assign("test_no", '''{{test_no1[0]}}''')
+
+    // Regardless of success or failure, there may be a report. Attempt to upload the file.
+    assign("file", "/selenium/result/{{test_no}}/report_{{test_no}}.docx")
+    assign("addattachmentdata", "{{fn.json('issueKey,issueKey')}}")
+    n_rp, act_api.doExecute?name="jira_add_attachment"&params='{"jira_config":{{jiraConfig}},"issues_data":{{addattachmentdata}}}'&fileNames='["{{file}}"]'
+
+}, {
+  // If the `jira_no` field does not have a value, execute the code here
+  n_kb_data, tpl_kb_to_jira
+  assign("issuesData", '{{n_kb_data.issuedata}}')
+  
+  //## 正在上传到Jira 
+  n_result_issue_data,act_api.doExecute?name="jira_create_issues"&params='{"jira_config":{{jiraConfig}},"issues_data":{{issuesData}}}'
+  assign("issueKey1", '''{{n_result_issue_data.data.issues.key}}''')
+  assign("issueKey", '''{{issueKey1[0]}}''')
+  
+  // update jira no
+  act_kb.merge?name='kb_testcase'&columnValues='{"jira_no":"{{issueKey}}"}'&where='{"id":"{{n_select_data[0].id}}"}'
+
+  // Tip
+  assign("result", 'Data insertion successful, JIra issueKey : {{issueKey}}')
+
+  when('n_kb_data.issue_transitions == true', {
+    // Update issue status to completed get isstus status list
+    n_status_list, act_api.doExecute?name="jira_get_issue_status_id"&params='{"jira_config":{{jiraConfig}},"issue_key":"{{issueKey}}"}'
+    assign("status_list", '{{n_status_list}}')
+    assign("select_status", 'Done')
+    // select transition status
+    n_transition_data ,tpl_select_status_id
+
+    assign('medata_dc', '{}')
+    act_func?script="medata_dc.put('issueKey', '''{{issueKey}}''')"
+    act_func?script="medata_dc.put('transitionData',tpl_select_status_id)"
+    // get transitionIssueData
+    assign('transitionIssueData', '{{medata_dc}}')
+
+    act_api.doExecute?name="jira_transition_issue"&params='{"jira_config":{{jiraConfig}},"transition_issue_data":{{transitionIssueData}}}'
+
+  })
+  assign("test_no1", '''{{select_data.test_no}}''')
+  assign("test_no", '''{{test_no1[0]}}''')
+
+  // Regardless of success or failure, there may be a report. Attempt to upload the file.
+  assign("file", "/selenium/result/{{test_no}}/report_{{test_no}}.docx")
+  assign("addattachmentdata", "{{fn.json('issueKey,issueKey')}}")
+  n_rp, act_api.doExecute?name="jira_add_attachment"&params='{"jira_config":{{jiraConfig}},"issues_data":{{addattachmentdata}}}'&fileNames='["{{file}}"]'
+
+
+})
+
+// Tip
+assign("result", 'Agent task ended')
+
+act_flow.go?plan=end
+// 将input输入的数据,mapping到对应的json字段数据中, 直接返回对应的markdown json信息.
+define('tpl_kb_to_jira', '''
+	/*{
+	 "llm_type":""
+ }*/
+- Role: 数据处理专家和JSON格式转换工程师
+- Background: 用户需要将输入的数据（input）映到射对应的JSON字段中，并直接返回对应的Markdown格式的JSON信息。这可能是为了快速处理数据并以标准化的格式呈现，适用于数据转换、文档生成或接口对接等场景。
+- Profile: 你是一位精通数据处理和JSON格式的专业工程师，能够高效地将各种输入数据映射到指定的JSON字段中，并生成符合Markdown格式的JSON信息。
+- Skills: 你具备强大的数据解析能力、JSON操作技巧以及对Markdown格式的熟练掌握，能够准确地将输入数据与JSON字段进行匹配，并确保输出的格式准确无误。
+- Goals: 将输入的数据准确映射到对应的JSON字段中，并以Markdown格式返回JSON信息。
+- Constrains: 输入数据的格式应明确且可解析，JSON字段的映射关系应清晰定义，输出的Markdown格式应符合标准的JSON表示方式。
+- OutputFormat: Markdown格式的JSON信息
+- Workflow:
+  1. 接收输入数据（input）和对应的JSON字段映射关系。
+  2. 根据映射关系，将输入数据填充到JSON字段中。
+  3. 将生成的JSON数据转换为Markdown格式并返回。
+- Examples:
+  - 映射规则：
+    - JSON字段`summary`: 提取数据库字段`summary`, 若无值可以总结数据库字段`steps`内容,10个字或单词以内,或者是赋值为`test`
+    - JSON字段`description`: 汇总数据库字段`application`,`steps`,`test_no`,`expected_result`,
+    - JSON字段`project`.`key`: 从数据库字段`project`获取
+    - JSON字段`issue_transitions`: 若数据库字段`test_result`是Pass,则为true.其它情况都为false
+  - 例子1：
+    输入数据（input）：
+    ```
+    project: LLMAG
+    application: bank
+    language: en
+    steps: 1.open url http://gt-tcoe-labs.site:8888/index
+    test_no: bank001
+    test_result: pass
+    ```
+    映射到JSON信息
+    ```json
+    {"issuedata":{"issueUpdates":[{"fields":{"description":"application: bank \ntest_no: bank001 \nlanguage: en \nsteps:1.open url http://gt-tcoe-labs.site:8888/index \n","issuetype":{"name":"Task"},"project":{"key": "LLMAG"},"summary":"First issue of many2"}}]},"issue_transitions":true}
+
+    ```
+  - 例子2：
+      输入数据（input）：
+      ```
+      project: LLMAG
+      application: bank
+      language: en
+      steps: 1.open url http://gt-tcoe-labs.site:8888/index 2.Type “peter.li” as Username
+      test_no: bank001
+      ```
+      映射到JSON信息
+      ```json
+    {"issuedata":{"issueUpdates":[{"fields":{"description":"application: bank \ntest_no: bank001 \nlanguage: en \nsteps:1.open url http://gt-tcoe-labs.site:8888/index \n","issuetype":{"name":"Task"},"project":{"key": "LLMAG"},"summary":"First issue of many2"}}]},"issue_transitions":false}
+      ```
+
+# Input
+project: {{fn.optional(project, 'None')}}
+database_data: {{n_select_data}}
+
+''')
+
+define('tpl_select_status_id', '''
+	/*{
+	 "llm_type":""
+ }*/
+- Role: 数据处理专家
+- Background: 用户需要根据期望改变的状态码从一个状态码列表中选择正确的状态ID。
+- Profile: 你是一位精通数据处理和JSON格式的专业工程师，能够根据用户的输入及指令选择正确的状态码，并生成符合Markdown格式的JSON信息。
+- Skills: 你具备强大的数据解析能力、JSON操作技巧以及对Markdown格式的熟练掌握，能够准确地将输入数据与JSON字段进行匹配，并确保输出的格式准确无误。
+- Goals: 将输入的数据准确映射到对应的JSON字段中，并以Markdown格式返回JSON信息。
+- Constrains: 输入数据的格式应明确且可解析，JSON字段的映射关系应清晰定义，输出的Markdown格式应符合标准的JSON表示方式。
+- OutputFormat: Markdown格式的JSON信息
+- Workflow:
+  1. 输入期望改变的状态码、所有的状态码列表，从中选择正确的状态ID。
+  2. 根据要求将选择的状态生成的JSON数据转换为Markdown格式并返回。
+  - 例子1：
+    状态码列表：
+    ```
+    [{'id': '11', 'name': 'Start Progress'}, {'id': '21', 'name': 'Done'}]
+    ```
+    期望改变的状态：
+    ```
+    Done
+    ```
+    输出数据：
+    ```json
+    {"transition":{"id":"21"}}
+    ```
+  - 例子2：
+    状态码列表：
+    ```
+    [{'id': '11', 'name': 'Start Progress'}, {'id': '21', 'name': 'Done'}]
+    ```
+    期望改变的状态：
+    ```
+    In Progress
+    ```
+    输出数据：
+    ```json
+    {"transition":{"id":"11"}}
+    ```
+
+# Input
+状态码列表: {{status_list}}
+期待改变的状态: {{select_status}}
+''')

@@ -1,0 +1,114 @@
+/*
+{
+	"title":"Gen testcase by KB",
+	"description":"Read requirement document to generate test cases",
+	"parameter": [
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"llmType":"alias.highquality",
+	"resultPlan":"status,result_test_cases",
+	"life":10000,
+	"version":1
+}
+*/
+//# Agent status
+assign("status", 'Agent is running')
+// Document ID
+assign("documentId", '{{kbSpaceFileId}}')
+
+n_design_flattened_data, act_kb.selectBy?sql='SELECT * FROM kb_gen_test_module_design WHERE documentId ="{{documentId}}" and version ="{{version}}"'
+
+
+
+// 异步生成测试案例数据
+assign('async_test_case_list', '[]')
+// 异步处理每页数据
+foreach('n_test_design','n_design_flattened_data', {
+    // 获取当前模块名称
+    assign('test_design', '{{n_test_design.item}}')
+    // 计算数据
+    n_gen_case,agt_test_doc_gen_case?input_data='{{test_design}}'&documentId='{{documentId}}'&async=true
+    act_func?script="async_test_case_list.add(n_gen_case)"
+})
+assign('test_case_list', '[]')
+foreach('n_test_case', 'async_test_case_list', {
+
+    assign('test_case', '{{n_test_case.item}}')
+    // test_point_valuetest_point_value map
+    assign('test_case_value', '{{test_case.value}}')
+    when('fn.hasValue(test_case_value)', {
+        act_func?script='''test_case_list.add(test_case_value)'''
+    })
+
+    
+})
+
+act_kb.selectBy?sql='delete from kb_gen_test_case where version = "{{version}}" and document_id = "{{documentId}}"'
+on_failure({
+	// Force to success status
+	act_flow.success
+})
+// result_list_test_cases
+assign('result_list_test_cases', '[]')
+
+foreach('n_test_case', 'test_case_list', {
+        // test_contenttest_content map list
+        assign('test_case_map', '{{n_test_case.item}}')
+        // result_list_test_cases
+        assign('result_list_test_cases2', '[]')
+        foreach('n_test_case_map','test_case_map.data',{
+            assign('test_case', '{{n_test_case_map.item}}')
+
+            assign('item_map', '''{
+            "title": "{{test_case.title}}",
+            "application": "{{test_case.application}}",
+            "steps": "{{test_case.steps}}",
+            "test_no": "{{test_case.test_no}}",
+            "expected_result": "{{test_case.expected_result}}",
+            "source_value": "{{test_case.source_value}}",
+            "test_type": "{{test_case.test_type}}",
+
+            "sub_category": "{{test_case_map.sub_category}}",
+            "sub_id": "{{test_case_map.sub_id}}",
+            "design_element": "{{test_case_map.design_element}}",
+            "test_content": "{{test_case_map.test_content}}",
+            "platform": "{{test_case_map.platform}}",
+            "main_module_name": "{{test_case_map.main_module_name}}",
+            "main_module_source": "{{test_case_map.main_module_source}}",
+            "submodule_name": "{{test_case_map.submodule_name}}",
+            "submodule_description": "{{test_case_map.submodule_description}}",
+            "submodule_source": "{{test_case_map.submodule_source}}",
+            "documentId": "{{fn.optional(kbSpaceFileId,'')}}" ,
+            "version":"{{version}}"
+            }''')
+            
+            act_func?script='''
+                result_list_test_cases.add(item_map)
+            '''
+            act_func?script='''
+                result_list_test_cases2.add(item_map)
+            '''
+                 
+
+        })
+        // 再插入新数据
+        act_kb.defineAndImportData?tableName='kb_gen_test_case'&data='{{result_list_test_cases2}}'
+
+ 
+    })
+
+
+assign('result_test_cases', '{{result_list_test_cases2}}')
+
+ 
+//# kb_gen_test_case
+assign('kb_gen_test_case', 'Download <a href="/knowledge-base/retrieval?title=knowledgeBaseList/knowledgeRetrieval/kb_gen_test_case&tableName=kb_gen_test_case&schema=llm_agent" target="_blank">kb_gen_test_case</a>')

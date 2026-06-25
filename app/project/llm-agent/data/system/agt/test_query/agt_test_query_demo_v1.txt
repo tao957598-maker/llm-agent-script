@@ -1,0 +1,189 @@
+/*
+{
+	"title": "Answer user question",
+	"description": "Answer user question",
+  "parameter": [
+    {
+      "name":"userInput",
+      "label":"客户问题",
+      "type":"textarea"
+    },
+    {
+      "name":"kbSpaceId",
+      "label":"目录ID（支持多个）",
+      "type":"textarea"
+    },
+    {
+      "name":"kbSpaceFileId",
+      "label":"File",
+      "type":"knowledge_space"
+    },
+    {
+      "name":"kbData",
+      "label":"知识库数据",
+      "type":"textarea"
+    },
+    {
+			"name":"seek_mode",
+			"label":"搜索模式",
+			"args":[
+				{
+					"label":"快速模式",
+					"value":"1"
+				},
+				{
+					"label":"深度模式",
+					"value":"0"
+				}
+			],
+      "defaultValue":"快速模式",
+			"required":true,
+			"type":"select"
+		}],
+  "resultPlan": "finally_answer",
+  "life": "100"
+  "uiEntrance": "chatDoc",
+	"tag":"chatdoc"
+} */
+
+
+"""
+when('fn.hasValue(kbData)',{
+  //# Execute query from expert knowledge base
+  n_expert_query_answer, agt_test_query_expert_0?userInput={{userInput}}&kbData={{kbData}}
+  // Set answers for expert query
+  assign('n_answers', '{{n_expert_query_answer}}')
+},
+{
+  // Set answers to [] for expert query
+  assign('n_answers', '[]')
+})
+
+
+when('n_answers?size==0',{
+  //# Execute vector query
+  n_vector_query_answer, agt_test_query_vector_1?userInput={{userInput}}&folderIds={{kbSpaceId!}}&knowledgeIds={{kbSpaceFileId}}
+  // Set answers for vector query
+  assign('n_answers', '{{n_vector_query_answer}}')
+
+
+  // Check vector query answer
+  when('n_answers?size==0',{
+	  //# Execute document query
+	  n_documen_query_answer,agt_test_query_document_2?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}
+	  // Set answers for document query
+	  assign('n_answers', '{{n_documen_query_answer}}')
+  })
+
+})
+"""
+
+
+// 定义异步结果收集器
+assign('async_list', '[]')
+
+// 设置问题集合
+assign("kb_list_data", '[]')
+append("kb_list_data", "{{userInput}}")
+
+
+// 异步查询
+foreach('n_question', 'kb_list_data', {
+  // 获取当前用户输入
+  assign('question', '{{n_question.item}}')
+
+  when('fn.hasValue(kbData)',{
+    //# Execute query from expert knowledge base
+    n_expert_query_answer, agt_test_query_expert_0?userInput={{userInput}}&kbData={{kbData}}&async=true
+    act_func?script="async_list.add(n_expert_query_answer)"
+  })
+
+  when('fn.hasValue(kbSpaceFileId)',{
+    // 向量查询
+    n_vector_query_answer, agt_test_query_vector_1?userInput={{userInput}}&folderIds={{kbSpaceId!}}&knowledgeIds={{kbSpaceFileId}}&async=true
+    act_func?script="async_list.add(n_vector_query_answer)"
+
+    // 文档查询
+    n_document_query_answer,agt_test_query_document_2?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&async=true
+    act_func?script="async_list.add(n_document_query_answer)"
+
+  })
+})
+
+// 定义一个空 list
+assign('answer_summary_list', '[]')
+
+// 对查询结果进行循环处理并分类
+foreach('n_item', 'async_list', {
+  // 获取当前循环项的数据
+  assign('async_summary', '{{n_item.item}}')
+  // 当前异步结果
+  assign('answer_summary', '{{async_summary.value}}')
+  act_func?script='''
+    answer_summary.each { item ->
+      answer_summary_list.add(item)
+    }
+  '''
+  when('seek_mode=="快速模式" && answer_summary_list?size>0',{
+    // 快速模式
+    act_flow.go?plan=break
+  })
+
+})
+
+// 并发查询最终结果
+assign('n_answers', '{{answer_summary_list}}')
+
+// Extract answers from information blocks
+// n_finally_result,tpl_extract_answer,psr_json
+
+
+// Finally answer
+assign('finally_answer', '{{n_answers}}')
+
+
+// Extract answers from information blocks
+define('tpl_extract_answer', '''
+- Role: 你是一位“答案精炼师”。  
+- Goals：根据“用户提问”与“信息列表”，一次性提取“完整、准确、无需额外信息”的答案,绝不引入外部知识
+
+- Constrains:（必须严格遵守）：  
+ 1.禁止推理、禁止外部知识、禁止解释。
+ 2.禁止出现“根据您提供的信息”“可能”“大概”等模糊表述。
+ 3.答案须与信息列表字面意思同义且仅含列表内事实。
+
+- Workflow:
+ 1.先逐字阅读用户提供的“问题”与“信息列表”。
+ 2.从列表中直接摘取或组合相关事实，形成一条“完整、准确、无需额外信息”的终极答案。
+ 3.把终极答案及所引用的页码和原文按【OutputFormat - 信息列表不为空】 的JSON格式返回，不做任何解释
+ 4.如果引用的页码存在多个，需要过滤去除重复
+
+
+- OutputFormat 
+ - 信息列表为空
+  {  
+    "answer": "信息不足，无法给出答案",
+    "source":[]
+  }
+
+ - 信息列表不为空
+  {
+    "answer": "提炼的完整、准确的最终答案"  
+    "source":[
+      {
+        "page":"页码",
+        "content":"页码全部内容",
+      },
+      {......}
+    ]
+  }  
+
+
+
+# 当前问题:
+{{userInput}}
+
+# 信息列表:
+{{n_answers}}
+
+''')

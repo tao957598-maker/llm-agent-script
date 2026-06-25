@@ -1,0 +1,327 @@
+/*
+{
+	"title":"agt_okp_risk_analysis",
+	"parameter":[
+		{
+			"name":"customerProfile",
+			"label":"customerProfile",
+			"required":true,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"companySearch",
+			"label":"companySearch",
+			"required":false,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"transactionReport",
+			"label":"transactionReport",
+			"required":false,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"nameScreeningReport",
+			"label":"nameScreeningReport",
+			"required":false,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"gapAnalysisReport",
+			"label":"gapAnalysisReport",
+			"required":false,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"eddFormJson",
+			"label":"eddFormJson",
+			"required":false,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		}
+	],
+	"tag":"all",
+	"discoverable":true,
+	"displayOrder":0,
+	"version":76
+}
+*/
+assign("n_customer_profile", '{{customerProfile}}')
+assign("n_company_search", '{{companySearch}}')
+assign("n_transaction_report", '{{transactionReport}}')
+assign("n_name_screening_report", '{{nameScreeningReport}}')
+assign("n_gap_analysis_report", '{{gapAnalysisReport}}')
+assign("n_edd_form_json", '{{eddFormJson}}')
+
+
+log('n_customer_profile=={{n_customer_profile}}')
+log('n_company_search=={{n_company_search}}')
+log('n_transaction_report=={{n_transaction_report}}')
+log('n_name_screening_report=={{n_name_screening_report}}')
+log('n_gap_analysis_report=={{n_gap_analysis_report}}')
+log('n_edd_form_json=={{n_edd_form_json}}')
+assign("n_kb_argus_result", '{}')
+
+// Get case id from n_customer_profile
+assign('n_case_id', '{{fn.str(n_customer_profile,"caseId")}}')
+log('n_case_id=={{n_case_id}}')
+
+// ----- Step 1: update status - > Rish Analysis started ----- 
+n_status_result,act_api.doExecute?name="okp_update_case_status"&params='{"caseId":"{{n_case_id}}","status":"CUSTOMER_RISK_ANALYSING"}'
+// ----- Step 2: Get risk rule ----- 
+n_kb_result,agt_argus_kb_batch_qa.all
+
+// n_kb_result log 
+log("n_kb_result=={{n_kb_result}}")
+
+n_kb_argus_result,act_func?script='''
+    def reportJson = n_kb_result
+    // 1. 确保 reportJson 存在
+    if(reportJson == null){
+        return [:]
+    }
+    return reportJson
+'''
+log('n_kb_api_result={{n_kb_argus_result}}')
+
+
+// ----- Step 3: LLM Rish Analysis ----- 
+define('tpl_agt_risk_detail','''
+# ROLE 
+You are an expert AML/CFT risk analyst specializing in Hong Kong Monetary Authority (HKMA) regulatory requirements, including AML/CFT Ordinance and HKMA Supervisory Policy Manual (SPM AML/CFT).
+
+# TASK
+Your task is to assess the AML/CFT risk level (HIGH, MEDIUM, LOW) of a customer based on the provided structured data. You must apply a risk-based approach aligned with HKMA expectations, FATF guidelines, and internal AML policy rules.
+
+#  INPUT DATA
+
+Customer Profile: {{n_customer_profile}}
+Company Data: {{n_company_search}}
+Transaction Report Data: {{n_transaction_report}}
+Name Screening Data: {{nameScreeningReport}}
+Gap Analysis: {{n_gap_analysis_report}}
+Edd Form Data: {{eddFormJson}}
+Risk Rule From Knowledge Search Result: {{n_kb_argus_result}}
+
+
+# RISK ASSESSMENT REQUIREMENTS
+
+You must evaluate risk based on (but not limited to) the following HKMA-relevant factors:
+
+1. Customer Risk
+   - PEP status
+   - Adverse news / negative media
+   - Sanctions / watchlist hits
+   - Customer occupation / nature
+
+2. Geographic Risk
+   - Exposure to high-risk jurisdictions (FATF, HKMA, internal list)
+   - Cross-border transaction patterns
+
+3. Product / Service Risk
+   - Complexity of financial products used
+   - Use of high-risk channels (non-face-to-face onboarding)
+
+4. Entity / Structural Risk
+   - Complex ownership layers
+   - Offshore structures
+   - Ultimate Beneficial Owner (UBO) transparency
+
+5. Transaction Risk
+   - Unusual transaction patterns
+   - Large cash deposits
+   - Sudden spikes in volume
+   - Inconsistency with business profile
+
+6. Compliance / Documentation Risk
+   - Missing or incomplete KYC / EDD information
+   - Gap analysis findings
+   - Unresolved red flags
+
+7. Industry Risk
+   - High-risk sectors (e.g. financial services, crypto, gambling)
+
+8. Internal Risk Rules
+   - Apply provided Risk Rule where applicable
+
+# RISK RATING LOGIC
+
+- HIGH: Multiple strong risk indicators OR any critical trigger (e.g. adverse news + high-risk country + unexplained transactions)
+- MEDIUM: Some risk indicators but not severe or partially mitigated
+- LOW: Minimal or no identifiable risk indicators
+
+You MUST:
+- Provide clear, evidence-based reasoning
+- Reference specific data points
+- Aggregate multiple risk signals
+- Align with HKMA and FATF risk-based approach
+
+# OUTPUT FORMAT
+Return ONLY valid JSON in the following structure:
+{
+  "riskRatingData": {
+    "caseId": "{{n_case_id}}",
+    "riskRating": {
+      "value": "HIGH | MEDIUM | LOW",
+      "aiRationale": "...",
+      "knowledgeBaseUsed": "...",
+      "dataSource": "..."
+    },
+    "previousRiskRating": {
+      "value": "...",
+      "aiRationale": "...",
+      "knowledgeBaseUsed": "...",
+      "dataSource": "..."
+    },
+    "rationale": {
+      "value": "...",
+      "aiRationale": "...",
+      "knowledgeBaseUsed": "...",
+      "dataSource": "..."
+    },
+    "riskFactors": {
+      "value": "...",
+      "aiRationale": "...",
+      "knowledgeBaseUsed": "...",
+      "dataSource": "..."
+    },
+    "specialRiskCode": {
+      "value": "...",
+      "aiRationale": "...",
+      "knowledgeBaseUsed": "...",
+      "dataSource": "..."
+    },
+    "effectiveDate": {
+      "value": "YYYY-MM-DD",
+      "aiRationale": "...",
+      "knowledgeBaseUsed": null,
+      "dataSource": "System Date"
+    }
+  }
+}
+
+# OUTPUT RULES
+
+- DO NOT include explanations outside JSON
+- DO NOT hallucinate data; only use provided inputs
+- If data is missing, explicitly mention it as a risk factor
+- Keep reasoning professional, regulatory-aligned, and concise
+- Use structured bullet-style reasoning inside text fields where helpful
+
+# IMPORTANT
+Return JSON only.
+All keys are fixed.
+All fields must contain:
+- value
+- aiRationale
+- knowledgeBaseUsed
+- dataSource
+
+# FIELD DEFINITIONS
+1. value
+- The final recommendation content.
+
+2. aiRationale
+- Explain why this value is chosen.
+- Do not mention "AI" or "model".
+
+3. knowledgeBaseUsed
+- List only policy / framework / knowledge-base references actually used.
+- If no KB or policy is used, return "".
+
+4. dataSource
+- Describe which upstream input(s) support this value.
+- Allowed examples:
+  Customer Data
+  Company Search Data
+  Transaction Report
+  Name Screening Report
+  Gap Analysis Report
+  EDD Form
+  Knowledge Search Result
+''')
+
+// 转换成 json
+tpl_agt_risk_detail,psr_json
+// AI risk result
+log('ai_risk_detail=={{tpl_agt_risk_detail}}')
+
+// ----- Step4: Call report pdf generator agent ----- 
+n_random_3,act_func?script='''
+def r = new Random().nextInt(900) + 100
+return r.toString()
+'''
+
+n_report_json,agt_report_pdf_generator_okp?reportName='RISK{{n_random_3}}'&reportJsonData='{{tpl_agt_risk_detail}}'&caseId='{{n_case_id}}'&userInput='样式设计要求简约清晰、视觉美观，优先使用表格呈现结构化信息'
+
+log('******n_pdf_url=={{n_pdf_url}}')
+n_update_url_json,act_func?script='''
+    def reportJson = n_report_json
+    // 1. 确保 reportJson 存在
+    if(reportJson == null){
+        return [:]
+    }
+    // 2. 确保 data 存在
+    if(reportJson.data == null){
+        reportJson.data = [:]
+    }
+    // 3. 只在有 URL 时才更新
+    if(n_pdf_url != null && n_pdf_url.toString().trim() != ""){
+        reportJson.data.put("riskReportWithRationaleUrl", n_pdf_url.n_url_with_rational)
+        reportJson.data.put("riskReportUrl", n_pdf_url.n_url_no_rational)
+    }
+    // 4. 返回最终结果
+    return reportJson
+'''
+
+
+// 组装参数
+n_result_data,act_func.run?script='''
+	def risk_rating_data = [:]
+	try{
+      risk_rating_data = tpl_agt_risk_detail.riskRatingData
+	}catch(Exception e){
+      risk_rating_data = [:]
+	}
+	
+	def risk_rating = [
+      'riskRatingData': risk_rating_data,
+      'reportUrl': fn.get(n_update_url_json,'riskReportUrl'),
+      'reportUrlWithRationale': fn.get(n_update_url_json,'riskReportWithRationaleUrl')
+  ]
+
+	def data = ['data':risk_rating]
+
+  return data
+'''
+
+log("final answer = {{n_result_data}}")
+// ----- Step5: Save  data ----- 
+n_risk_rating, act_api.doExecute?name='okp_agent_tool_save_risk_rating'&params='{{n_result_data}}'
+
+// ----- Step 6: Update status  Rish Analysis completed ----- 
+n_status_result,act_api.doExecute?name="okp_update_case_status"&params='{"caseId":"{{n_case_id}}","status":"CUSTOMER_RISK_ANALYSING"}'
+
+log("Risk Analysis Success")
+// ---------- Failure Handling ----------
+on_failure({
+    log('agt_okp_risk_analysis execution failed')
+    act_flow.go?plan=end
+})

@@ -1,0 +1,283 @@
+/*
+{
+	"title":"Mobile UI Generator",
+	"description":"Generate HTML code from a single sentence description",
+	"parameter":[
+		{
+			"name":"html_description",
+			"label":"HTML Description Text",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"version":2
+}
+*/
+// Assign user description
+assign("user_prompt", '{{html_description}}')
+// Call LLM to generate page
+n_html_result,tpl_app_spec_generator,psr_json_python
+// app_spec
+assign('app_spec', '{{n_html_result.app_spec}}')
+// page_res
+assign("page_res", '{{app_spec.pages}}')
+
+// Parse page_res data
+foreach('json_data', 'page_res', {
+  // json_item
+  assign('json_item', '{{json_data.item}}')
+  // html or json
+  when('{{json_item.fileType == "html"}}', {
+    // pageId
+    assign('pageId', '{{json_item.id}}')
+    // html_res
+    n_html,tpl_generate_html_code,psr_json_python
+    // html
+    assign('file_content', '{{n_html.html}}')
+  }, {
+    // Call FC Prompt to generate UI JSON
+    n_system_prompt,agt_fc_prompt
+    // User description
+    assign("user_json_prompt", '{{json_item.desc}}')
+    // Call LLM to generate UI JSON
+    n_json, tpl_generate_ui,psr_json
+    // json
+    assign('file_content', '{{n_json}}')
+  })
+  // file_path
+  assign("file_path", "Mobileapp/{{app_spec.name}}/{{json_item.file}}")
+  // save
+  act_func.write?filename="{{file_path}}"&data="{{file_content}}"&syncKbs=true
+
+  // save ui tool list
+  n_api_data,act_api.doExecute?name='ui_dev_save'&params='{"systemUI":"0","pageName":"{{json_item.title}}","pageCode":"{{json_item.file}}","pageType":200,"tag":"mobile","storeUri":"{{file_path}}","description":"","metaDataColumns":[]}'
+
+  // json save
+  when('{{json_item.fileType == "json"}}', {
+    // search ui
+    n_api_code,act_api.doExecute?name='ui_dev_page'&params='{"pageCode":"{{json_item.file}}"}'
+    // ui id
+    assign("ui_id", '{{n_api_code.data.id}}')
+    // save json form
+    n_api_code,act_api.doExecute?name='form_designer_save'&params='{"metaDataId": "{{ui_id}}", "formCreateJson": {{file_content}}}'
+  })
+})
+
+// result
+assign("result", "Mobileapp/{{app_spec.name}}")
+
+// project spec generator
+define('tpl_app_spec_generator', '''
+  - Role: 应用系统规划与文件结构定义专家
+  - Background: 用户通过一句自然语言描述一个简易应用项目。系统需要先规划整体应用结构，再生成具体页面或配置文件。
+  - Profile: 你擅长将模糊需求转化为清晰、稳定、可扩展的系统规范，为后续多类型文件生成提供统一依据。
+
+  - Goals:
+    根据用户描述，生成一个 app_spec 对象，用于后续页面（HTML）和结构定义文件（JSON）的生成。
+
+  - Core Principles:
+    1. app_spec 是整个项目的唯一系统规范来源
+    2. UI 风格、页面结构在此一次性定义
+    3. 每个文件必须显式声明 fileType，用于后续不同生成策略
+    4. 当前阶段支持两种文件类型：
+      - html：用户界面页面
+      - json：表单
+    5. 导航栏不生成任何图标，仅文字导航
+
+  - UI Rules（仅适用于 html 页面，必须给具体值）:
+    • primaryColor 固定为 #5192dc
+    • backgroundColor（如 #f7f8fa）
+    • nav.position 固定为 bottom
+    • nav.height 固定为 60px
+    • nav.fontSize（如 12px）
+    • nav.iconColor（如 #999）
+    • nav.activeColor 固定为 #5192dc
+
+  - Pages Rules:
+    • 整个项目严格控制生成最多 5 个核心文件（html + json 总和）
+    • 必须包含Home页（首页）
+    • 文件可包含 html 与 json 两种类型
+    • 推荐比例：
+      - html 页面：2-3 个（如首页、财富页、生活页、我的页）
+      - json 文件：1-2 个（表单）
+    • 页面顺序即为导航顺序（仅 html 页面参与导航）
+    • 针对银行App，建议包含以下功能点：
+      - 首页：账户概览、快捷功能、理财产品推荐、信用卡服务
+      - 财富页：理财产品、基金、定期存款、资产配置
+      - 生活页：缴费、充值、转账、生活服务
+      - 我的页：个人信息、银行卡管理、设置、客服
+    • 表单页面标题使用正常导航栏命名，如 Deposit，不使用 DepositForm 等格式
+    • 页面内容可包含更多不能跳转的功能点：如理财、股票、基金、信用卡等，但这些功能点不要放在导航栏中
+
+  - File Definition Rules:
+    每个文件必须包含：
+      - id：文件唯一标识
+      - fileType：文件类型（"html" 或 "json"）
+      - file：输出文件名（如 index.html / transfer.json）
+      - title：文件标题（英文,简短的一个单词,过长可使用缩写，例如：Home, Transfer, Deposit, Serve, Payment）
+      - desc：
+          • html：描述页面布局、功能与交互
+          • json：明确说明这是用于生成“表单”的定义文件
+
+  - JSON 文件说明规则（非常重要）:
+    • json 文件不代表 UI 页面
+    • json 文件用于后续生成表单、数据结构或配置
+    • desc 中必须明确说明用途，例如：
+      - "帮我生成一个银行系统的转账表单"
+      - "帮我生成一个银行系统的交易表单"
+
+  - OutputFormat:
+    仅输出 JSON，不要解释说明：
+    {
+      "app_spec": {
+        "name": "banking_app",
+        "ui": {
+          "primaryColor": "#5192dc",
+          "backgroundColor": "#f7f8fa",
+          "nav": {
+            "position": "bottom",
+            "height": "60px",
+            "fontSize": "12px",
+            "iconColor": "#999",
+            "activeColor": "#5192dc"
+          }
+        },
+        "pages": [
+          {
+            "id": "home",
+            "fileType": "html",
+            "file": "index.html",
+            "title": "Home",
+            "desc": "银行App首页，包含账户概览、快捷功能（转账、缴费、充值）、理财产品推荐、信用卡服务入口、最新公告等"
+          },
+          {
+            "id": "wealth",
+            "fileType": "html",
+            "file": "wealth.html",
+            "title": "Wealth",
+            "desc": "财富管理页面，包含理财产品、基金、定期存款、资产配置、智能投顾等功能"
+          },
+          {
+            "id": "life",
+            "fileType": "html",
+            "file": "life.html",
+            "title": "Life",
+            "desc": "生活服务页面，包含缴费、充值、转账、生活服务、优惠活动等功能"
+          },
+          {
+            "id": "transfer",
+            "fileType": "json",
+            "file": "transfer-form.json",
+            "title": "Transfer",
+            "desc": "帮我生成一个银行系统的转账表单"
+          },
+          {
+            "id": "mine",
+            "fileType": "html",
+            "file": "mine.html",
+            "title": "Mine",
+            "desc": "个人中心页面，包含个人信息、银行卡管理、设置、客服、消息通知等功能"
+          }
+        ]
+      }
+    }
+
+    # 用户描述：
+    {{user_prompt}}
+''')
+
+// html
+define('tpl_generate_html_code', '''
+  - Role: HTML 页面生成专家,生成英文页面
+  - Background: 当前页面是一个多页面 Web 应用的一部分，所有页面必须严格遵循统一的系统规范。
+  - Profile: 你严格按系统规范生成 HTML 页面，确保页面之间在布局、颜色、导航上完全一致。
+   
+  - Core Rule（最重要）:
+    你只能使用 app_spec 中的信息，不得自行假设 UI 或结构。
+
+  - Generation Logic:
+    1. 从 app_spec.pages 中找到 pageId 对应的页面
+    2. 使用该页面的 desc 生成主内容，确保内容丰富但简洁
+    3. 在页面内容中加入更多银行App功能点：理财、股票、基金、信用卡等，但这些功能点不要放在导航栏中
+    4. 使用 app_spec.ui 生成统一样式，主色固定为 #5192dc
+    5. 使用 app_spec.pages 生成统一底部导航
+    6. 当前页面对应的导航项必须高亮
+    7. 导航栏不生成任何图标
+    8. 为银行App生成必要的核心功能模块，避免冗余
+    9. 优先精简代码：使用短类名、减少空格换行、合并CSS规则
+    10. 严格控制字符数和行数，确保在限制范围内
+    11. 仅为首页添加特殊要求：最上面放置一个AI全局输入框
+
+  - Layout Rules（所有页面一致）:
+    • 去除 header（页面标题）
+    • main（页面内容，使用语义化标签）
+    • bottom navigation（固定）
+
+  - HTML Structure Guidelines:
+    • 使用语义化标签（header, main, section, article, footer）
+    • 清晰的层次结构和缩进
+    • 模块化组织内容，使用卡片式布局
+    • 一致的命名规范
+    • 简洁明了的CSS，主色固定为 #5192dc
+    • 响应式设计，适配不同屏幕尺寸
+    • 防止样式和文字溢出：使用适当的宽度、overflow 属性和文本截断
+    • 禁止横向滚动条：确保所有元素宽度不超过屏幕宽度，使用 box-sizing: border-box
+    • 功能丰富但结构清晰，确保页面精致美观
+    • 优化移动端显示效果，确保在小屏幕上正常显示
+    • 使用百分比宽度和弹性布局，避免固定宽度导致的溢出
+
+  - HTML Constraints:
+    • 原生 HTML + CSS
+    • 无外部库
+    • 样式简洁但完整（导航、按钮、表单、卡片）
+    • 类名简短且限制长度：除 app-nav 外，其他类名最多 3-5 个字符
+    • 字符数严格控制 ≤ 8500
+    • 行数严格控制 ≤ 320
+    • 输出原始 HTML，不要 JSON 转义
+    • 非导航栏链接必须是假链接（#），不可点击跳转
+    • 仅底部导航栏链接可正常跳转
+    • 最小化无意义的空格和换行，减少输出体积
+    • 保持主体结构完整的同时，优先精简代码
+
+  - Navigation Rules:
+    • 导航栏不生成任何图标，仅文字导航,固定类名为 app-nav
+    • 使用所有页面（包括 html 和 json 表单页面）生成导航
+    • 导航顺序：首页 → 功能页（或JSON表单页面） → 我的/设置页（我的/设置页必须在导航最后）
+    • nav 高度、颜色、字体严格使用 ui.nav
+    • active 页面使用 activeColor
+
+  - OutputFormat:
+    必须输出 JSON格式，不要解释说明：
+    {
+      "fileName": "index.html",
+      "html": "完整 HTML 代码"
+    }
+
+  # 系统规范：
+  {{app_spec}}
+
+  # 当前页面 ID：
+  {{pageId}}
+''')
+
+// json
+define('tpl_generate_ui', '''
+  {{n_system_prompt}}
+
+  用户需要根据以下描述生成适合移动端的 UI JSON 配置：
+  {{user_json_prompt}}
+
+  请根据提供的系统提示词，分析用户需求并生成符合规范的 UI JSON 配置。
+  
+  生成规则：
+  1. 去除移动端使用不到的配置项
+  2. 非特殊情况基本只需要每项输出一行input即可
+  3. 保持配置简洁明了，适合移动端设备
+  4. 确保配置与移动端Vant框架兼容
+  5. 生成英文页面
+  6. 直接输出表单项，去除card包裹，减少左右边距
+  7. 头部单独标题，不与表单项合并，并且给标题添加margin-bottom: 10px;text-align: left;font-size: 18px;
+  8. 表单项可以控制在10个左右，每项精简单词，尽量控制一个单词或者使用通俗的缩写
+  9. 表单不需要cancel按钮，只需要confirm或者submit按钮
+''')

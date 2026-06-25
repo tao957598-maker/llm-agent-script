@@ -1,0 +1,79 @@
+/*
+{
+	"title":"Test Step Generation and Run",
+	"description":"Generate test steps and scripts",
+	"parameter":[
+		{
+			"name":"system",
+			"label":"系统名称"
+		},
+		{
+			"name":"test_no",
+			"label":"测试编号"
+		},
+		{
+			"name":"steps",
+			"label":"测试步骤",
+			"type":"textarea"
+		},
+		{
+			"name":"expected_result",
+			"label":"Expect Result",
+			"type":"textarea"
+		},
+		{
+			"name":"dependent_test_no",
+			"label":"Dependent Test No"
+		},
+		{
+			"name":"explore_mode",
+			"label":"运行模式",
+			"args":[
+				{
+					"label":"开发模式",
+					"value":"开发模式"
+				},
+				{
+					"label":"生产模式",
+					"value":"生产模式"
+				}
+			],
+			"type":"select"
+		}
+	],
+	"uiEntrance":"?isFullScreen=true",
+	"displayOrder":40,
+	"version":2
+}
+*/
+// test_no执行逻辑
+
+// Use selenium
+assign('explore_mode', 'explore_mode')
+
+
+when('fn.hasValue(dependent_test_no)', {
+	// Send the dependent test number
+	n_rpa_test, act_rpa.send?command=dependOn&parameters='{{fn.json("test_no,dependent_test_no")}}'
+	
+	// Result of dependent
+  	on_failure({
+		act_flow.go?plan=end
+	})
+	
+	// Call agent to generate test steps after dependent
+	agt_test_steps_gen?system={{system}}&test_no={{test_no}}&steps={{steps}}&expected_result={{expected_result}}&force_update=false
+
+	// Call agent to run test steps after dependent
+	agt_test_steps_run?system={{system}}&test_no={{test_no}}&explore_mode={{explore_mode}}
+},
+{
+	
+	// Call agent to generate test steps
+	agt_test_steps_gen?system={{system}}&test_no={{test_no}}&steps={{steps}}&expected_result={{expected_result}}&force_update=false
+
+	// Call agent to run test steps
+	agt_test_steps_run?system={{system}}&test_no={{test_no}}&explore_mode={{explore_mode}}
+
+	
+})

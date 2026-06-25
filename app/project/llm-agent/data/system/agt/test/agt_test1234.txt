@@ -1,0 +1,51 @@
+
+/*
+{
+	"title": "Expense Approval Workflow",
+	"description": "Two-step approval process for expenses (PM -> Financial Director)",
+	"parameter": [],
+	"tag": "Finance,Approval",
+	"uiEntrance": "expense_submission_form",
+	"version": 2
+}
+*/
+
+// Expense submission form (reference only, actual UI is defined externally)
+n_expense_form, act_flow.page?name='expense_submission_form'
+
+// First approval: Project Manager
+approve('n_pm_approval', '''
+{
+  "assigneeConfig": {
+    "type": "ROLE",
+    "strategy": "ALL",
+    "targets": [
+      {
+        "targetType": "ROLE_NAME",
+        "value": "Project Manager"
+      }
+    ]
+  },
+  "formKey": "n_expense_form"
+}
+''')
+
+// Second approval: Financial Director
+approve('n_financial_director_approval', '''
+{
+  "assigneeConfig": {
+    "type": "ROLE",
+    "strategy": "ALL",
+    "targets": [
+      {
+        "targetType": "ROLE_NAME",
+        "value": "Financial Director"
+      }
+    ]
+  },
+  "formKey": "n_expense_form"
+}
+''')
+
+// Final result assignment
+assign("result", "Expense approval process completed")

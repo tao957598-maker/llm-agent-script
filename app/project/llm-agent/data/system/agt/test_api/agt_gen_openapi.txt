@@ -1,0 +1,336 @@
+/*
+{
+	"title":"Send API Data to SERVER",
+	"description":"Send api data to server",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"resultPlan":"n_result",
+	"life":100,
+	"version":1
+}
+*/
+//# Agent status
+assign("status", 'Agent is running')
+// file name
+n_file_name, act_kb.selectBy?sql='select  knowledge_name  from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}" '
+assign("file_name", '{{n_file_name[0].knowledge_name}}')
+//# 步骤执行
+// 使用知识库的分页读取功能，读取文档的每一页内容
+//## 步骤1：读取文档内容
+// 查询kb_okp_page_data表，按page字段升序排序，筛选system_name='OKP'的数据
+// assign('knowledgeNameItems', '["{{knowledgeNameItems}}"]')
+// n_data,act_kbs.searchFolderKnowledges?folder='{{folderName}}'&knowledgeNameItems='{{knowledgeNameItems}}'
+// n_kbSpaceFileId,act_func?script='n_data[0]'
+when('!fn.hasValue(Pages)', {
+  // 取全部数据
+  n_kb_data, act_kb.selectBy?sql='''select
+    *
+from
+    (SELECT
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS content
+FROM
+    kbs_doc_page_parse
+WHERE
+    documentId = "{{kbSpaceFileId}}"
+ORDER BY
+    CAST(page AS SIGNED) ASC) as a where a.content is not null'''
+
+},{
+    // 取分页数据
+ n_kb_data, act_kb.selectBy?sql='''select
+    *
+from
+    (SELECT
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS content
+FROM
+    kbs_doc_page_parse
+WHERE
+    documentId = "{{kbSpaceFileId}}" and page in ({{Pages}})
+ORDER BY
+    CAST(page AS SIGNED) ASC) as a where a.content is not null'''
+
+})
+assign("documentId", "{{kbSpaceFileId}}")
+
+// 获取查询结果
+assign("kb_list_data", '{{n_kb_data}}')
+
+// 从源文档中提取接口级别的显式HTTP响应码提示，供OpenAPI生成与校正使用
+n_response_code_hints,tpl_extract_response_code_hints,psr_json
+
+
+
+//$ 返回拆分结果
+n_result_raw,tpl_page_summary,psr_json
+n_result,act_func?js='''
+(function() {
+    let openApiDoc = {{n_result_raw}};
+    let responseCodeHints = {{n_response_code_hints}};
+
+    if (typeof openApiDoc === 'string') {
+        openApiDoc = JSON.parse(openApiDoc);
+    }
+    if (typeof responseCodeHints === 'string') {
+        responseCodeHints = JSON.parse(responseCodeHints);
+    }
+
+    const apiHints = (responseCodeHints && responseCodeHints.api_hints) || [];
+    const globalExplicitStatusCodes = ((responseCodeHints && responseCodeHints.global_explicit_status_codes) || []).map(code => String(code)).filter(code => /^[1-5][0-9]{2}$/.test(code));
+    const globalResponseBodyStatusCodes = ((responseCodeHints && responseCodeHints.global_response_body_status_codes) || []).map(code => String(code)).filter(code => /^[1-5][0-9]{2}$/.test(code));
+    const hasGlobalResponseBodyHints = Object.prototype.hasOwnProperty.call(responseCodeHints || {}, 'global_response_body_status_codes');
+
+    const hintMap = new Map((apiHints || []).map(item => [
+        String(item.method || '').toUpperCase() + ' ' + String(item.path || ''),
+        {
+            explicitCodes: (item.explicit_status_codes || []).map(code => String(code)).filter(code => /^[1-5][0-9]{2}$/.test(code)),
+            responseBodyCodes: (item.response_body_status_codes || []).map(code => String(code)).filter(code => /^[1-5][0-9]{2}$/.test(code)),
+            hasResponseBodyHints: Object.prototype.hasOwnProperty.call(item || {}, 'response_body_status_codes')
+        }
+    ]));
+
+    function sanitizeResponseByDocumentedBody(code, response, responseBodyCodes, hasResponseBodyHints) {
+        if (!response || typeof response !== 'object') {
+            return response || { description: 'Documented HTTP ' + code + ' response' };
+        }
+        const statusCode = Number(code);
+        const hasDocumentedBody = responseBodyCodes.includes(String(code));
+        const description = String(response.description || '');
+        const looksAutoDocumented = description === ('Documented HTTP ' + code + ' response');
+        if ((hasResponseBodyHints && !hasDocumentedBody && statusCode >= 300) || (looksAutoDocumented && statusCode >= 300 && !hasDocumentedBody)) {
+            return {
+                description: response.description || ('Documented HTTP ' + code + ' response')
+            };
+        }
+        return response;
+    }
+
+    Object.entries(openApiDoc.paths || {}).forEach(([path, methods]) => {
+        Object.entries(methods || {}).forEach(([method, operation]) => {
+            const key = String(method || '').toUpperCase() + ' ' + path;
+            const apiHint = hintMap.get(key) || {};
+            const explicitCodes = apiHint.explicitCodes || [];
+            const allowedCodes = explicitCodes.length > 0 ? explicitCodes : globalExplicitStatusCodes;
+            if (allowedCodes.length === 0 || !operation || typeof operation !== 'object') {
+                return;
+            }
+            const responseBodyCodes = explicitCodes.length > 0 ? (apiHint.responseBodyCodes || []) : globalResponseBodyStatusCodes;
+            const hasResponseBodyHints = explicitCodes.length > 0 ? Boolean(apiHint.hasResponseBodyHints) : hasGlobalResponseBodyHints;
+
+            const currentResponses = operation.responses || {};
+            const nextResponses = {};
+            allowedCodes.forEach(code => {
+                if (currentResponses[code] !== undefined) {
+                    nextResponses[code] = sanitizeResponseByDocumentedBody(code, currentResponses[code], responseBodyCodes, hasResponseBodyHints);
+                    return;
+                }
+
+                nextResponses[code] = {
+                    description: 'Documented HTTP ' + code + ' response'
+                };
+            });
+
+            operation.responses = nextResponses;
+        });
+    });
+
+    return JSON.stringify(openApiDoc);
+})();
+'''
+
+
+define('tpl_page_summary', '''
+
+- Role: API架构师与OpenAPI规范专家
+- Background: 用户需要将各类API文档（如Markdown描述、接口说明、代码注释、Swagger 2.0旧版文档等）转换为符合OpenAPI 3.1.0标准的JSON格式规范，以便用于API文档托管、代码生成、自动化测试等场景。
+- Profile: 你是一位深耕RESTful API设计与标准化领域的资深架构师，精通OpenAPI Specification 3.1.0的完整语义体系，包括JSON Schema 2020-12的集成、webhooks支持、Path Item的$ref扩展等特性。你擅长从非结构化或半结构化文档中精准提取API元数据，构建严谨、可复用、可扩展的API规范。
+- Skills: 
+  - 深度掌握OpenAPI 3.1.0规范的全部对象结构与字段约束
+  - 精通JSON Schema 2020-12验证与类型系统
+  - 具备从自然语言、代码片段、旧版Swagger文档中逆向工程API契约的能力
+  - 熟练运用语义版本控制、组件复用（components）、安全方案定义等高级特性
+- Goals:
+  1. 解析用户提供的任意格式API文档，识别所有端点、操作、参数、请求体、响应结构
+  2. 构建符合OpenAPI 3.1.0规范的完整JSON文档，包含openapi字段、info、servers、paths、components等必需模块
+  3. 确保所有数据类型、格式、约束条件准确映射至JSON Schema 2020-12标准
+  4. 提取并规范描述认证机制、错误响应、分页、过滤等通用模式
+  5. 输出可直接通过Swagger UI、Redoc等工具渲染的标准化文档
+- Constrains:
+  - 必须严格遵循OpenAPI 3.1.0规范，openapi字段值固定为"3.1.0"
+  - 所有JSON输出必须为合法JSON格式，无注释、无尾随逗号
+  - 优先使用components实现模式复用，避免重复定义
+  - 对于文档中未明确的信息，使用合理的默认值或占位符，并标注待确认
+  - 不假设任何特定编程语言或框架，保持规范的通用性
+  - 对HTTP响应码实行“显式文档优先”原则：如果源文档对某个接口明确列出了响应码/状态码/返回码，则OpenAPI responses只能保留这些已声明响应码，不能补充任何其他响应码
+  - 若接口自身未单独列出响应码，但文档存在全局响应码表/统一响应码说明，则该全局响应码表可作为该接口的默认响应码集合
+  - 当某个响应码只有状态码说明、没有明确响应体结构或示例时，只生成该状态码的description，不要复制其他状态码的schema/content/examples
+  - 禁止把200成功响应的schema、examples、message、data复制到401/500等错误响应下
+  - 禁止根据“必填参数缺失”“常见REST约定”“认证失败常识”“业务经验”自动推断并新增400/401/403/404/422/500等HTTP响应码；只有源文档明确写出时才能生成
+  - 必须区分HTTP状态码与响应体中的业务字段code；响应JSON里的"code":200、"code":10000这类字段不能当作HTTP响应码来源
+  - 如果文档提供了“响应参数（成功）”“响应参数（失败）”“返回示例”“错误示例”等JSON响应体示例，但没有把这些示例明确绑定到不同HTTP状态码，则必须保留这些示例，且应把它们放入实际具有响应体定义的主响应码下作为多个 examples；禁止因为示例中的业务 code=400/10000 就擅自生成 HTTP 400/10000
+  - 如果同一接口文档给出了多个失败JSON示例，必须尽量全部保留为独立 examples，不能只保留成功示例而遗漏失败示例
+  - 如果文档给出了“请求参数样例”“请求示例”“Form Data 示例”“Body 示例”“curl 示例”“入参示例”或字段级示例值，必须尽量提取到 requestBody.content.*.example / examples 或 parameter.example 中；不要丢失文档里已经明确给出的真实示例值
+  - 对表单请求（application/x-www-form-urlencoded、multipart/form-data）尤其要保留字段示例值；若文档样例写明 username=test1126、password=123456，生成 OpenAPI 时不能改写成其他占位值
+  - 对表单请求的样例，优先使用结构化对象形式保存（如 `{"username":"test1126","password":"123456"}`），而不是仅保存为 `username=test1126&password=123456` 这样的编码字符串；并尽量把值同步到对应字段的 schema.properties.*.example
+  - 如果失败示例文本或示例名明确指向某个字段或原因（如 password_null_error、missing password、用户名为空、token expired），该失败示例只能绑定到对应字段/原因，不能泛化到其他无关字段
+  - 如果文档没有给出某个字段的失败示例，就不要把另一个字段的失败 message/code 强行套用到它身上；宁可少绑定，也不要错绑定
+  - 若源文档没有显式列出某接口的HTTP响应码，则只允许保留文档明确展示或明确描述到的响应码；宁可少生成，也不能臆造额外响应码
+- OutputFormat: 标准JSON格式，可选附带结构说明与验证建议
+- Workflow:
+  1. 文档解析与结构识别：分析用户输入，识别API的基本信息（标题、版本、描述、服务器地址）、所有端点路径及其HTTP方法、认证方式
+  2. 组件提取与模式构建：将重复出现的参数结构、请求体、响应体、错误模型抽象至components.schemas，建立可复用的安全方案、参数模板
+  3. 响应码提取与校验：优先识别源文档中以状态码表、响应码说明、错误码列表、HTTP xxx描述等形式明确写出的响应码，并将其作为当前接口responses的唯一合法来源
+  4. 同时提取成功/失败响应示例：如果文档给出了JSON响应样例、成功示例、失败示例、错误示例或多个返回样例，需将这些样例纳入对应 response 的 examples；若文档未把失败样例明确绑定到某个HTTP状态码，则将其挂到主响应码下作为不同 example，而不是凭空拆成新的HTTP响应码
+  4.1 同时提取请求样例：如果文档给出了请求参数样例、请求体样例、Form Data 示例、curl 命令、字段示例值或其他明确入参示例，必须把这些值写入 requestBody.content 对应 media type 的 example/examples，或写入 parameter.example；已明确给出的值优先级高于模型自拟值
+  4.1.1 对 `application/x-www-form-urlencoded`、`multipart/form-data` 以及其他键值对形式的请求样例，优先输出为对象 example，并尽量回填到 schema.properties 对应字段的 example，方便下游直接按字段消费
+  4.2 提取失败示例与字段/原因的绑定关系：若失败示例名、说明、message 或上下文明确表明是 password 缺失、username 为空、token 失效等，只能将该示例绑定到对应字段/原因，不可扩散到其他字段场景
+  5. 若接口自身未写明响应码，则继续识别文档级统一响应码表；若识别到全局响应码表，可将其作为未单独声明接口的默认responses范围
+  6. 路径与操作组装：为每个端点构建Path Item Object，包含完整的Operation对象（summary、description、tags、parameters、requestBody、responses），确保operationId唯一且语义清晰；如果文档已明确列出响应码，responses不得出现列表之外的任何状态码；如果文档已明确列出请求示例值，requestBody/parameters 中也必须尽量保留这些示例值
+  7. 完整规范生成与验证：整合所有模块生成根对象，验证必填字段完整性，检查$ref引用的有效性，输出格式化JSON；特别检查每个接口的responses是否严格受限于文档中已声明的响应码，并检查成功/失败样例没有遗漏
+  8. 输出前自检：
+     - 请求参数样例里若文档已明确给出 password=123456、username=test1126 等值，OpenAPI 中不得丢失或擅自改写成 validPassword123、test_password 等自造值
+     - 若失败示例只明确指向 password，则不能把该 message/code 绑定到 missing username 等场景
+     - 若文档明确给出多个请求/响应示例，不能只保留其中一个
+
+# 输入数据
+{{kb_list_data}}
+# 从源文档提取到的显式响应码提示
+{{n_response_code_hints}}
+''')
+
+define('tpl_extract_response_code_hints', '''
+你是一个API文档响应码提取助手。
+
+你的任务：从输入文档中提取“明确写出的 HTTP 响应码”，输出接口级响应码和文档级全局响应码表。
+
+输入说明：
+1. 输入可能是 JSON、Markdown、HTML、纯文本、分页数组，或者这些格式的组合。
+2. 如果输入是 JSON 数组，数组中的每个元素通常形如：
+   {
+     "page": 1,
+     "content": "这里才是真正文档内容"
+   }
+3. 如果存在 `content` 字段，必须重点读取 `content` 字段；如果不存在，则直接理解原始文本内容。
+4. 你的目标是理解“文档语义”，而不是依赖某一种固定排版格式。
+
+严格规则：
+1. 只提取“明确写出”的 HTTP 状态码，例如：
+   - 响应码表 / 状态码表 / 返回码表
+   - 文本里明确写出的 HTTP 200 / 401 / 500
+   - 接口小节里明确列出的状态码说明
+   - 表格、列表、段落、行内描述、括号说明、HTML 表格或其他清晰表达
+2. 严禁把响应体里的业务字段 `code` 当成 HTTP 状态码。
+   - 例如 JSON 里 `"code": 200`、`"code": 10000` 都不是 HTTP 状态码来源。
+3. 如果某个接口自己的小节里明确列出了响应码，把它放到 `api_hints`。
+4. 如果文档存在统一的全局响应码表/公共响应码说明，把它放到 `global_explicit_status_codes`。
+5. 如果接口级和全局响应码表都存在，可以同时输出。
+6. 如果文档没有明确写某接口的响应码，不要猜，不要补。
+7. 只保留 3 位 HTTP 状态码字符串，如 `"200"`、`"401"`、`"500"`。
+8. 如果文档中出现“全局响应码说明”，不论它是表格、列表、段落还是其他清晰结构，都必须识别为 `global_explicit_status_codes`，不能返回空。
+9. 同时判断每个 HTTP 状态码是否有“明确响应体结构/响应示例/字段说明”。只有文档把响应体内容明确绑定到该 HTTP 状态码时，才写入 `response_body_status_codes` 或 `global_response_body_status_codes`；单纯的状态码表、状态码含义、错误描述不算响应体结构。
+10. 如果某个错误码（如 401/500/403/404 等）只有状态码或含义说明，没有明确响应体结构/示例，后续 OpenAPI 中该响应只能保留 description，禁止复制 200 成功响应的 schema/content/examples。
+11. 如果某个接口小节没有单独列出 HTTP 状态码，但文档其他位置存在全局响应码说明，则：
+   - `api_hints` 可以为空
+   - 但 `global_explicit_status_codes` 绝不能为空
+12. 只有在全文确实完全找不到明确写出的 HTTP 状态码时，才允许两个数组都为空。
+13. “明确写出”指的是文档直接声明、列举、说明、归纳出来的响应码；不能靠接口语义、REST 常识、认证常识、参数是否必填等推断。
+
+输出必须是合法 JSON，且只能输出下面结构：
+{
+  "api_hints": [
+    {
+      "path": "/api/example",
+      "method": "POST",
+      "explicit_status_codes": ["200","401","500"],
+      "response_body_status_codes": ["200"]
+    }
+  ],
+  "global_explicit_status_codes": ["200","401","500"],
+  "global_response_body_status_codes": ["200"]
+}
+
+补充要求：
+- `method` 必须是大写。
+- `path` 必须是接口路径原文。
+- 没有内容时返回空数组。
+- 不要输出 Markdown，不要输出解释。
+- 输出前自检：
+  - 如果看到全局响应码说明，却输出了空的 `global_explicit_status_codes`，说明结果错误，必须重做。
+  - 如果把 JSON 响应体里的业务 `code` 当成 HTTP 状态码，说明结果错误，必须重做。
+  - 如果接口已明确声明响应码，却没有写入 `api_hints`，说明结果错误，必须重做。
+
+下面示例只是帮助你理解规则，不代表文档一定长这样。
+
+示例1：全局响应码说明
+输入片段：
+### 响应码
+| code | 含义 |
+|------|------|
+| 200 | 成功 |
+| 401 | token失效 |
+| 500 | 服务器内部错误 |
+
+正确输出：
+{
+  "api_hints": [],
+  "global_explicit_status_codes": ["200","401","500"],
+  "global_response_body_status_codes": []
+}
+
+示例2：接口内单独声明
+输入片段：
+### 用户登录
+- API 路径: /api/auth/login
+- 请求方法: POST
+#### 状态码说明
+| 状态码 | 说明 |
+| 200 | 成功 |
+| 401 | 认证失败 |
+
+正确输出：
+{
+  "api_hints": [
+    {
+      "path": "/api/auth/login",
+      "method": "POST",
+      "explicit_status_codes": ["200","401"],
+      "response_body_status_codes": []
+    }
+  ],
+  "global_explicit_status_codes": [],
+  "global_response_body_status_codes": []
+}
+
+# 输入文档
+{{kb_list_data}}
+''')

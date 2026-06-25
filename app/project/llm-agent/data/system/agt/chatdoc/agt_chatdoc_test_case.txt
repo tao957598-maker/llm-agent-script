@@ -1,0 +1,108 @@
+/*
+{
+	"title":"Test Case Generator",
+	"description":"Generate standardized test cases based on given requirements and test methods.",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"textarea"
+		}
+	],
+	"tag":"chatDoc",
+	"uiEntrance":"chatDoc",
+	"version":1
+}
+*/
+// 获取文件ID
+assign('documentId', '{{kbSpaceFileId}}')
+
+// 获取原始文件内容
+// n_source_content,agt_chatdoc_rag_file?documentId="{{documentId!}}"
+//# Read file...
+n_data,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,kb_spaces_folder_id,extension,store_uri,knowledge_name'&maxSize=1&where='{"id":"{{documentId}}"}'
+n_first_data,act_func?script='''
+                    return n_data[0]
+                '''
+// 2.通过文件类型，获取对应的api后缀
+agt_rag_parse_postfix?extension={{n_first_data.extension}}
+when("fn.hasValue(postfix)", {
+        // 3.获取不需要转换的文本
+        n_file_data,act_kbs.readSectionFile?kbSpaceFileId='{{documentId}}'&isSource=true
+        // 4.生成指定格式数据
+        n_result_data,act_func?script='''
+                                    def list = new ArrayList()
+                                    def map = new HashMap()
+                                    map.put("fileName", n_first_data.knowledge_name)
+                                    map.put("imagePath", null)
+                                    map.put("documentId", documentId)
+                                    map.put("page", 1)
+                                    map.put("content", n_file_data)
+                                    list.add(map)
+                                    return list
+                                '''
+        assign('last_result', '{{n_result_data}}')
+    },{
+        // 3.获取rag转换后的数据信息
+        n_file_data,act_kb.select?name='kbs_doc_page_parse'&maxSize=1000&where='{"documentId":"{{documentId}}"}'
+        assign('last_result', '{{n_file_data}}')
+    })
+
+assign('n_source_content', '{{last_result}}')
+
+agent('agt_rag_parse_postfix', {
+    when("extension=='txt'", {
+        assign('postfix', 'general')
+    })
+    when("extension=='text'", {
+        assign('postfix', 'general')
+    })
+    when("extension=='md'", {
+        assign('postfix', 'general')
+    })
+})
+
+
+n_parameter,act_func?script='''
+  def newArray = n_source_content.collect { item ->
+    [
+      page: item.page,
+      content: item.content
+    ]
+  }
+return newArray
+'''
+
+// 定义提示词
+assign('system_prompt','''
+    你是资深测试工程师，请按照以下规则生成测试案例：
+    1. 结合需求描述和源文档内容分析测试点
+    2. 自动选择最适合的测试方法生成案例
+    3. 测试数据应符合方法规范
+    4. 输出标准化格式
+    5. 案例应覆盖源文档中的关键业务逻辑
+
+注意: 根据`Customer's Question`的语言 输出对应语言内容
+''')
+
+//# Thinking...
+n_batch_score,tpl_test_case,psr_ref
+assign("result_data", '{{n_batch_score}}')
+
+// 定义输出模板 // 定义输出模板 n_parameter是知识库文件内容 {{"version": "1"('%{system_prompt}%', 'userInput', 'n_batch_score', '', 10)}} 第二个参数是以后每一轮需要传入的参数,第三个参数是以后每一轮需要拼接的答案,
+define('tpl_test_case', '''
+# Customer's Question：
+{{userInput}}
+
+# Source Document Summary:
+{{n_parameter}}
+
+
+
+{{fn.chatFlag('%{system_prompt}%', 'userInput', 'n_batch_score', '', 10)}}
+''')

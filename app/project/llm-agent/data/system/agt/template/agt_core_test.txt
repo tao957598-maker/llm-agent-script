@@ -1,0 +1,21 @@
+/*
+{
+	"title": "agent编程测试代码",
+	"description": "RQ+TestCase",
+	"parameter": "url=test url",
+	"llm_type": "deepseek-chat",
+	"life": "100",
+	"modified_by": "lht",
+	"modified_time": "2024-11-28",
+	"version": "1"
+}
+*/
+
+tpl_json_list
+// 定义chat
+define('tpl_json_list', '''
+直接返回json数据,不要解释
+	{
+		"data":"agt_core_test"
+	}
+''')

@@ -1,0 +1,121 @@
+/*{
+  "title": "执行部署",
+  "description": "读取部署脚本、检查 Docker 并执行部署",
+  "parameter": [
+    {
+      "name": "os",
+      "label": "操作系统",
+      "required": true
+    },
+    {
+      "name": "env",
+      "label": "目标环境",
+      "required": true
+    },
+    {
+      "name": "project_root",
+      "label": "项目根目录"
+    },
+    {
+      "name": "bash_path",
+      "label": "Git Bash路径"
+    },
+    {
+      "name": "ssh_host",
+      "label": "SSH主机"
+    },
+    {
+      "name": "ssh_port",
+      "label": "SSH端口"
+    },
+    {
+      "name": "deploy_target",
+      "label": "部署目标脚本"
+    },
+    {
+      "name": "server_id",
+      "label": "服务器ID"
+    }
+  ],
+  "resultPlan": "n_deploy_plan_result",
+  "discoverable": false,
+  "life": "100"
+}*/
+
+assign('n_log', '')
+
+assign('n_is_local', '{{fn.str(n_env) == "localhost"}}')
+
+// 如果有 clone 目录，deploy_target 指向项目目录下的 startup.sh
+when('fn.hasValue(n_project_root)', {
+  assign('n_final_deploy_target', '{{project_root}}/deploy/startup.sh')
+  assign('n_log', '{{n_log}}\n📦 使用项目内置部署脚本: startup.sh')
+}, {
+  assign('n_final_deploy_target', '{{deploy_target}}')
+  assign('n_log', '{{n_log}}\n📦 使用默认部署脚本')
+})
+
+// 读取部署脚本内容判断是否需要 Docker
+when('fn.bool(n_is_local)', {
+  // 本地读取部署脚本
+  when('n_os == "windows"', {
+    assign('n_read_script_cmd', 'type "{{n_final_deploy_target}}"')
+  }, {
+    assign('n_read_script_cmd', 'cat "{{n_final_deploy_target}}"')
+  })
+}, {
+  //# 远程读取部署脚本
+  when('n_os == "windows"', {
+    assign('n_read_script_cmd', '"\\"{{bash_path}}\\" -c \\"ssh -p{{ssh_port}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ssh_host}} cat {{n_final_deploy_target}}\\""')
+  }, {
+    assign('n_read_script_cmd', 'ssh -p{{ssh_port}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ssh_host}} cat {{n_final_deploy_target}}')
+  })
+})
+n_script_content, agt_cmd_executor.assistant?cmd={{n_read_script_cmd}}&cmd_executor_name="读取部署脚本"&server_id={{server_id}}
+
+//## 部署脚本内容预览
+//# 判断部署脚本是否包含 docker 命令
+assign('n_needs_docker', '{{fn.contains(fn.str(n_cmd_executor_result).toLowerCase(), "docker") || fn.contains(fn.str(n_cmd_executor_result).toLowerCase(), "compose")}}')
+when('fn.bool(n_needs_docker)', {
+  //## 检测到需要 Docker 环境，开始检查...
+  // 正在检查 Docker 环境
+  n_docker_check, agt_cmd_executor.assistant?cmd="docker --version"&cmd_executor_name="检查Docker版本"&server_id={{server_id}}
+  assign('n_docker_installed', '{{fn.contains(n_docker_check, "Docker version")}}')
+  when('!fn.bool(n_docker_installed)', {
+    // 正在安装 Docker
+    when('n_os == "windows"', {
+      n_docker_install, agt_cmd_executor.assistant?cmd="winget install --id Docker.DockerDesktop -e --source winget"&cmd_executor_name="安装Docker"&server_id={{server_id}}
+    }, {
+      assign('n_docker_install_cmd', 'curl -fsSL https://get.docker.com | sh && sudo systemctl start docker && sudo systemctl enable docker')
+      n_docker_install, agt_cmd_executor.assistant?cmd="{{n_docker_install_cmd}}"&cmd_executor_name="安装Docker"&server_id={{server_id}}
+    })
+    assign('n_log', '{{n_log}}\n✓ Docker 安装完成')
+  }, {
+    //## Docker 已就绪
+  })
+}, {
+  //## 脚本不需要 Docker，跳过检查
+})
+// 执行部署脚本
+when('fn.bool(n_is_local)', {
+  //## 正在本地执行部署脚本
+  when('n_os == "windows"', {
+    assign('n_deploy_cmd', '"\\"{{bash_path}}\\" -c \\"bash {{n_final_deploy_target}} 2>&1\\""')
+  }, {
+    assign('n_deploy_cmd', 'bash "{{n_final_deploy_target}}" 2>&1')
+  })
+}, {
+  //## 正在 SSH 远程部署到 {{env}}
+  when('n_os == "windows"', {
+    assign('n_deploy_cmd', '"\\"{{bash_path}}\\" -c \\"ssh -p{{ssh_port}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 root@{{ssh_host}} \\"bash {{n_final_deploy_target}} 2>&1\\"\\""')
+  }, {
+    assign('n_deploy_cmd', 'ssh -p{{ssh_port}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 root@{{ssh_host}} "bash {{n_final_deploy_target}} 2>&1"')
+  })
+})
+// 开始执行部署脚本
+n_deploy_result, agt_cmd_executor.assistant?cmd={{n_deploy_cmd}}&cmd_executor_name="执行部署脚本"&server_id={{server_id}}
+//## 部署执行结果
+assign('n_log', '{{n_log}}\n✓ 部署完成')
+assign('n_log', '✅ 打包部署全部完成\n\n{{n_log}}\n\n部署结果:\n{{n_deploy_result}}')
+// 返回成功
+assign("n_deploy_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_deploy_result}}","is_plan_break":"true"}')

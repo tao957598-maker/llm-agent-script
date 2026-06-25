@@ -1,0 +1,73 @@
+/*
+{
+	"title":"Data Driven Test",
+	"description":"Get data from kb and download py case",
+	"parameter":[
+		{
+			"name":"testNo",
+			"label":"API名称和数据"
+		},
+		{
+			"name":"test_step",
+			"label":"测试步骤",
+			"type":"textarea"
+		},
+		{
+			"name":"test_data",
+			"label":"测试数据"
+		},
+		{
+			"name":"system_name",
+			"label":"Save path for file upload"
+		},
+		{
+			"name":"spaceName",
+			"label":"spaceName"
+		}
+	],
+	"displayOrder":22,
+	"version":1
+}
+*/
+// Check if test_data is None
+when('!fn.hasValue(test_data)', {
+  // if test_data is None ,read mysql，testNo -> kb_test_data_scenario
+  n_envinfo, act_kb.select?name=kb_test_data_scenario&column='data, test_step, title, expected_result'&where='{"test_no":"{{testNo}}"}'  
+  
+  // give test data to rpa
+  n_test_data, act_func?script='''return n_envinfo[0]'''
+  
+  // test_step 
+  assign('test_step', '{{n_test_data["test_step"]}}')
+
+  // test_data 
+  n_data, act_func?script='''return n_test_data["data"]'''
+
+  // test_title
+  n_title, act_func?script='''return n_test_data["title"]'''
+
+  // test_expected_result
+  n_eResult, act_func?script='''return n_test_data["expected_result"]'''
+  assign('test_data', '{{n_data}}')
+
+
+  // send data from kb
+  n_rpa_test, act_rpa.send?command=dataDriven&parameters='{{fn.json("data,n_data,testNo,testNo,testStep,test_step,title,n_title,expected_result,n_eResult,systemName,system_name,spaceName,spaceName")}}'
+
+},
+{
+  // test_data test_data
+  assign('test_data', '{{test_data}}')
+  // test_step test_step
+  assign('test_step', '{{test_step}}')
+
+  // // send data from instance
+  n_rpa_test, act_rpa.send?command=dataDriven&parameters='{{fn.json("data,test_data,testNo,testNo,testStep,test_step,systemName,system_name,spaceName,spaceName")}}'
+})
+
+// test_data test_data test_data
+//assign('test_data', '{{test_data}}')
+//assign('test_step', '{{test_step}}')
+
+// send
+//n_rpa_test, act_rpa.send?command=dataDriven&parameters='{{fn.json("data,test_data,testNo,testNo,testStep,test_step,systemName,system_name,spaceName,spaceName")}}'

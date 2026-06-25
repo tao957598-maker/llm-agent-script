@@ -1,0 +1,91 @@
+/*{
+	"title":"Detect source type by segment",
+	"description":"Classify page segments as web/api and aggregate page buckets",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		}
+	],
+	"resultPlan":"web_pages,api_pages,segment_classified_data",
+	"version":1
+}*/
+assign("web_pages", "")
+assign("api_pages", "")
+assign("segment_classified_data", "[]")
+
+when('!fn.hasValue(pages)', {
+  n_kb_data, act_kb.selectBy?sql='''select
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS content
+from
+    kbs_doc_page_parse
+where
+    documentId = "{{kbSpaceFileId}}"
+order by CAST(page AS SIGNED) ASC'''
+},{
+  n_kb_data, act_kb.selectBy?sql='''select
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS content
+from
+    kbs_doc_page_parse
+where
+    documentId = "{{kbSpaceFileId}}" and page in ({{pages}})
+order by CAST(page AS SIGNED) ASC'''
+})
+
+act_func?script='''
+    def rows = n_kb_data
+    def webPages = new LinkedHashSet()
+    def apiPages = new LinkedHashSet()
+    def segRows = []
+    def asTxt = { v -> v == null ? "" : v.toString() }
+    def apiKw = ["openapi", "swagger", "operationid", "request body", "response schema", "endpoint", "authorization", "bearer", "status code", "get /", "post /", "put /", "delete /", "patch /", "curl", "application/json", "/v1/", "/v2/"]
+    def webKw = ["page", "button", "click", "navigate", "ui", "screen", "menu", "field", "tab", "upload", "download template", "dropdown", "popup"]
+
+    def splitSegments = { txt ->
+        def out = []
+        if (txt == null) return out
+        def s = txt.toString()
+        s.split(/\\n\\s*\\n+/).each { blk ->
+            def b = blk == null ? "" : blk.trim()
+            if (b.length() > 0) out.add(b)
+        }
+        if (out.size() == 0) out.add(s)
+        return out
+    }
+
+    rows.each { r ->
+        if (!(r instanceof Map)) return
+        def p = r.get("page")
+        if (p == null) return
+        def page = p.toString()
+        def segments = splitSegments(asTxt(r.get("content")))
+        int idx = 0
+        segments.each { seg ->
+            idx++
+            def t = seg.toLowerCase()
+            int a = 0
+            int w = 0
+            apiKw.each { k -> if (t.contains(k)) a++ }
+            webKw.each { k -> if (t.contains(k)) w++ }
+            def st = (a > w) ? "api" : "web"
+            if (st == "api") apiPages.add(page) else webPages.add(page)
+            segRows.add([page: page, segment_index: idx, source_type: st, score_api: a, score_web: w, content: seg])
+        }
+    }
+    fn.put("web_pages", new ArrayList(webPages).join(","))
+    fn.put("api_pages", new ArrayList(apiPages).join(","))
+    fn.put("segment_classified_data", segRows)
+'''

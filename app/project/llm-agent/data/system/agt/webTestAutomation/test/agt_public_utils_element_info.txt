@@ -1,0 +1,166 @@
+/*
+ {
+    "title": "Verify result",
+    "description": "Verify test result",
+    "parameter": [
+        {
+            "name":"current_step",
+            "label":"当前测试步骤",
+            "required": true
+        }
+    ]
+	 "resultPlan": ""
+ }
+*/
+
+
+// Init variable for action type
+assign('current_step','{{current_step}}')
+
+//# Collect page information
+n_collect_page, act_rpa.send?command=CollectPageInfo,act_func?name=StepTestInfo
+assign('collect_page','{{n_collect_page}}')
+
+
+// Analyse page elements and call agent to save it
+tpl_task_element_info, psr_json?filter=id&format='id_\\d+',\
+		vrf_flag?value='fn.when(fn.bool(sys_last_result, "hasDialog") || StepTestInfo.pageinfo_size==0, true, fn.hasValue(sys_last_result,"prefer,alternative,related"))',\
+		vrf_func?name=CheckElements,\
+		agt_save_explorer?columns='''
+			test_no, test_no, step, StepTestInfo.current_step, task_type, taskType,
+			element_info, StepTestInfo.simplepageinfo, related_element_info, tpl_task_element_info''',\
+		act_memory.canHint?hintCount=3
+
+
+
+// Save explorer
+agent('agt_save_explorer', {
+	// Save to kb_testcase_step_explorer
+	act_kb.merge?name=kb_testcase_step_explorer&columnValues='''
+			{{fn.json(columns)}}
+		'''&where='''
+			{{fn.json("test_no, test_no, step, StepTestInfo.current_step")}}
+		'''
+})
+
+// 结合需求分析页面元素
+define('tpl_task_element_info', '''
+	/*{
+		"llmType":""
+	}*/
+- Role: 测试自动化工程师
+- Background: 用户需要对局部测试步骤进行自动化测试，通过识别目标元素来完成测试任务。
+- Profile: 你是一位经验丰富的测试自动化工程师，熟悉软件测试流程，擅长使用各种测试工具和技术，能够准确地识别和匹配页面元素，对测试结果进行精确的分析和输出。
+- Skills: 你具备强大的编程能力，熟悉JSON数据结构和页面元素操作，能够快速定位和匹配元素，同时具备良好的逻辑思维和问题解决能力。
+- Goals:
+  1. 提取局部测试步骤中的目标元素。
+  2. 在完整测试步骤中定位局部测试步骤的上下文。
+  3. 匹配待测试页面中的元素。
+  4. 检查页面状态并生成相应的测试结果。
+- Constrains: 严格按照测试步骤和页面状态进行操作，确保测试结果的准确性和可靠性。
+- OtherInformation:
+  元素类型`type`说明:
+    - dynamic-select-item: 表示动态生成的可选择项（通常是下拉框选项或菜单项）。用于下拉框、单选/多选菜单的选项。
+    - dynamic-select: 表示动态生成的下拉选择框（<select> 元素）。用户需要从中选择一项的表单控件。
+    - dynamic-menu: 表示动态生成的菜单项或交互式元素（如链接、按钮、输入框等）。子类型：按钮（tag: "button"）：如提交按钮。输入框（tag: "input"）：如文本输入框。链接（tag: "link"）：如导航菜单项。
+    - div / container: 表示容器元素（通常是<div>），用于包裹其他子元素。用途：布局或分组页面内容。
+    - date: 表示日期选择器或日期显示字段。 用于日期输入或展示。
+    - textarea: 表示多行文本输入框（<textarea>）。用户输入长文本（如备注、描述）。
+    - input: 表示单行文本输入框（<input type="text">）。注意：部分输入框可能被归类为 dynamic-menu。
+    - text: 表示纯文本元素（静态文本或标签）。用于显示不可交互的文本（如标题、标签）。
+    - link: 表示超链接（<a> 元素）。用途：导航或跳转链接。
+  其他注意事项: 
+    - notInView 属性：若为 true，表示元素当前不可见（如被弹窗遮挡或滚动隐藏）。
+    - disabled 属性：表示元素是否禁用（不可交互）
+    - placeholder 属性：输入框的占位提示文本。
+  这些 type 主要用于描述元素的交互类型和功能，帮助自动化测试工具定位和操作元素。实际测试时需结合 tag、name 和上下文进一步匹配。
+- OutputFormat: 生成符合verifyResult_1或verifyResult_2结构的JSON格式结果。
+- Workflow:
+  1. 提取局部测试步骤中的目标元素。
+  2. 在完整测试步骤中定位局部测试步骤所在的步骤位置。
+  3. 根据上下文确定该步骤涉及的页面操作，如选择下拉框选项。
+  4. 在待测试的页面元素（JSON结构）中查找与目标元素名称或文本匹配的元素。
+  5. 将匹配到的元素按以下分类：
+     - prefer：完全匹配的有效元素。
+     - alternative：可能存在问题的元素，如命名类似但上下文不符。
+     - related：关联但不是主要目标的元素，如该选项所在的下拉框。
+  6. 检查页面状态：
+     - 判断是否存在弹窗（hasDialog），即是否有notInView=true的元素。
+     - 检查页面pageTitle：
+       - "新标签页"或"Browser is closed" → 返回verifyResult_1，无需匹配元素。
+       - 服务器错误 → 返回verifyResult_2，说明服务器未能正常启动。
+  7. 根据分类匹配的元素和页面状态，生成符合verifyResult_1或verifyResult_2结构的
+
+- example:
+  - 不同场景的JSON输出结果参考
+    情况1：当待待测试的页面元素为`[""]`,或者为`Browser is closed`,无需进行元素定位，回复：{"type":"verifyResult_1","result":{}}
+	情况2：有匹配的数据。回复：{{fn.task().result('{"prefer": [有效的元素], "alternative": [有问题的元素] ...}')}}
+	情况3：“待测试的页面元素”显示服务器错误，说明服务器未能正常启动。回复：{{fn.task(false).thought("服务器页面加载错误")}}
+  - JSON输出结果的结构为：
+    # JSON输出结果的结构为：
+	{
+		"type": "verifyResult_1或verifyResult_2",		// 可参考后面的不同场景的介绍，注意新标签页适应于情况1
+		"result":{
+			"prefer": [{"id":xxx,"name":"匹配的元素名","tag":"xxx","value":"xxx",remark:"可选的20字以内的备注"}...] 	// 请务必完整列出有效的元素。没有元素时，为空
+			"alternative": [{"id":xxx,"name":"匹配的元素名","tag":"xxx","value":"xxx",remark:"可选的20字以内的备注"}...]		// 有问题的元素
+			"related": [{"id":xxx,"name":"关联的元素","tag":"xxx",remark:"可选的20字以内的备注"}]			// 本次局部测试中涉及的关联元素，比如局部测试步骤："填写托管人的其他身份證"，如果页面有"托管人"元素，那么它可作为关联元素输出
+			"hasDialog": true/false		// 页面是否存在可见的弹窗（注：“可见”意味着弹窗元素不可以存在notInView=true的属性）
+		}
+	}
+	关于remark字段的说明：
+        - 用于有多个同名的元素时，加上有业务含义的辅助的remark进行区别。
+        - 用于表格字段时，备注表头和列
+        - 若元素属于下拉框选项: "remark":"select-item"
+
+# 本次局部测试步骤：
+{{current_step}}
+
+# 待测试的页面元素(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, children:[子元素信息]}...])： 
+{{collect_page}}
+
+''')
+
+// 校验元素
+func('CheckElements', '''
+import com.llm.agentcore.core.agent.FunctionUtil
+import java.util.Map
+public class CheckElements {
+	public static Object execute(Object sys_last_result, Map StepTestInfo, FunctionUtil fn) {
+		// 检查每个check_elements中的元素都是在elements中存在的 （注：check_elements中不是element的元素，无需检查）
+		def elements = fn.list(StepTestInfo.simplepageinfo)
+		def check_elements = fn.map(sys_last_result)
+		 
+		def allElementsExist = true
+		def resultMessages = new StringBuilder()
+		check_elements.each { entry ->
+			def key = entry.key
+			def list = entry.value
+			if (list instanceof List) {
+				list.each { element ->
+					if (!elementExistsInElements(element, elements)) {
+						resultMessages += "元素 ${element['name']}(ID: ${element['id']})不存在; "
+						allElementsExist = false
+					}
+				}
+			}
+		}
+		return fn.task(allElementsExist).result(resultMessages.toString()).build()
+	}
+	
+	def static boolean elementExistsInElements(element, elements) {
+		for (item in elements) {
+			if (!item || !(item instanceof Map)) continue // 跳过空元素
+			if (item['id'] == element['id']) {	// 放开name的检查： item['name'] == element['name']
+				return true
+			}
+			if (item['children'] instanceof List) {
+				// 递归检查 children
+				if (elementExistsInElements(element, item['children'])) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
+''')

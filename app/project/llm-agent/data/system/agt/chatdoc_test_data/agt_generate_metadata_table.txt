@@ -1,0 +1,63 @@
+/*
+{
+	"title":"Generation Metadata Table",
+	"description":"Generation Metadata Table",
+	"parameter":[
+		{
+			"name":"sourceData",
+			"label":"源数据",
+			"type":"textarea"
+		},
+		{
+			"name":"parameter",
+			"label":"来源参数"
+		},
+		{
+			"name":"stepsData",
+			"label":"测试数据",
+			"type":"textarea"
+		}
+	],
+	"life":1000,
+	"version":1
+}
+*/
+// 取参数
+assign('n_file_data', '{{sourceData}}')
+assign('parameter_item', '{{parameter}}')
+assign('steps_item', '{{stepsData}}')
+
+// 测试步骤数据
+when('!fn.hasValue(steps_item)', {
+	assign("steps_item", "{}")
+})
+
+when('fn.hasValue(n_file_data)',{
+  // 元数据agent
+  n_metadata_data,agt_metadata_information.test_gen_data?input="{{n_file_data}}"&other="生成表名称{{parameter_item.kb_name}}"
+  assign("n_metadata", "{{n_metadata_data}}")
+},{
+  assign("n_metadata", "")
+})
+
+// 元数据信息拼接
+n_metadata_item,act_func?script='''
+  def result = [:]      
+
+  result.table_name = parameter_item?.kb_name ?: ""
+  result.metadata = n_metadata ?: ""
+  result.data_source = parameter_item?.type ?: ""
+
+  result.system = steps_item?.system ?: "" 
+  result.application = steps_item?.application ?: ""
+  result.test_no = steps_item?.test_no ?: ""
+  result.steps = steps_item?.steps ?: "" 
+
+  return result
+'''
+
+// 保存元数据信息agent
+agt_create_table?metadata="{{n_metadata_item}}"
+
+// 输出元数据信息
+assign("generated_data", "{{n_metadata}}")

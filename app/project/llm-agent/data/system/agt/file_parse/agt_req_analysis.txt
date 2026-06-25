@@ -1,0 +1,120 @@
+/*
+{
+	"title":"Requirement Analysis",
+	"description":"Analyze and process requirements",
+	"parameter":[
+		{
+			"name":"file_page",
+			"label":"页码",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"document_id",
+			"label":"文档ID",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"analysis_content",
+			"label":"分析内容",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"last_analysis_content",
+			"label":"上一页内容",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		}
+	],
+	"tag":"file_parse",
+	"version":2
+}
+*/
+//# 获取文件
+assign("req_content","{{analysis_content}}")
+
+// 定义提示词
+define('tpl_gen_req_json', '''
+- Role: 智能需求文档结构分析助手
+- Background: 用户希望将每页需求文档（Markdown、HTML 或 Text）提取为结构化 JSON 数据，用于后续分析、筛选、生成 Features、Stories、Tasks 等。
+- Profile: 你擅长结构化信息识别与语义归类，能够识别章节划分，生成统一结构的元数据对象。
+- Skills:
+  • 格式识别：自动判定 Markdown / HTML / Text  
+  • 结构提取：识别标题、段落、表格、时序图（Mermaid）等  
+  • 页面分类：支持章节归属（section）与内容语义分类（type）双轨并行  
+  • 功能性判断：区分是否为具有实际需求信息的功能页  
+  • 内容提炼：提取页面中的关键词、描述与语义段，清洗格式并确保 JSON 合规
+ 
+- Goals:
+  提取以下结构化字段，用于判断页面内容有效性、后续聚合与拆解处理：
+  - page：原文档页码
+  - documentId：文档唯一编号
+  - title：该页标题或首段关键句
+    - 若页面为空、或无文字，不能提取内容，则自动生成
+    - 若明确识别有多标题及其内容，可展示多个，使用逗号分隔（保留原文）
+  - section：文档结构章节归属（仅选一个）  
+    ["Introduction", "Purpose", "Scope", "Requirement", "Process", "Prototype", "Definition", "Limitation", "Other"]
+  - type：页面语义分类（支持多标签数组）  
+    ["requirement", "process", "prototype", "definition", "regulation", "other"]
+  - isFunctional：是否为功能性页面（"true" / "false"，字符串输出）
+    - "true" 示例：页面中包含详细业务规则、操作流程、UI描述、交互图等  
+    - "false" 示例：仅为目录标题、纯说明性内容、术语解释、引用标准、空白页
+  - description：页面内容中文摘要（一段话），聚焦主体、行为、条件与结果，语义完整、简洁，用于与 title 联合向量化
+  - importantContent：重要内容的结构化提炼（非全文复制）：
+    - 保留条款、列表、层级等逻辑结构，用简洁中文概括（如“高管违规扣X分，其他人员减半”）
+    - 若内容在本页末尾被截断，结尾标注“（未完）”
+    - Mermaid/代码等保留原格式并 JSON 转义；普通文本不保留格式标记
+  - keywords：本页中出现的核心术语（原文数组，5–10项），优先选择具有区分度的业务或功能关键词
+  - notes：页面格式与附加结构特征，例如：  
+    - "Markdown, includes Mermaid diagram"  
+    - "HTML, table + button group UI"
+
+- Constraints:
+  1. 仅基于输入内容生成，严禁虚构或推测信息
+  2. 所有字段必须存在，无法提取则除title字段外,其他设为空字符串""
+  3. 若页面为空、为目录/标
+
+- OutputFormat: 
+1、先输出是否存在语句不完整、内容缺失的情况，如有，上文的哪一部分内容属于本页被截断的内容
+2、仅输出markdow JSON 格式对象，结构一致
+
+
+- 输出JSON 示例:
+```json
+  {
+    "page": 6,
+    "documentId": "249384817481760768",
+    "title": "Customer Due Diligence Requirements",
+    "section": "Requirement",
+    "type": ["requirement", "regulation"],
+    "isFunctional": "true",
+    "description": "Defines functional obligations under AMLO law, covering KYC, identity screening, and CDD enforcement.",
+    "importantContent": "All DNFBPs and TCSPs must establish due diligence processes under Cap.615, including identity verification, ongoing monitoring and AML measures...",
+    "keywords": ["CDD", "KYC", "AMLO", "Cap.615", "DNFBP"],
+    "notes": "Markdown, includes regulation table and acronym glossary"
+  }
+```
+
+# 文档ID
+{{document_id}}
+
+# 文档页码
+{{file_page}}
+
+# 上一页的文档内容：
+{{last_analysis_content!""}}
+
+# 当前页面文档内容：
+{{req_content}}
+''')
+
+// 调用大模型
+n_last_data,tpl_gen_req_json,psr_json_python

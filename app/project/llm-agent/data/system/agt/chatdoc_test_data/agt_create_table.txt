@@ -1,0 +1,54 @@
+/*
+{
+	"title":"Insert Metadata Record",
+	"description":"Extract fields from user metadata input and insert into metadata table",
+	"parameter":"{\"name\":\"metadata\",\"label\":\"元数据信息\",\"type\":\"textarea\"}",
+	"life":1000,
+	"version":1
+}
+*/
+// 1. 读取元数据信息
+assign("raw_metadata", "{{metadata}}")
+
+// 3. 调用大模型解析为结构化数据
+n_result_data,tpl_json_list
+
+// 4. 执行插入到指定元数据表
+act_kb.defineAndImportData?tableName='kb_test_metadata'&data='{{n_result_data}}'
+
+// 2. 定义提示词模板，提取结构化字段
+define('tpl_json_list', '''
+你将接收一段包含表结构元数据（包含SQL建表语句与主键说明）的json，请将其转为结构化JSON数组。
+要求字段包括：
+- table_name：取对应字段或留空
+- metadata：根据对应字段,提取"```sql ...```"或留空
+- columns：从“metadata”字段中sql提取，有值返回json数组，例："['name','age'...]"，无值则返回：""
+- data_source：取对应字段,根据枚举值对应返回：file返回"知识库"，table返回"kb"，upload返回"上传"...
+- system：取对应字段或留空
+- application：取对应字段或留空
+- test_no：取对应字段或留空
+- steps：取对应字段或留空
+- preconditions：取对应字段或留空
+- description：取对应字段或留空
+- created_by：取对应字段或留空
+
+数据返回：直接返回json list数据,不要解释 
+例如：
+[
+  {
+    "table_name": "Applicant",
+    "metadata": "```sql CREATE TABLE ...```",
+    "columns": "['name','age'...]",
+    "data_source": "",
+    "system": "",
+    "application": "",
+    "test_no": "",
+    "steps": "",
+    "preconditions": "",
+    "description": "",
+    "created_by": ""
+  }
+]
+以下是原始输入：
+{{raw_metadata}}
+''')

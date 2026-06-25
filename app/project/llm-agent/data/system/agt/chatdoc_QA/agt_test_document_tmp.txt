@@ -1,0 +1,46 @@
+/*
+{
+	"title":"ChatDoc Q&A",
+	"description":"Answer user question",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"kbData",
+			"label":"知识库数据",
+			"type":"textarea"
+		}
+	],
+	"tag":"chatdoc",
+	"uiEntrance":"chatDoc",
+	"resultPlan":"finally_answer",
+	"life":100,
+	"version":1
+}
+*/
+assign('aa_documentId', '247121012777664512')
+
+// Get all page and content
+n_all_page_content, act_kb.select?name='kbs_doc_page_parse'&column='page,content'&where='{"documentId":"{{kbSpaceFileId}}"}'
+
+assign('system_prompt', '''#页面以及内容:
+{{n_all_page_content}}''')
+// Get answer
+n_finally_answer, tpl_check_content,psr_text
+
+
+//# Check if the answer meets the question
+define('tpl_check_content', '''
+ Customer's Question：
+	{{userInput}}
+ 
+ {{fn.chatFlag('%{system_prompt}%', 'userInput', 'n_result', '', 10)}}
+''')

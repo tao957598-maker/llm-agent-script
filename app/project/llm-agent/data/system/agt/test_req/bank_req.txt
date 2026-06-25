@@ -1,0 +1,122 @@
+**Product Requirements Document (PRD) for Fund Deposit and Transfer Feature**
+
+---
+
+### **1. Overview**
+
+This document outlines the functional and non-functional requirements for the "Fund Deposit and Transfer" feature. The feature will enable a user (Peter Li) to deposit funds into their primary account, transfer funds to another user, and verify transaction details.
+
+### **2. Objective**
+
+The goal is to ensure the user can:
+
+1. Log into the system securely using valid credentials.
+2. Deposit funds into their "Primary" account.
+3. Verify the deposit transaction.
+4. Transfer funds to another user (James Liu).
+5. Logout of the system after completing the transaction.
+
+### **3. User Stories**
+
+- **User Story 1**: As a user, I want to securely log into the system so that I can perform deposit and transfer transactions.
+- **User Story 2**: As a user, I want to deposit a specified amount into my primary account and verify the transaction.
+- **User Story 3**: As a user, I want to transfer funds to another user and verify the success of the transaction.
+- **User Story 4**: As a user, I want to log out from the system after completing my tasks.
+
+---
+
+### **4. Functional Requirements**
+
+#### **4.1. User Authentication**
+- **Input**: The user must enter the username and password.
+    - Username: "peter.li"
+    - Password: "gientech@123"
+- **Action**: The user clicks the "Sign In" button.
+- **Verification**: The system should validate the credentials and log the user into the system.
+    - **Expected Outcome**: The Primary Balance and Savings Balance should be displayed, confirming a successful login.
+
+#### **4.2. Deposit Funds**
+- **Action**: The user clicks "Go to Deposit" from the menu.
+- **Account Selection**: The user selects the "Primary" account for the deposit.
+- **Deposit Amount**: The user enters USD “2580” as the deposit amount.
+- **Action**: The user clicks the "Deposit" button.
+- **Verification**: The user clicks "View Details" to check transaction history.
+    - **Expected Outcome**: The deposit transaction of USD “2580” should be visible and confirmed as successful.
+
+#### **4.3. Transfer Funds**
+- **Action**: The user clicks "Transfer To Someone Else" in the menu.
+- **Recipient Selection**: The user selects "James Liu" as the recipient of the transfer.
+- **Account Selection**: The user selects the "Primary" account as the source account.
+- **Transfer Amount**: The user enters USD “2580” as the transfer amount.
+- **Action**: The user clicks the "Transfer" button.
+- **Verification**: The system processes the transfer and updates the user’s account balances.
+    - **Expected Outcome**: The transfer is completed, and both the user and the recipient are notified of the successful transfer.
+
+#### **4.4. Logout**
+- **Action**: The user clicks the "Logout" button to exit the system.
+- **Verification**: The system should log the user out successfully and redirect to the login screen.
+    - **Expected Outcome**: The user is logged out and should be redirected to the login page.
+
+---
+
+### **5. Non-Functional Requirements**
+
+- **Security**: The system must ensure that all login and transaction actions are securely processed with proper encryption.
+- **Usability**: The interface should be intuitive, allowing users to easily navigate between the deposit, transfer, and logout actions.
+- **Performance**: All actions (login, deposit, transfer, logout) should be completed within 3 seconds.
+- **Error Handling**: Proper error messages should be displayed for any failed action (e.g., invalid credentials, insufficient funds, transfer failures).
+
+---
+ 
+### **6. Test Cases**
+
+#### **Test Case 1**: **Login Validation**
+- **Test Steps**:
+  1. Enter "peter.li" as the Username.
+  2. Enter "gientech@123" as the Password.
+  3. Click "Sign In".
+- **Expected Result**: The user should be logged in, and the Primary Balance and Savings Balance should be displayed.
+
+#### **Test Case 2**: **Deposit Funds**
+- **Test Steps**:
+  1. Click "Go to Deposit".
+  2. Select "Primary" account.
+  3. Enter USD "2580" for the deposit.
+  4. Click the "Deposit" button.
+  5. Click "View Details".
+- **Expected Result**: The deposit of USD "2580" should appear in the transaction history as successful.
+
+#### **Test Case 3**: **Transfer Funds**
+- **Test Steps**:
+  1. Click "Transfer To Someone Else".
+  2. Select "James Liu" as the recipient.
+  3. Select "Primary" account as the transfer source.
+  4. Enter USD "2580" for the transfer amount.
+  5. Click the "Transfer" button.
+- **Expected Result**: The transfer should be completed successfully.
+
+#### **Test Case 4**: **Logout Validation**
+- **Test Steps**:
+  1. Click "Logout".
+- **Expected Result**: The user should be logged out and redirected to the login page.
+
+---
+
+### **7. Acceptance Criteria**
+- User successfully logs in with correct credentials.
+- User can deposit USD "2580" into the "Primary" account, and the transaction is visible in the details.
+- User successfully transfers USD "2580" to "James Liu".
+- User can log out of the system without any errors.
+
+---
+
+### **8. Dependencies**
+- User authentication service.
+- Fund transaction processing service.
+- Account balance update service.
+
+---
+
+### **9. Conclusion**
+
+This document details the user journey for the deposit and transfer functionality. The goal is to ensure a seamless and secure user experience for Peter Li, enabling him to deposit, transfer, and logout with confidence.

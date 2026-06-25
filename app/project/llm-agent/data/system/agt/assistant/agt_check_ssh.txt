@@ -1,0 +1,97 @@
+/*{
+  "title": "检查SSH连接",
+  "description": "检查 SSH 连接（GitHub SSH 或远程服务器 SSH）",
+  "parameter": [
+    {
+      "name": "os",
+      "label": "操作系统",
+      "required": true
+    },
+    {
+      "name": "env",
+      "label": "目标环境",
+      "required": true
+    },
+    {
+      "name": "executor_type",
+      "label": "执行器类型",
+      "required": true
+    },
+    {
+      "name": "ssh_host",
+      "label": "SSH主机"
+    },
+    {
+      "name": "ssh_port",
+      "label": "SSH端口"
+    },
+    {
+      "name": "server_id",
+      "label": "服务器ID"
+    }
+  ],
+  "resultPlan": "n_check_ssh_plan_result",
+  "discoverable": false,
+  "life": "100"
+}*/
+
+assign('n_skip_ssh', '{{fn.str(env) == "localhost"}}')
+assign('n_log', '')
+
+
+
+when('fn.bool(n_skip_ssh)', {
+  assign('n_log', '{{n_log}}\n✓ 跳过 SSH 检查（localhost）')
+  assign("n_check_ssh_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"false"}')
+})
+
+// cloud 模式：检查 GitHub SSH 连通性 + 远程服务器 SSH
+when('!fn.bool(n_skip_ssh) && executor_type == "cloud"', {
+
+  assign('n_git_ssh_test_cmd', 'ssh -T -o BatchMode=yes -o ConnectTimeout=10 git@github.com 2>&1 | grep -i "successfully authenticated"')
+  n_git_ssh_result, agt_cmd_executor.assistant?cmd={{n_git_ssh_test_cmd}}&cmd_executor_name="测试GitHub SSH连接"&server_id={{server_id}}
+  // 先提取 Git SSH 输出和公钥到外层变量，后续引用不受作用域限制
+  n_git_ssh_ok_flag, act_func?script='''
+    def output = n_git_ssh_result ?: ""
+    def ok = !output.isEmpty() && output.toLowerCase().contains("successfully authenticated")
+    fn.put('n_git_ssh_output', output)
+    if (!ok) {
+      def pubkeyCmd = '[ -f ~/.ssh/id_rsa.pub ] || ssh-keygen -t rsa -b 4096 -N "" -f ~/.ssh/id_rsa; cat ~/.ssh/id_rsa.pub'
+      fn.put('n_pubkey_cmd', pubkeyCmd)
+    }
+    return ok
+  '''
+ 
+  when('!fn.bool(n_git_ssh_ok_flag)', {
+    n_pubkey_result, agt_cmd_executor.assistant?cmd={{n_pubkey_cmd}}&cmd_executor_name="获取SSH公钥"&server_id={{server_id}}
+    n_pubkey, act_func?script='''
+      def output = n_pubkey_result ?: ""
+      def lines = output.split("\\n")
+      def pubkey = lines?.find { it.trim().contains("ssh-rsa") }
+      fn.put('n_pubkey', pubkey?.trim() ?: "")
+    '''
+    assign('n_log', '{{n_log}}\n⚠️ Git SSH 未配置或认证失败\n\n错误：{{n_git_ssh_output}}\n\n配置方法：\n1. 在 GitHub 添加以下公钥\n2. 地址：https://github.com/settings/keys\n\n【当前公钥】\n{{n_pubkey ?: "获取公钥失败"}}\n\n添加完成后重新执行部署。')
+    assign("n_check_ssh_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"true"}')
+ 
+  },{
+    assign('n_log', '{{n_log}}\n✓ GitHub SSH 验证通过')
+    assign("n_check_ssh_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"false"}')
+  }) 
+}) 
+
+// local_ac 模式：检查本地连接远程服务器 SSH（用于部署）
+when('!fn.bool(n_skip_ssh) && executor_type == "local_ac"', {
+  assign('n_ssh_test_cmd', 'ssh -p {{ssh_port}} -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ssh_host}} echo OK && echo SSH_OK || echo SSH_FAIL')
+  n_ssh_test_result, agt_cmd_executor.assistant?cmd={{n_ssh_test_cmd}}&cmd_executor_name="测试本地连通远程服务器SSH连接"&server_id={{server_id}}
+  n_ssh_ok, act_func?script='''
+    def output = n_ssh_test_result ?: ""
+    fn.put('n_ssh_err', output)
+    return output.contains("SSH_OK")
+  '''
+  when('!fn.bool(n_ssh_ok)', {
+    assign('n_log', '{{n_log}}\n⚠️ 远程服务器 SSH 未通过: {{n_ssh_err}}')
+    assign("n_check_ssh_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"true"}')
+  })
+  assign('n_log', '{{n_log}}\n✓ 远程服务器 SSH 验证通过')
+  assign("n_check_ssh_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"false"}')
+})

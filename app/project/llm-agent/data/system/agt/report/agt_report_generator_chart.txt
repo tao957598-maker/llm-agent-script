@@ -1,0 +1,322 @@
+/*
+{
+	"title": "Generate Report Data Based On Db data ",
+	"description": "Generate Report Data Based On Db data",
+    "parameter": [
+					{
+						"name":"reportId",
+						"label":"ReportId",
+						"type":"text"
+					},
+                    {
+                        "name":"varKey",
+                        "label":"VarKey",
+                        "type":"text"
+                    },
+                    {
+                        "name":"mql",
+                        "label":"MQL",
+                        "type":"text"
+                    }
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "life": "100"
+} */
+
+//## Generate report: Get report data
+n_report_data, act_kb.selectBy?sql='select report_name as reportName,kb_folder_path as kbFolderPath,report_source as reportSource,template_variables as templateVariables from  kb_template_report_record where id={{reportId}}'
+when('!fn.hasValue(n_report_data)',{
+    //# Can not find report data by reportId!
+    log('Can not find report data by reportId:{{reportId}}')
+    act_flow.go?step='exit'
+})
+assign('n_template_var',"{{n_report_data[0].templateVariables}}")
+assign('n_report_source',"{{n_report_data[0].reportSource}}")
+assign('n_chart_mql_temp',"{{mql}}")
+log('the varKey is :{{varKey}}')
+log('the mql is :{{mql}}')
+//## Generate report: Handler data...
+foreach('n_var','n_template_var',{
+    assign('n_var_key',"{{n_var.item.key}}")
+    log('***n_var_key={{n_var_key}}')
+    when('n_var_key==varKey',{
+        assign('n_chart_desc',"{{n_var.item.desc}}")
+        //fn.put("n_chart_mql_temp",mql)
+        //## Generate report:Get chart data from report source
+        log('***n_chart_mql_temp={{n_chart_mql_temp!}}')
+        when('fn.hasValue(n_chart_mql_temp!)',{
+            //## Generate report: Run the ECharts query statement
+	        n_sql_result, act_api.doExecuteDynamic?name=ReportDataSearch&dynamicParamData='{{fn.json("searchMQL, n_chart_mql_temp", true)}}'
+            act_func?script='''
+                def n_sql_result_data = n_sql_result.data
+                fn.put("n_field_meta_norm",n_sql_result_data[0])
+            '''
+            log('*****n_field_meta_norm={{n_field_meta_norm!}}')
+            //## Generate report: Generate the ECharts data
+            n_echart_format_data,tpl_analysis_chart
+            log('*****n_echart_format_data={{n_echart_format_data!}}')
+            act_func?script='''
+                def formatDate = { dateStr ->
+                    if (!dateStr) return null
+                    try {
+                        return dateStr.substring(0, 10)
+                    } catch (e) {
+                        return dateStr
+                    }
+                }
+                // 1. schema
+                def schema = n_echart_format_data ?: [:]
+                def option = schema.option ? schema.option.clone() : [:]
+                def chartType = (schema.chartType ?: "bar").toLowerCase()
+                def xField = schema.xField
+                def yFields = (schema.yFields instanceof List) ? schema.yFields : []
+                def nameField = schema.nameField
+                def valueField = schema.valueField
+
+                // 2. SQL 结果
+                def rows = []
+                if (n_sql_result instanceof Map && n_sql_result.data instanceof List) {
+                    rows = n_sql_result.data
+                }
+
+                // 3. 初始化
+                option.xAxis = option.xAxis ?: [:]
+                option.series = option.series ?: []
+
+                // ==========  处理折线图 / 柱状图 ==========
+                if (chartType in ["line","bar"]) {
+                    // X轴
+                    //def xData = rows.collect { it[xField] ?: null }
+                     // X轴：格式化日期
+                    def xData = rows.collect { r ->
+                        def raw = r[xField]
+                        formatDate(raw?.toString())
+                    }
+                    option.xAxis.type = "category"
+                    option.xAxis.data = xData
+
+                    // 多字段时生成多个 series
+                    def seriesList = []
+                    yFields.each { y ->
+                        def seriesValues = rows.collect { r ->
+                            r[y] instanceof Number ? r[y] : (r[y]?.toString()?.isNumber() ? r[y].toDouble() : null)
+                        }
+                        seriesList << [
+                            name: y,
+                            type: chartType,
+                            data: seriesValues
+                        ]
+                    }
+                    option.series = seriesList
+                }
+
+                // ==========  饼图 ==========
+                else if (chartType == "pie") {
+
+                    def data = rows.collect { r ->
+                        // 1. name 取自 nameField
+                        def nameVal = (r[nameField] ?: "").toString()
+
+                        // 2. 获取 value，并确保是数字
+                        def rawValue = r[valueField]
+                        def numValue = null
+                        if (rawValue instanceof Number) {
+                            numValue = rawValue
+                        } else if (rawValue instanceof String && rawValue.isNumber()) {
+                            numValue = rawValue.toDouble()
+                        }
+                        [
+                            name : nameVal,
+                            value: numValue
+                        ]
+                    }
+
+                    // 3. legend 必须补全，否则渲染不全
+                    option.legend.data = data.collect { it.name }
+                    option.remove("xAxis")
+                    option.remove("yAxis")
+                    option.series = [[ type: "pie", data: data ]]
+                }
+                def key=n_var.item.var
+                fn.put('n_chart_format_data', [(key): option])
+                n_report_source.put(key,'')
+                return n_report_source
+            '''
+            when('fn.hasValue(n_chart_format_data)',{
+                //Append n_sql_result to n_combined_result
+                append('n_chart_json_data',"{{n_chart_format_data}}")
+            })
+        })
+    })
+})
+
+//Check chart data if is exists
+when('fn.hasValue(n_chart_json_data)',{
+    //## Generate report: Merge all chart data into one large JSON object
+    n_save_chart_data,act_func?script='''
+        // 定义批次号
+        def  batchNumber = System.currentTimeMillis()
+        // n_chart_json_data 是前面步骤聚起来的那个数组
+        def dataList = n_chart_json_data
+        // 最终要合并成的那个大JSON对象
+        def merged = [:]
+        // 安全遍历
+        for (int i = 0; i < dataList.size(); i++) {
+            def item = dataList[i]
+            if (item == null) {
+                continue
+            }
+            // fn.map 来把 “字符串JSON” → Map
+            def obj = fn.map(item)
+            if (obj == null) {
+                // 转不了就跳过
+                continue
+            }
+            // 合并到一个对象里，后面的键会覆盖前面的同名键
+            merged.putAll(obj)
+        }
+        def reportId = reportId
+        def saveChartData = [
+            "reportDataId": reportId,
+            "batchNumber": batchNumber,
+            "chartFormatData": merged
+        ]
+        // 返回合并后的大JSON
+        return saveChartData
+    '''
+
+    log('{{n_save_chart_data.chartFormatData!}}')
+})
+
+
+//Step 15 Generate echart data
+define('tpl_analysis_chart','''
+    你是 ECharts 数据可视化专家和结构化输出专家。
+
+    你的任务：
+    根据【指标描述】与【字段元数据】，生成一个 **ECharts 图表结构 Schema JSON**。
+    注意：Schema 只定义结构，本系统后续会自动填充数据。
+
+    --------------------------------------------
+    【指标描述】
+    {{n_chart_desc}}
+
+    【字段元数据】(数组，每个元素包含 name、type、sample)
+    {{n_field_meta_norm}}
+
+    --------------------------------------------
+    一、图表类型选择规则（严格遵守）
+
+    1. 若存在明显时间字段（字段名包含 date/datetime/day/time/period/month 或 type 属于 date/datetime）：
+    → chartType="line"
+
+    2. 若包含分类字段（string/category），且有数值字段：
+    - 若描述含 “占比/结构/份额/比例” → chartType="pie"
+    - 若描述含 “排行/top/排名/对比” → chartType="bar"
+    - 默认 → "bar"
+
+    3. 若仅有 1 个数值字段：
+    - 若存在时间字段 → “line”
+    - 否则 → “bar”
+
+    4. 图表类型必须是：
+    - "line"
+    - "bar"
+    - "pie"
+
+    --------------------------------------------
+    二、字段映射规则
+
+    输出结构必须统一为：
+
+    {
+    "chartType": "...",
+    "xField": "... 或 null",
+    "yFields": [...],
+    "nameField": "... 或 null",
+    "valueField": "... 或 null",
+    "option": {...}
+    }
+
+    字段识别：
+
+    时间字段
+    - 名称包含：date, time, day, month, period, update, ts
+    - 或 type 为 date/datetime/timestamp
+
+    数值字段
+    - type ∈ [number, int, float, double, decimal]
+
+    分类字段
+    - type ∈ [string] 且不是时间字段
+
+    --------------------------------------------
+    三、映射策略
+
+    A. line / bar：
+
+    - xField：优先使用时间字段，否则使用第一个分类字段
+    - yFields：所有数值字段；>5 时保留前 3 个
+
+    option（必须包含）：
+    {
+    "title": { "text": "...", "left": "center" },
+    "tooltip": {
+        "trigger": "axis",
+        "axisPointer": { "type": chartType == "line" ? "line" : "shadow" }
+    },
+    "legend": { "top": "bottom" },
+    "xAxis": { "type": "category", "data": [] },
+    "yAxis": { "type": "value" },
+    "series": [
+        { "name": "...", "type": chartType, "data": [] }
+    ]
+    }
+
+    B. pie：
+
+    - nameField：使用分类字段（或第一个非数值字段）
+    - valueField：优先识别 percentage/ratio/share/value/amount/yield，否则第一个数值字段
+
+    option（必须包含美观布局）：
+
+    {
+    "title": { "text": "...", "left": "center" },
+    "tooltip": {
+        "trigger": "item",
+        "formatter": "{a} <br/>{b}: {c} ({d}%)"
+    },
+    "legend": {
+        "orient": "vertical",
+        "left": "left",
+        "data": []
+    },
+    "series": [
+        {
+        "name": "...",
+        "type": "pie",
+        "radius": "50%",
+        "data": [],
+        "emphasis": {
+            "itemStyle": {
+            "shadowBlur": 10,
+            "shadowOffsetX": 0,
+            "shadowColor": "rgba(0, 0, 0, 0.5)"
+            }
+        },
+        "label": { "formatter": "{b}: {d}%" }
+        }
+    ]
+    }
+    --------------------------------------------
+    四、输出要求（必须遵守）
+
+    必须输出合法 JSON
+    不允许 Markdown、不允许注释、不允许解释
+    data 一律为空，由系统填充
+    字段必须齐全：chartType/xField/yFields/nameField/valueField/option
+
+    只返回 JSON。
+    {{sys_hint}}
+''')

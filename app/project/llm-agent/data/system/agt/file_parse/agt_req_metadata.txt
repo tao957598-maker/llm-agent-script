@@ -1,0 +1,94 @@
+/*
+{
+	"title":"File Metadata Extraction",
+	"description":"Extract and analyze file metadata",
+	"parameter":[
+		{
+			"name":"file_id",
+			"label":"File",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"file_parse",
+	"version":2
+}
+*/
+// 删除旧数据
+act_kb.selectBy?sql='delete from kb_doc_req_metadata where documentId = "{{file_id}}"'
+// Try to use the standard analysis procedure
+on_failure({
+	// Force to success status
+	act_flow.success
+})
+
+when('!fn.hasValue(Pages)', {
+//# 取数据 排除空内容
+n_kb_data,act_kb.selectBy?sql='''select
+    *
+from
+    (SELECT
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS analysis_content
+FROM
+    kbs_doc_page_parse
+WHERE
+    documentId = "{{file_id}}"
+ORDER BY
+    CAST(page AS SIGNED) ASC) as a where a.analysis_content is not null'''
+},{
+n_kb_data,act_kb.selectBy?sql='''select
+    *
+from
+    (SELECT
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS analysis_content
+FROM
+    kbs_doc_page_parse
+WHERE
+    documentId = "{{file_id}}"
+    and page in ({{pages}})
+ORDER BY
+    CAST(page AS SIGNED) ASC) as a where a.analysis_content is not null '''
+})
+//# 获取文件
+assign("result_data", "{{n_kb_data}}")
+assign('last_analysis_content', '')
+
+when('!fn.hasValue(result_data)', {
+  //# Chunk Failed
+	act_flow.fail?result='analysis failed,unable to find doc data that can be analysis'
+},{
+  //# 分页遍历文件
+  foreach('n_data', 'result_data', {
+    // 下标对应内容
+    assign('table_item', '{{n_data.item}}')
+
+    when('!fn.hasValue(table_item.analysis_content)', {
+      //# Analysis Content Empty
+      act_flow.fail?result='Analysis Content Empty'
+    },{
+      // 提取输出
+      n_json_data,agt_req_analysis?file_page="{{table_item.page}}"&document_id="{{file_id}}"&analysis_content="{{table_item.analysis_content}}}"&last_analysis_content="{{last_analysis_content}}"
+      assign('last_analysis_content', '{{table_item.analysis_content}}')
+      
+      // 保存
+      act_kb.defineAndImportData?tableName=kb_doc_req_metadata&data='{{n_json_data}}'
+    })
+  })
+})

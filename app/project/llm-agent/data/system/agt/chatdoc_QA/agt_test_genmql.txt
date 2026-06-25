@@ -1,0 +1,217 @@
+/*
+{
+	"title":"Gen MQL Agent",
+	"description":"根据语义解析结果生成合法的 MongoDB 查询语句（MQL）",
+	"parameter":[
+		{
+			"name":"matchedVerbs",
+			"label":"匹配的动词",
+			"required":true,
+			"maxLength":500,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"extractedNumber",
+			"label":"提取的数值",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"clusterName",
+			"label":"建议字段簇",
+			"required":true,
+			"maxLength":100,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"actualFields",
+			"label":"实际可用字段",
+			"required":true,
+			"maxLength":1000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"verbsStr",
+			"label":"动词字符串",
+			"required":true,
+			"maxLength":500,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"numberStr",
+			"label":"数值字符串",
+			"required":false,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"fieldsStr",
+			"label":"字段字符串",
+			"required":true,
+			"maxLength":500,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"timeContext",
+			"label":"时间上下文",
+			"required":false,
+			"maxLength":100,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		}
+	],
+	"tag":"chatdoc_QA",
+	"uiEntrance":"chatdoc_QA",
+	"displayOrder":7,
+	"version":1
+}
+*/
+// ============================
+// 1. 常量定义
+// ============================
+assign("COLLECTION_NAME", "loan_records")
+assign("DEFAULT_LIMIT", "100")
+
+assign("TIME_MAPPINGS", '''
+{
+  "去年": {"$gte": "2024-01-01", "$lt": "2025-01-01"},
+  "今年": {"$gte": "2025-01-01", "$lt": "2026-01-01"},
+  "上个月": {"$gte": "2024-12-01", "$lt": "2025-01-01"}
+}
+''')
+
+assign("FIELD_VALUE_MAPPINGS", '''
+{
+  "overdue": ["overdue"],
+  "active": ["active"]
+}
+''')
+
+assign("REQUIRED_PROJECTION_FIELD", "loan_id")
+
+// ============================
+// 2. 主智能体定义
+// ============================
+agent("mql_generator", {
+    comment(''' 步骤1：参数验证和初始化 ''')
+    
+    // 检查必需参数
+    assign("has_verbs", expression('''fn.hasValue("{{matchedVerbs}}")'''))
+    when('{{has_verbs}} == false', {
+        return expression('''fn.json("error", "matchedVerbs 参数不能为空")''')
+    })
+    
+    assign("has_cluster", expression('''fn.hasValue("{{clusterName}}")'''))
+    when('{{has_cluster}} == false', {
+        return expression('''fn.json("error", "clusterName 参数不能为空")''')
+    })
+    
+    assign("has_fields", expression('''fn.hasValue("{{actualFields}}")'''))
+    when('{{has_fields}} == false', {
+        return expression('''fn.json("error", "actualFields 参数不能为空")''')
+    })
+    
+    comment(''' 步骤2：解析实际可用字段 ''')
+    assign("fields_parsed", expression('''psr_json("{{actualFields}}")'''))
+    when('{{fields_parsed}}!', {
+        assign("available_fields", "{{fields_parsed}}")
+    }, {
+        return expression('''fn.json("error", "actualFields 不是有效的JSON格式")''')
+    })
+    
+    comment(''' 步骤3：构建查询条件 ''')
+    assign("filter_conditions", "{}")
+    
+    // 处理动词映射
+    assign("has_overdue_verb", expression('''fn.contains("{{matchedVerbs}}", "逾期")'''))
+    when('{{has_overdue_verb}} == true', {
+        expression('''fn.json("status", "overdue")''')
+        assign("status_condition", expression('''fn.json("status", "overdue")'''))
+        assign("merged_filter", expression('''fn.merge("{{filter_conditions}}", "{{status_condition}}")'''))
+        assign("filter_conditions", "{{merged_filter}}")
+    })
+    
+    // 处理数值条件
+    assign("has_number", expression('''fn.hasValue("{{extractedNumber}}")'''))
+    when('{{has_number}} == true', {
+        assign("number_condition", expression('''fn.json("days_overdue", fn.json("$gt", "{{extractedNumber}}"))'''))
+        assign("merged_filter", expression('''fn.merge("{{filter_conditions}}", "{{number_condition}}")'''))
+        assign("filter_conditions", "{{merged_filter}}")
+    })
+    
+    // 处理时间上下文
+    assign("has_time", expression('''fn.hasValue("{{timeContext}}")'''))
+    when('{{has_time}} == true', {
+        assign("time_mapping_parsed", expression('''psr_json("{{TIME_MAPPINGS}}")'''))
+        assign("time_condition", expression('''fn.get("{{time_mapping_parsed}}", "{{timeContext}}")'''))
+        when('{{time_condition}}!', {
+            assign("time_filter", expression('''fn.json("application_date", "{{time_condition}}")'''))
+            assign("merged_filter", expression('''fn.merge("{{filter_conditions}}", "{{time_filter}}")'''))
+            assign("filter_conditions", "{{merged_filter}}")
+        })
+    })
+    
+    comment(''' 步骤4：构建返回字段投影 ''')
+    assign("projection_base", expression('''fn.json("{{REQUIRED_PROJECTION_FIELD}}", 1)'''))
+    
+    // 添加其他建议字段
+    assign("cluster_fields_parsed", expression('''psr_json("{{fieldsStr}}")'''))
+    when('{{cluster_fields_parsed}}!', {
+        foreach('field', '{{cluster_fields_parsed}}', {
+            assign("current_field", "{{field.item}}")
+            when('{{current_field}} != {{REQUIRED_PROJECTION_FIELD}}', {
+                assign("updated_projection", expression('''fn.merge("{{projection_base}}", fn.json("{{current_field}}", 1))'''))
+                assign("projection_base", "{{updated_projection}}")
+            })
+        })
+    })
+    
+    comment(''' 步骤5：组装最终结果 ''')
+    assign("final_result", expression('''
+fn.json(
+  "collection", "{{COLLECTION_NAME}}",
+  "filter", {{filter_conditions}},
+  "projection", {{projection_base}},
+  "limit", {{DEFAULT_LIMIT}}
+)
+'''))
+    
+    return "{{final_result}}"
+})
+
+// ============================
+// 3. 示例调用（测试代码）
+// ============================
+comment(''' 示例调用：生成逾期查询 ''')
+assign("test_verbs", "[\"逾期\"]")
+assign("test_number", "30")
+assign("test_cluster", "overdue_cluster")
+assign("test_fields", "[\"loan_id\", \"amount\", \"days_overdue\", \"status\"]")
+assign("test_verbs_str", "[\"逾期\"]")
+assign("test_number_str", "30")
+assign("test_fields_str", "[\"days_overdue\"]")
+assign("test_time", "去年")
+
+assign("test_result", "{{mql_generator}}")
+
+when('{{test_result}}!', {
+    assign("output", "测试成功：{{test_result}}")
+}, {
+    assign("output", "测试失败")
+})

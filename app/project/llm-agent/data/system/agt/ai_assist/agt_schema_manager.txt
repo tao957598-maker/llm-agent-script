@@ -1,0 +1,219 @@
+/*
+{
+	"title":"Schema Manager",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"fileName",
+			"label":"文件名称"
+		},
+		{
+			"name":"currentUrl",
+			"label":"当前URL路径"
+		}
+	],
+	"version":1
+}
+*/
+n_global_variable, act_memory.retrieve?var=global_variable&global=true
+when('!fn.hasValue(userInput)', {
+	 assign('userInput', '{{n_global_variable.userInput}}')
+	 assign('kbSpaceFileId', '{{n_global_variable.kbSpaceFileId}}')
+})
+
+assign("file_element", "NaN")
+when('fn.hasValue(kbSpaceFileId)', {
+	// n_queryResultn_queryResult
+	n_queryResult,agt_kb_space_query.tool_ecosystem?kbSpaceFileId={{kbSpaceFileId}}
+	// file_elementfile_element
+	assign("file_element", "{{n_queryResult}}")
+})
+// 角色设定
+assign('system_message', '''
+
+- Role: 数据库架构师与JSON数据建模专家
+- Background: 用户需要将自然语言描述的业务需求转化为结构化的MySQL建表信息，以JSON格式输出。该JSON需包含完整的表元数据（表名、注释、显示顺序、所属库）及列级定义（字段名、数据类型、默认值、注释、索引、主键、可空性等），用于后续自动化建表或前端展示。
+- Profile: 你是一位精通关系型数据库设计范式、熟悉MySQL数据类型体系、擅长将业务语义转化为技术元数据的数据架构师。具备严谨的逻辑推演能力，能从模糊需求中提炼精确的数据结构，并确保输出符合企业级数据治理规范。
+- Skills: 
+  - 业务需求解析与数据建模
+  - MySQL数据类型映射与优化
+  - JSON Schema设计与验证
+  - 索引策略与主外键规划
+  - 命名规范与注释标准化
+- Goals:
+  1. 深度解析用户输入的业务需求，识别实体、属性及关系
+  2. 设计合理的表结构，确定表名、及业务注释
+  3. 逐字段定义列信息，包括数据类型、默认值、可空性、索引策略
+  4. 为主键、业务键、高频查询字段配置适当的键类型与索引
+  5. 生成符合指定JSON Schema的完整数据结构
+  6. 确保displayOrder体现字段的业务优先级与展示逻辑
+- Constrains:
+  - 表名必须以`kbs_`开头,必须使用蛇形命名法（snake_case），前缀体现业务域
+  - 数据类型仅限：varchar、float、bigint、int、datetime、text、json
+  - 一般情况下优先使用varchar；仅在明确属于数值、时间、大文本或JSON结构时才使用其他类型
+  - 若为varchar类型，必须合理估算maxLength；其他类型maxLength为null
+  - index字段为true时，需说明索引用途；主键自动隐含索引
+  - 所有字段必须包含清晰的英文comment
+  - displayOrder从0开始递增，核心字段优先
+  - 禁止生成物理外键，仅通过字段命名体现关联关系
+- OutputFormat: 严格遵循以下JSON结构（禁止添加额外字段）：
+  ```json
+  {
+    "tableName": "表名",
+    "comment": "表用途说明",
+    "displayOrder": 0,
+    "columnInfos": [
+      {
+        "name": "字段名",
+        "columnType": "数据类型",
+        "columnDefault": "默认值或空字符串",
+        "comment": "字段注释",
+        "nullable": false,
+        "keyType": 0,
+        "index": false,
+        "maxLength": null,
+        "displayOrder": 0
+      }
+    ]
+  }
+ ```
+Workflow:
+1.需求解构：提取用户描述中的核心实体、业务动作、数据特征，识别时间维度、状态维度、关联维度
+2.表级设计：tableName（模块_实体_动作）、comment（用途+存储内容+更新频率）、displayOrder（按业务重要性）
+3.列级推演：按"主键→业务主属性→状态标记→关联外键→内容载荷→审计字段"顺序，逐字段确定：
+    name：蛇形命名，语义清晰
+    columnType：仅允许varchar、float、bigint、int、datetime、text、json；一般情况下优先使用varchar，仅在明确属于数值、时间、大文本或JSON结构时使用其他类型
+    nullable：核心业务字段禁止为空，扩展字段可空
+    keyType：0=none，1=主键（仅id可用），2=uniqueIndex，4=normalIndex；禁止使用3，且最终输出因不包含id字段，实际生效值为0/2/4
+    index：查询条件字段、外键字段、排序字段需索引
+    maxLength：varchar类型必填，参考标准长度（32/64/128/256/512/1024/4096/65535）
+    columnDefault：空字符串表示无默认值，否则填具体值
+    comment：说明业务含义、取值范围、特殊规则 必须为英文
+    displayOrder：按业务关注度降序排列
+4.合规校验：不需要`id`字段,命名规范、类型合法性、索引合理性.如创建时间created_at、更新时间updated_at 后台程序会自动添加）
+5.结构化输出：生成紧凑JSON，确保无尾随逗号、无注释污染、字段顺序固定
+
+# json结构解释
+## 顶层字段
+*   **`columnInfos`**: 表内各列的定义信息数组，是核心数据结构。
+*   **`comment`**: 表的注释说明，描述此表的用途,必须为英文。
+*   **`displayOrder`**: 表的显示顺序，用于前端排序，数字越小通常排序越靠前。
+*   **`tableName`**: 表的实际名称，必须以`kbs_`开头，后跟模块名、实体名、动作名。
+
+---
+
+## `columnInfos` 下的字段 (以示例的`id`列为例)
+*   **`columnDefault`**: 该列的默认值。此处为空字符串，表示无默认值。
+*   **`columnType`**: 英文小写,该列的数据类型只有: ["varchar","float","bigint","int","datetime","text","json"]；一般情况下优先使用`varchar`
+*   **`displayOrder`**: 该列在前端显示的排列顺序，数字越小通常位置越靠前。
+*   **`index`**: 是否为索引列。`false`表示此列未建立索引。
+*   **`keyType`**: 键类型标识。仅允许`0`、`1`、`2`、`4`；其中`0`表示none，`1`表示主键（仅`id`字段可用），`2`表示uniqueIndex，`4`表示normalIndex；禁止使用`3`。由于最终会删除`id`字段，实际输出中仅应出现`0`、`2`、`4`。
+*   **`maxLength`**: 该字段允许的最大长度（尤其针对字符串类型）。此处为`null`，表示对整型不适用。
+*   **`name`**: 该列的字段名称，即表中的列名。
+*   **`nullable`**: 该字段是否允许为空（NULL）。`false`表示不允许为空，是必填项。
+''')
+
+assign("file_element", "NaN")
+
+
+//# 生成schema代码
+n_get_data,tpl_gen_schema_code,psr_json
+n_result,act_func.run?script='''
+def json = n_get_data
+// 设置schema默认为llm_agent
+json.schema = "llm_agent"
+
+// 删除columnInfos中name为"id"的项
+json.columnInfos = json.columnInfos.findAll { it.name != "id" }
+// 检查是否包含created_at
+def hasCreatedAt = json.columnInfos.any { it.name == "created_at" }
+if (!hasCreatedAt) {
+    json.columnInfos.add([
+        name: "created_at",
+        columnType: "datetime",
+        columnDefault: "",
+        comment: "Timestamp when this user record was created.",
+        nullable: false,
+        keyType: 0,
+        index: false,
+        maxLength: "",
+        displayOrder: 0,
+        vectorType: "",
+        graph: false,
+        vectorField: ""
+    ])
+}
+
+// 检查是否包含updated_at
+def hasUpdatedAt = json.columnInfos.any { it.name == "updated_at" }
+if (!hasUpdatedAt) {
+    json.columnInfos.add([
+        name: "updated_at",
+        columnType: "datetime",
+        columnDefault: "",
+        comment: "Timestamp when this user record was last updated.",
+        nullable: false,
+        keyType: 0,
+        index: false,
+        maxLength: "",
+        displayOrder: 0,
+        vectorType: "",
+        graph: false,
+        vectorField: ""
+    ])
+}
+
+// 为每个字段添加缺失的属性
+json.columnInfos.each { item ->
+    item.vectorType = item.containsKey('vectorType') ? item.vectorType : ""
+    item.graph = item.containsKey('graph') ? item.graph : false
+    item.vectorField = item.containsKey('vectorField') ? item.vectorField : ""
+    def normalizedColumnType = item.columnType != null ? item.columnType.toString().trim().toLowerCase() : "varchar"
+    normalizedColumnType = [
+        "string": "varchar",
+        "varchar": "varchar",
+        "float64": "float",
+        "float": "float",
+        "int64": "bigint",
+        "uint64": "bigint",
+        "bigint": "bigint",
+        "integer": "int",
+        "int": "int",
+        "datetime": "datetime",
+        "text": "text",
+        "json": "json"
+    ].get(normalizedColumnType, "varchar")
+    item.columnType = normalizedColumnType
+    item.keyType = item.keyType != null ? item.keyType : 0
+    item.keyType = (item.keyType instanceof Number) ? item.keyType.intValue() : item.keyType
+    item.keyType = item.keyType == 3 ? 4 : item.keyType
+    item.keyType = (item.name != "id" && item.keyType == 1) ? 0 : item.keyType
+    item.keyType = [0, 1, 2, 4].contains(item.keyType) ? item.keyType : 0
+    item.maxLength = item.maxLength != null ? item.maxLength : ""
+    item.comment = item.name
+}
+
+// 重新排序displayOrder
+json.columnInfos.eachWithIndex { item, index -> item.displayOrder = index }
+
+return json
+'''
+
+// Agent代码模板
+define('tpl_gen_schema_code', '''
+  # 用户需求
+  {{userInput}}
+  ## 用户上传的文件内容
+  {{file_element}}
+
+
+  {{fn.chatFlag('system_message', 'userInput', '', '', 20)}}
+''')

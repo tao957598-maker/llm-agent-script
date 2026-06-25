@@ -1,0 +1,67 @@
+/*{
+  "title": "查找项目目录",
+  "description": "在本地磁盘上搜索项目目录，查找包含 deploy/build_thin_all.sh 的项目",
+  "parameter": [
+    {
+      "name": "project_name",
+      "label": "项目名称",
+      "required": true
+    },
+    {
+      "name": "os",
+      "label": "操作系统",
+      "required": true
+    },
+    {
+      "name": "git_repo_url",
+      "label": "Git仓库地址"
+    },
+    {
+      "name": "server_id",
+      "label": "服务器ID"
+    }
+  ],
+  "resultPlan": "n_find_project_plan_result",
+  "discoverable": false,
+  "life": "100"
+}*/
+
+assign("n_project_path", "")
+assign('n_log', '')
+
+// 设置默认变量
+assign('n_need_clone', 'false')
+when('n_os == "windows"', {
+  assign('n_find_cmd', 'for %d in (Z Y X W V U T S R Q P O N M L K J I H G F E D C) do @if exist %d:\\ @for /f "delims=" %i in (\'dir /b /s /ad "%d:\\" 2^>nul ^| findstr /i "\\{{project_name}}$"\') do @if exist "%i\\deploy\\/build_thin_all.sh" echo %i')
+}, {
+  // 搜索常用路径和临时目录
+  assign('n_find_cmd', 'find /app /opt /etc/ /home /var /tmp -maxdepth 4 -type d -name "{{project_name}}" 2>/dev/null | while read d; do [ -f "$d/deploy/build_thin_all.sh" ] && echo "$d"; done | head -5')
+})
+// 执行查找命令
+n_cmd_executor_result, agt_cmd_executor.assistant?cmd={{n_find_cmd}}&cmd_executor_name="查找项目目录"&server_id={{server_id}}&async=false
+n_find_ok, act_func?script='''
+  def output = n_cmd_executor_result ?: ""
+  def lines = output.split("\\n")
+  def path = lines?[0]?.trim()
+  if (path == null || path.contains("NOT_FOUND") || path.isEmpty()) return false
+  def forwardSlashPath = path.replace('\\\\', '/').replaceAll(/[\r\n]+$/, '')
+  fn.put('n_project_path', forwardSlashPath)
+  return true
+'''
+when('fn.bool(n_find_ok)', {
+  assign('n_log', '{{n_log}}\n✓ 找到项目: {{n_project_path}}')
+  // 返回成功结果
+  assign("n_find_project_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_project_path}}","is_plan_break":"false"}')
+}, {
+  // 项目未找到，检查是否有 Git 仓库地址
+  when('fn.hasValue(git_repo_url)', {
+    assign('n_need_clone', 'true')
+    assign('n_log', '{{n_log}}\n⚠️ 未找到本地项目，需要从 Git 克隆\n仓库地址: {{git_repo_url}}')
+    // 返回成功（需要克隆）
+    assign("n_find_project_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"false"}')
+  }, {
+    assign('n_deploy_result', '❌ 未找到项目 {{project_name}}\n\n建议:\n1. 检查项目是否存在\n2. 提供 Git 仓库地址进行克隆')
+    // 返回失败
+    assign("n_find_project_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"true"}')
+  })
+})

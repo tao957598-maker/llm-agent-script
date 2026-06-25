@@ -1,0 +1,22 @@
+/*
+{
+	"title":"Simple Multi-turn Chat Agent",
+	"description":"test demo tmp",
+	"resultPlan":"n_result",
+	"parameter":[],
+	"displayOrder":0,
+	"version":4
+}
+*/
+assign("image_path","check_recognition/check_recognitio0509/check_recognitio0509_amount_figures.jpg")
+ 
+n_image_type,act_func.run?script='''
+    if (image_path.contains("image_date")) return 1
+    if (image_path.contains("image_amount_figures")) return 2
+    if (image_path.contains("image_amount_words")) return 3
+
+    if (image_path.contains("image_memo")) return 6
+    if (image_path.contains("image_payee")) return 7
+    if (image_path.contains("image_signature")) return 8
+    return 0
+    '''

@@ -1,0 +1,436 @@
+## AgentFlow 基础语法（基于简洁的groovy语法）
+// 用途：编写Agent流程脚本，由引擎解析执行。脚本经预处理为执行图(Plan)再调度。
+// 【生成 Agent 前必读】agent_grammar_paradigm.txt（范式、决策树、反模式、内嵌范例）。本文件为 API 手册，生成入口须先读 paradigm 再查本文件。
+// 【范式·摘要】Agent编程=LLM推理：tpl/psr/vrf+工具+act_plan.run；when/foreach仅流程。不建议act_func?script代推理/分支。script用于：确定性逻辑、字符/格式处理、schema 合并。
+// AgentFlow 是 Groovy 风格的受限 DSL，不是通用 Groovy；闭包内仅允许 DSL 语句，建议确定性 Groovy/JS 用 act_func.run。
+// 续行：单条语句可用 \ 做换行续写，\ 结尾的行会与下一行拼接为一条语句。
+// 变量来源：脚本内变量可自定义或来自顶部Agent定义块 /*{ "parameter":[...] }*/，如 userInput。
+// 变量语义：变量是运行时值而非文本替换宏；DSL不声明类型，解析器在写入、能力调用、模板渲染等边界优先保留结构化语义并自动适配类型，业务信息缺失由agent补充。
+// 术语：Plan=一条 expression 或等价链；n_xxx=plan name（步骤名/结果变量名），可用 {{n_xxx}} 引用步骤结果，也可作为步骤位置标记用于 act_flow.go 跳转；tpl_xxx=define 定义的 LLM 模板；sys_=系统内置变量。
+// 参数解析：callpath 参数值默认解析 {{xxx}}；统一的语义参数（_ 前缀，引擎消费）：_plainProperty=p1,p2 指定字段保持字面量；_suppressFailure=true 失败不抛异常、封装 success 供 when 判断；_parameters={{var}} 或内联 JSON 可整包展开为子 Agent 顶层形参（等价 act_plan.run 的 parameters=JSON）。
+// 不同类型的引号可内嵌，三引号有2种：'''和"""，可用于多行字符串。不支持转义符
+
+### 变量与内联表达式
+// {{xxx}} 等同于 FreeMarker 的 ${}，是内联表达式语法，平台用 {{}} 替代了 ${}
+// {{}} 内是 FreeMarker 表达式语法，支持简短逻辑判断与内置函数
+// {{}} 中可直接使用 fn.map()、fn.json()、fn.list()、fn.str()、fn.equals、fn.startWith()、fn.contains()、fn.bool()、fn.hasValue等工具方法(参考agent_grammar_fn.txt）
+// {{}} 中禁止引入 fastjson/groovy.json 等外部 JSON 包，请使用 FunctionUtil 封装的方法
+// FreeMarker 不支持 ?.、?:、Java 方法调用（如 .equals()/.trim()/.toUpperCase()）
+// 字符串处理请使用 ?trim、?upper_case、?contains 等内置函数。
+// 无参数时省略括号（推荐无参省略，如 ?trim 等价于 ?trim()），有参数时保留括号（如 ?contains("xxx")）
+// 短逻辑示例
+
+assign('n_upper', '{{(n_name!"")?upper_case}}')          // 字符串转大写
+assign('n_has_value', '{{n_data??}}')                    // 判断变量是否存在
+assign('n_trim_equals', '{{(n_status!"")?trim == "SUCCESS"}}')  // 去空格后精确匹配
+assign('n_default', '{{n_value!"default"}}')             // 空值默认值
+assign('n_size', '{{(n_list![])?size}}')                 // 集合大小
+assign('n_contains', '{{(n_text!"")?contains("error")}}') 或 assign('n_contains', '{{fn.contains(n_text,"error")}}') // 子串判断（注意：精确匹配请使用 ==）
+assign('n_math', '{{((n_price!0) * (n_quantity!0))}}')   // 数学运算
+assign('n_ternary', '{{n_flag?string("yes", "no")}}')    // 三元判断（布尔转字符串）
+
+// act_func?script 示例：确定性校验(非业务推理)；groovy语法，正则需转义，少用正则
+n_result, act_func?script='''
+  def output = fn.str(n_input) ?: ""
+  def valid = output.trim().equals("VALID")
+  fn.put('n_is_valid', valid)
+  return valid
+'''
+
+### 引号嵌套规则
+// 多层引号嵌套时，禁止嵌套相同的引号：
+//   单引号 '...' 里面不能再放单引号 '
+//   双引号 "..." 里面不能再放双引号 "
+// 最佳实践：使用**内双外单**组合
+// ✅ 正确：内双外单
+act_memory.assign?var=n_result&value='{{n_cmd == ""? n_cmd: n_cmd2}}'
+assign('n_msg', '结果：{{n_status.equals("OK") ? "成功" : "失败"}}')
+
+// ❌ 错误：相同引号嵌套
+// act_memory.assign?var=n_result&value="{{n_cmd == ''? n_cmd: n_cmd2}}"  // 报错
+// assign('n_msg', "结果：{{n_status.equals('OK') ? '成功' : '失败'}}")   // 报错
+
+// 变量与数据结构
+// assign：首个左值既是写入 memory 的变量名，也是这条 assign 表达式在图中的 plan 名（同一语句多对 var,value 时仅首左值命名一条 plan）。
+//   历史：fn.queryMessages=该plan原始消息；fn.queryRelevantHistory=按问题取相关历史包；fn.queryInstanceVarValues=同request各实例变量快照。
+// value按JSON、字符串自动解析
+assign('var', 'num')
+// value为number/boolean时：用 fn.raw 保持类型写入，否则按字符串解析。
+assign('num', '{{fn.raw(100)}}')
+// 引用变量
+assign('referenced_value', '{{var}}')
+// 使用%{}%语法支持嵌套模板（fn为内置函数，freemarker表达式解析，参见：agent_grammar_fn.txt）
+assign('nested_template', "{{fn.when('condition', '今天是2024-10-03', '今天是%{fn.today()}%')}}")
+// 列表：结构化JSON自动解析为List
+assign('list', '["a","b"]')
+// JSON/Map对象：结构化JSON自动解析为Map
+assign('json', '{"name":"jack"}')
+// 链式定义(变量1,值1,变量2,值2)
+assign("product", "oa",
+		"requirement", '''无
+		''',
+		"requirement_score", ">=7")
+// 给对象的属性赋值（map 语法）
+assign("user.name", "user1")
+// 计划表达式：URL格式，带模板的callpath。rag(检索)→tpl(LLM模板)→psr(解析)→vrf(校验执行)→act(直接执行)，psr或vrf环节出错，最多重试3次，提升LLM的成功率；可结合sys_hint进一步增强成功率
+expression('rag_xxx', 'tpl_xxx', 'psr_xxx', 'vrf_xxx', 'act_xxx', 'act_xxx2')
+// 简写：一行仅含 rag_/tpl_/psr_/vrf_/act_/n_ 逗号列表时可省略 expression(...)
+rag_xxx, tpl_xxx, psr_xxx, vrf_xxx, act_xxx, act_xxx2
+// 通过 memory 工具赋值（简写语法）。查询参数：var 目标变量名；value 待写入模板（可 {{xxx}} 引用变量并自动适配类型），省略则从最近一次步骤结果读取；type 可选，用于前端的展示类型（CodeBlockEnum.code，如 json、md、mmd、html、link、plan_update）；global 可选，是否写入全局记忆，默认 false
+act_memory.assign?var=result&value=xxx
+act_memory.assign?var=md_data&value={{tpl_md_output}}&type=md&global=true
+// 拼接值val1,val2...为list，给到变量var
+append('var', 'val1', 'val2'...)
+// 记录日志
+log('log info {{var}}')
+
+### 计划表达式
+// 完整的Plan事务调用：读取知识库，调用LLM输出数据，抽取markdown内容，并检查LLM输出是否符合要求，出错最多重试3次，最终保存为md_data变量，并在界面中的显示格式为markdown(注：最后的\为换行转义字符)
+rag_kb.select?name=kb_md_example, tpl_md_output, psr_md, vrf_flag?value='{{fn.when(fn.hasValue(sys_last_result,"optional_sub_property_name"),"true","false")}}',\
+	act_memory.assign?var=md_data&value={{tpl_md_output}}&type=md
+
+### 控制流
+when('条件', { ... })
+elsewhen('条件', { ... })
+foreach ('optional_var_name', 'list|condition', { ... })
+// 异常处理
+on_failure({ ... })
+// 条件判断，{{}}中为freemarker表达式. 支持 %{var}% 语法，将变量展开再做条件判断。
+when('{{product_id == compared_product_id}}', {
+	assign("score", "9")
+})
+// when支持if-else（省略{{}}不推荐）
+when('list?size gt 0',{
+	assign("score", "9")
+},{
+	assign("score", "10")
+})
+elsewhen('{{condition}}', {
+	assign("score", "11")
+})
+// elsewhen支持else（无参数时）
+elsewhen({
+	assign("fallback_score", "12")
+})
+// for 循环，基于普通list数据，或task list数据. n_plan_tasks为json结构, 包含属性：index, item, size
+foreach('n_plan_tasks', 'llm_data', {
+    // index 下标
+    assign('loop_task_index', '{{n_plan_tasks.index}}')
+    // 下标对应内容
+    assign('loop_task_item', '{{n_plan_tasks.item}}')
+})
+// 结合条件构建ReAct思维链 (tpl_react可使用fn.toolset(...)的工具描述，或自定义JSON描述)
+foreach('n_plan_analysis', 'fn.get("tpl_react.name")! != "finish" && n_plan_analysis.index < 5', {
+	// 思考和执行。run可无参，等价为code={{tpl_react.code}}&parameters={{tpl_react.parameters}}&answer={{tpl_react.answer}}
+	tpl_react, act_plan.run
+})
+// 获取汇总的非空List结果
+assign('n_summary', '{{n_plan_analysis.validSummary}}')
+
+### FutureValue（async）
+// async=true 时步骤结果为异步句柄。返回处：act_plan.run|runPlan?async=true；agt_*?async=true；act_ac.exec?async=true（仅 Native/HTTP）。SSE 用 waitClientResult。
+// 取终值（阻塞）：{{n_x.value}} 或 fn.wait(n_x)（超时放弃并杀 Native 子进程）。看进度：{{n_x.peek}}。Native async 可由引擎 cancel / timeout 终止子进程。判断状态（不阻塞）：{{n_x.ready}}。取消任务：{{n_x.cancel()}}。
+// 批量：foreach 内配合 act_plan.convert?maxConcurrent&maxWaitSeconds
+agt_sub?async=true
+assign('log', '{{agt_sub.peek}}')
+assign('r', '{{agt_sub.value}}')
+
+### 函数工具（act_func）
+// 见【范式·重点】；业务推理/工具选择不建议写script。更适合：SQL/临时表、fn.put/get、确定性数据处理。
+// 执行groovy脚本；可读agent变量；fn（fn.put 写回 agent，fn.run(callpath) 嵌套执行agent脚本）与 sql。sql 命名/语义贴近 JDBC PreparedStatement：占位符一律 ?、按参数顺序绑定；禁止多语句分号批处理。
+//   sql.query(sql, ...params) → List<Map<列名, 值>>，行类型为有序 Map。仅只读 SELECT 或 WITH...SELECT；经知识库结构化算子或直连校验。
+//   sql.update(sql, ...params) → int 影响行数。写操作仅允许作用域内已登记的临时表（本请求 createTempTable 等产出的 temp_* 等规则由 TempTableRegistry 约束），否则拒绝/记日志。
+//   sql.createTempTable([logicalName,] sourceSql, ...params) → String 物理表名。sourceSql 为只读查询（CREATE TABLE t AS <select>）或（若配置允许）合法 CREATE TABLE 文本经改写挂到物理名；缺省 logicalName 时内部自动名。
+n_result, act_func.run?script='''
+	list.add('val3')
+	fn.put('list2', new java.util.ArrayList<>())	// 将list2写入到agent
+	def verified_sql = fn.run('act_plan.check?type=sql&script="select * from some_table where id=?"').result
+	def t = sql.createTempTable('new_table', verified_sql, 1)
+	fn.get('list2')
+'''
+// 支持%{}%语法，展开变量后执行，基于vrf激活最多自动重试3次
+n_result, tpl_gen_script, psr_js, vrf_func.run?script='%{sys_last_result}%'
+// 调用javascript脚本； 能力与groovy相同
+act_func.run?js="""
+	console.log(n_result);
+"""
+
+### 统一资源管理工具（act_artifact），对文件、db 等进行统一操作
+// filepath：先按英文逗号拆成多段，再逐段处理。每一段 trim 后若整段可解析为 long，则对该段调用 searchKbSpaceName 还原为工作区路径；非 long 段原样当作路径。long 段默认按知识文件 id；仅 search/searchRows/list 可传 kbIdsAreFolderIds=true，使 long 段按目录/空间 id 解析。
+// 例外：write、append、replaceLines 的 filepath 仅允许单段（不得英文逗号多路径）。syncState 可多段，多段时返回 List。
+// SQL 库表挂载 filepath：system/db/sql/{schema}/{tableName}，{…} 为占位；
+// write/append/delete/syncState/triggerSync/replaceLines/readRows 等仅文件语义：其中出现的 long 段一律按文件 id 解析（无 kbIdsAreFolderIds 参数）。可选 maxLength（默认 10000）：限制返回文本长度，更长需显式传入
+// read：多段逗号拼接。文件=读正文；工作区文件不存在时返回空串（缺省值用 when+assign）。工作区目录且=第一层文件逐个读并拼接（目录展开与多段均带「=== FILE: path ===」头）。表/preferRepresentation=table→表 JSON。
+// format=auto|markdown|map|matrix|matrices|raw（auto：xlsx→md、表→map）；format=raw：直读文件，文本=UTF-8，二进制=data URL(base64)。段尾:起始-结束行简写；全局start/endLine则禁用目录展开。maxLength=内容最大总长
+n_text_content, act_artifact.read?filepath='agt/agt_core_test.txt'
+n_url_content, act_artifact.read?filepath='https://www.baidu.com?a=1'
+n_mixed_read, act_artifact.read?filepath='agt/,agt/agt_core_test.txt'
+n_lines, act_artifact.read?filepath='agt/agt_core_test.txt'&startLine=1&endLine=10
+// filepath 每段末尾可写行范围简写：: + 起始行-结束行（1-based），等价于对该段单独传 startLine/endLine
+n_lines, act_artifact.read?filepath='agt/agt_core_test.txt:1-10'
+// 结构化读与查：返回 List<Map>（需具表表示）；可选 column、where(JSON)、maxSize、order；多路径时按顺序合并行列表
+n_rows, act_artifact.readRows?filepath='system/db/sql/schema_xxx/table_xxx'&column='id,user_id'&maxSize=1&where='{"id":"1"}'
+// 统一检索：FileSearchResult 列表；目录命中=真实路径+行；表/向量/图多在 lineContent 的 JSON。preferRepresentation 空=自动短路：图(cypher)→表→向量→目录；table|vector=只走该分支。linesBefore/After=上下文行数
+// query：目录=按行匹配，关键词或正则，配 ignoreCase；向量=自然语言；表=主要靠 where
+n_search_result, act_artifact.search?query='keyword'&filepath='agt/'&maxResults=50&ignoreCase=true&linesBefore=2&linesAfter=2
+// searchRows：返回 Map 行（表/向量/图）；目录无行。preferRepresentation/多路径与 search 同
+n_row_hits, act_artifact.searchRows?filepath='agt/doc.krd.json'&query='需求描述'&preferRepresentation=vector&maxResults=20&isRerank=true&bm25Weight=0.3
+// 写：data 为文件全文；或 unified diff（---/+++@@，会先读原文件再打补丁）；或 <<<<<<< SEARCH/=======/>>>>>>> REPLACE 块（同上）；或为 List<Map> JSON/对象（表 import 或 update 时配合 where、columnValues）；
+act_artifact.write?filepath='{{file_path}}'&data='{{file_content}}'
+// 追加：语义同 write 的 data；
+act_artifact.append?filepath='{{file_path}}'&data='{{more_content}}'
+// 按行替换（1-based；常与 search 命中行号联用）；data 为替换用内容
+act_artifact.replaceLines?filepath='agt/xxx.txt'&startLine=3&endLine=3&data='new line content'
+// list：列路径（类ls）；目录=子项；单文件存在则仅该项；默认路径不显式含.index则过滤.index侧车；多段合并去重。maxDepth/maxResults/maxLength
+n_file_list, act_artifact.list?filepath='agt/'&maxDepth=1&maxResults=500
+// describe：单JSON；files[]=artifact+linkedQualifiedTableKeys；tableDefinitions[]=qualified去重；多段/目录maxDepth聚合。system/db/sql或空filepath+tableKey仅tableDefinitions。tableKey过滤绑定
+n_artifact_desc, act_artifact.describe?filepath='reports/weekly.md'
+// 删除；可多id/路径批量
+act_artifact.delete?filepath='agt/obsolete.txt'
+// 判断资源是否存在：文件 or system/db/sql/{schema}/{table}
+n_exists, act_artifact.exists?filepath='agt/agt_core_test.txt'
+// 索引流水线进度（needOcr/ocrDone/textChunkDone/structureChunkDone/textVectorDone/structureDone/dbPersistDone 等）；filepath 可多段，多段返回数组
+n_file_index_status, act_artifact.syncState?filepath='agt/xxx.txt'
+// 触发索引/向量化等；底层默认 vector；可多 id/路径批量。forceSync=true 时先删index再全量重建；ensureKrd=true 时自当前目录向父级查 KRD，无则在资源最近目录写入缺省 .krd.json 后再同步
+act_artifact.triggerSync?filepath='agt/xxx.txt'&forceSync=true&ensureKrd=true
+
+### Python工具
+// python临时文件写入
+n_file_info, act_python.writeTmp?requirement='python文件实现的需求'&pythonCode='{{tpl_llm_gen_code}}'
+// python正式文件写入（可选：subfolder, 如需指定文件名，参考act_artifact.write）
+n_file_info, act_python.write?requirement='python文件实现的需求'&pythonCode='{{tpl_llm_gen_code}}'&subfolder='agt_core_code'
+// python文件的执行
+act_python.run?filepath='{{n_file_info.kbspath}}'&argument='optional ArgumentParser parameter'
+
+### 流程工具
+// 跳转指定位置标记，同时支持内置标记：this(重新执行当前步骤)，next(下一步)，break，continue，end(跳转到agent的结束位置), exit(终止整个流程)
+act_flow.go?plan=next
+// 等待3秒
+act_flow.wait?second=3
+// 人与Agent的交互，展示UI页面(name来自UI模块的定义)，并暂停流程等待用户的输入
+n_expense_form, act_flow.page?pageCode='expense_form'&params=
+// 推送内置确认页(sys_tool_param_confirm)，可选 toolType+toolCode 带出工具参数；用户经 /chat-doc/submit 后恢复执行
+n_tool_confirm, act_flow.pageConfirm?confirmTool=false&params=
+// LLM通过task()示范结构告诉引擎跳转节点（等价于tpl_plan_selector+act_flow.go）
+define('tpl_plan_selector', '''
+用户输入为：{{userInput}}
+直接进入下一步，JSON格式返回：{{fn.task().plan('next')}}
+需要回到之前读文件的步骤，JSON格式返回：{{fn.task().plan('n_file_info')}}
+结果错误，需要重新思考当前步骤，JSON格式返回：{{fn.task().rerun(true)}}
+{{fn.chatFlag(5)}}
+''')
+// 捕捉所有前序异常,将当前流程转为正常状态。（可使用act_flow.fail再次将流程转为异常状态）
+on_failure({
+	assign("result", "{{sys_failure_task.result}}")
+	// goto语句，跳转到代码结尾
+	act_flow.go?plan=end
+})
+
+### 计划工具
+// markdown/多行文本转任务列表；子任务多缩进 2 空格或 1 tab；行首 [ ]/[x]；有子项的父行不执行
+// 执行条件：任务下 when:，下一级列表写「- 前置任务名 success|failure」；遍历到该叶子时判定，不满足则跳过（视为成功继续），不改动叶子列表
+n_plan_tasks, act_plan.parse?task='
+# markdown 格式的任务规划（可多层级嵌套）
+- [x] 已经完成的任务
+- [ ] 阶段一：分析需求
+  - [ ] 收集输入
+  - [ ] 整理结论
+- [ ] 阶段二：执行变更
+  - [ ] 编写脚本
+  - [ ] 运行验证
+    when:
+      - 编写脚本 success
+  - [ ] 失败回滚
+    when:
+      - 运行验证 failure
+'
+// 将变量转换为 plan list，供 foreach 使用。必填：var=变量名。可选：maxConcurrent=同时未完成的异步任务数上限（≤0 不限制）；maxWaitSeconds=为单个任务的最大等待秒数（≤0 用系统默认）
+n_plan_steps, act_plan.convert?var=steps&maxConcurrent=5&maxWaitSeconds=60
+// 设置plan(var+index)的执行agent与参数；index空=当前plan，parameter为agent需要的参数串
+act_plan.assignAgent?var=n_plan_tasks&index=1&executor=agt_findelement&parameter='step={{n_plan_tasks.item}}'
+// 获取执行某个plan的agent名称
+n_executor_agent, act_plan.agent?var=n_plan_tasks&index={{n_plan_tasks.index}}
+// 执行 plan（async 见 FutureValue 节）
+n_val, act_plan.runPlan?var=n_plan_tasks&index=1&executor=agt_test_selenium&parameters='test_no={{test_no}}&step_index={{n_plan_tasks.index}}'&async=true&_suppressFailure=true
+// 执行临时的agent脚本(可使用LLM生成agent script)
+act_plan.runScript?script='agent script'&parameters='optional parameters'
+// 动态调整plan list中的内容，operation包括：add/update/remove/switch
+act_plan.change?var=n_plan_tasks&plan={{tpl_screenshot_react.step}}&operation={{tpl_screenshot_react.operation}}&index={{n_plan_tasks.index}}
+// 执行工具（async 见 FutureValue 节；无参时尝试从 sys_last_result 提取）
+act_plan.run?toolType=API&code={{tpl_choose_tool.apiCode}}&parameters={{tpl_choose_tool.parameters}}&async=true
+// 记录经验，供模板中 {{sys_hint_agt}} 使用。参数：feedback 必填；success/thought 可选
+act_memory.addAgentHint?feedback='xxx'
+// 读取变量，与{{xxx}}效果等价
+act_memory.retrieve?var='xxx'
+// tpl_gen_script 为带 {{sys_hint}} 的模板。执行 tpl→check 校验语法；通过则结束，不通过则错误写入 sys_hint 并回到 tpl 重试最多 3 次。
+// type=agent_groovy/groovy/js/sql/query_sql(只读SQL) 做语法检查；script支持%{}%语法；checkTool=true 校验工具/模板/agent 是否存在；默认失败走 on_failure，若需在 plan 内用 when('{{n_xxx.success}}') 自行判断，传 _suppressFailure=true。
+tpl_gen_script, psr_groovy, vrf_plan.check?type=agent_groovy&script={{sys_last_result}}&checkTool=true
+
+### 知识库及知识空间工具
+// 表结构可参见defineKB?tableInfo中的json字段
+// 判断 KB 表是否存在：优先使用 act_artifact.exists?filepath='system/db/sql/{schema}/{tableName}'
+// 定义表结构，已经存在则更新
+act_kb.defineKB?tableInfo='{"schema":"auto_test","tableName":"kb_user_profile","comment":"用户信息表","columnInfos":[{"name":"user_id"}]}'
+
+// 关于默认schema：自动化测试使用auto_test，知识库使用：knowledgebase，平台库使用：llm_agent
+// 数据转换为List格式：将step_list这个List<String>转换为List<Map>.可选参数storeColumn的含义为:step_list中的元素转存到key为step的map上, 可选参数paraeters的含义为：给每个map添加固定key和value，即test_no和system_name
+n_map_list, act_kb.convert?data={{step_list}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}","system_name":"{{system}}"}'
+// 批量导入数据到知识库,data为List<Map>结构
+act_kb.importData?name='kb_user_table'&data='[{"user_id":"101"}]'
+// 更新知识库的数据
+act_kb.update?name='kb_user_table'&columnValues='{"user_id":"3"}'&where='{"id":"1"}'
+// 更新知识库数据
+act_kb.merge?name='kb_user_table'&columnValues='{"user_id":"30"}'&where='{"id":"1"}'
+// 删除知识库数据
+act_kb.delete?name='kb_user_table'&where='{"id":"1"}'
+
+// 结构化sql查询，解析到知识库中的数据（注：所有用户提交的文档,URL数据，都会被立即解析并被分页存储到kbs_doc_page_parse表中）
+n_data,act_kb.selectBy?sql='SELECT COALESCE(analysis_content, content) AS content FROM kbs_doc_page_parse WHERE documentId IN ({{kbSpaceFileId}}) order by page asc'
+// 基于向量库，查询requirement(知识库的name与返回的column可选，默认name为kb_spaces_knowledge_section)
+act_kb.search?requirement="xxx"&name='kb_user_table'
+// 基于QA向量库，查询requirement，返回匹配的答案(kb_qa_test必须为含有字段question和answer的QA表)
+act_kb.searchQA?requirement="xxx"&name='kb_qa_test'
+
+// 获取系统定义配置的环境变量
+n_jira_token, act_kb.readCfg?type='jira.token'&key='token_key'
+// 获取个人偏好：type=user.preference 底层按当前登录 userId 查询；key=lang 返回界面语言
+n_user_preference_lang, act_kb.readCfg?type='user.preference'&key='lang'
+
+// act_kbs：知识空间,含向量检索、分段读文件、解析页、RAG 引用等；paramData 为 KbSearchParam：question、folderName、folderIds、knowledgeIds、folderPath；其中：folderName、folderIds、knowledgeIds 三选一。
+// 向量/语义检索知识片段，paramData+similarity、isRerank、bm25Weight、top、tag
+n_kb_code, act_kbs.searchQuestion?paramData={{fn.json('question, userInput, folderPath, "/Coding/agent"')}}&similarity='0.5'
+
+### API工具(系统提供大量API，更多API请使用act_api.search查询)
+// 调用API: name是API名称,parameters是json格式的api参数（等价为act_plan.run?toolType=API&code=xxx）
+n_result_issue_data, act_api.run?name="jira_create_issues"&parameters='{"jira_config":{{jiraConfig}},"issues_data":{{issuesData}}}'
+// 按 query 检索可用工具（名称、描述等），可配合LLM选用工具， 然后act_plan.run
+// toolType/excludeToolType 参数规则（不区分大小写）：
+// 1. 空值/空白：等同 ALL。
+// 2. 单值：如 API、TABLE、MCP。
+// 3. 多值：支持,分隔；也兼容前端数组字面量风格（如 "API,TABLE"）。
+// 4. 别名/归并：TABLE/DB_TABLE -> DB_TABLE；SCRIPT -> [PYTHON,GROOVY,JS,JAVASCRIPT,FUNCTION,UI,REPORT]。
+// 5. ALL 兜底：多值中出现 ALL 时按全部类别检索。
+n_api_list, act_api.search?query='用户问题'&size=5&toolType=AGENT&excludeToolType=TABLE
+// 按 query 检索工具集（toolset）候选；注意方法名 searchToolset 中 set 为小写。返回 toolSetName/toolSetCode/description/score。
+n_toolset_list, act_api.searchToolset?query='用户问题'&size=5
+// 定义并保存工具集；toolcodes 为逗号分隔工具编码，运行时自动定位每个 toolcode 的 toolType；personal=true 时保存为个人工具集。
+n_define_toolset_result, act_api.defineToolset?code='order_query_toolset'&name='订单查询工具集'&description='订单查询相关工具'&toolcodes='agt_order_query,order_detail_api'&personal=true
+
+### Agent Client工具
+// act_ac.list/describe；exec 执行。async 见 FutureValue（Native/HTTP）；SSE 用 waitClientResult
+n_ac_list, act_ac.list
+n_ac_exec, act_ac.exec?acName='sandbox'&type='bash'&code='''echo {{msg}}'''&parameters.msg='hello'&timeout=60
+n_ac_async, act_ac.exec?acName='Native'&type='python'&async=true&code='''print("ok")'''
+// SSE：code=RPACmdInfo 指令；脚本 RunScript/RunDynamicScript/...；页面 CollectPageInfo/...；有 name 用 parameters.name
+n_ac_rpa, act_ac.exec?acName='ac-client'&type='python'&code='''CollectPageInfo'''&parameters.name='LoginPage'
+
+### JOB工具
+// 创建并触发：data 为 JSON（含 agentName、jobDesc、cron/cronText、parameters、notifyStrategy、triggerStatus、executorTimeout 等），isOneOffTask 是否一次性，isOnlyAdd 是否只新增（false=存在则更新）
+assign('jobData','{"agentName":"{{n_param_confirm.name}}","jobDesc":"ChatDocJob","notifyStrategy":"全部通知","parameters":{{n_param_confirm.confirmedParams}}}')
+n_tool_exec, act_job.createAndTrigger?data={{jobData}}&isOneOffTask=true&isOnlyAdd=true
+// 查询当前用户 Job 列表：triggerStatus 可选，如 RUNNING/STOP，空或省略则不过滤；返回列表（每项含 id、jobDesc、triggerStatus 等）
+n_job_list, act_job.listMyJobs?triggerStatus=RUNNING
+// 按 id 立即触发一次：jobId 为 Agent Job ID，parameters 可选（JSON 字符串）
+act_job.triggerJob?jobId={{jobId}}&parameters='{}'
+// 启用/暂停/删除：jobId 为 Agent Job ID
+act_job.enableJob?jobId={{jobId}}
+act_job.disableJob?jobId={{jobId}}
+act_job.deleteJob?jobId={{jobId}}
+
+### LLM提示词的定义（模板名称唯一）与调用（与定义完全一致）
+// psr_xxx(解析)：从 LLM 输出提取代码块或全文。psr_json（缺省解析）/psr_md/psr_all；多类型用下划线(psr_json_python)依次提取，合并到 JSON 用 combine_类型=属性。可选校验：required=逗号分隔的必填字段，复杂校验建议直接使用 vrf_func.run?script=xxx 实现。可选配置：xmlFlag=xml标签名，用于增强识别标记
+tpl_call_mcp, psr_json
+// psr_ref：RAG 场景，将输出中的 ref（<div id="a" type="1" num="n"/>格式）标签转为 UI 引用块
+tpl_rag_answer, psr_ref
+// 内容有www.baidu.com这种url会输出超链接标签
+tpl_rag_answer, psr_ref?urlLinkEnabled=true
+
+// LLM选择MCP工具，动态执行工具，获取最终结果（_asPlanResult表示它充当表达式结果）
+n_result, tpl_call_mcp, act_plan.run?_asPlanResult=true
+// 定义大模型提示词：支持解析变量（比如：来自agent参数userInput）、fn函数（比如：日期函数；mcp工具函数（fn.toolset已经包含工具列表的定义、输出格式的要求，无需再写））
+define('tpl_call_mcp', '''
+分析用户问题，选择工具及参数
+#用户问题: 
+{{userInput}}
+
+#补充信息
+当前时间为：{{fn.now()}}
+
+{{fn.toolset('browser_use')}}
+''')
+
+// 变量加!表示可为空，不告警；非空变量(无!)为空时会报错
+// 单轮define：sys_hint=plan级经验、sys_hint_agt=agent级经验(自动注入)；技能用fn.skill(按名)或fn.querySkill(语义)
+// 提示词配置：模板开头可用 /*{ "key": "value" }*/ 的 JSON 块配置属性。常用项：stream(流式输出，默认true)、image(是否必须为图像模型，默认false)、llmType（逗号分隔的多模型类型）、scheduleMode（多模型模式下：vote=并行投票/fallback=顺序后备链，默认 vote）、temperature、responseFormat 等；未配置时使用agent配置或系统默认。
+define('tpl_md_output', '''
+/*{
+	"scheduleMode": "fallback",
+	"llmType":"alias.code,alias.highquality,deepseek-chat"
+}*/
+返回markdown结果，不要解释
+```markdown xxx ```
+
+{{python_code!}}
+
+#单轮塞历史：原始消息
+{{fn.queryMessages("n_history_data", -10, 10)}}
+
+#变量快照
+{{fn.queryInstanceVarValues("n_history_data")}}
+
+#避免常见的转换问题
+{{sys_hint}}
+{{sys_hint_agt}}
+''')
+// 多轮消息：用户输入变量 + chatFlag/chatContextFlag标记，标记必须最后一行；引擎按同request+同plan日志组装 messages，不手写 history。
+// chatFlag=最近N轮原始user/assistant；chatContextFlag=最近N轮 + 本轮临时相关历史（按当前问题召回同request相关历史；历史重放不会重复注入上一轮临时上下文）。
+// chatContextFlag适合长对话/跨agent。五参同chatFlag；八参: contextQueryVar(memory键→取其值为检索query)、traceVarKey(同request多实例聚合→structuredTrace附文)、maxContextChars(动态上下文总字符预算)。
+// userPromptVar=参数名(推荐变动参数，逗号=多参数，空=全部参数JSON)或plan名；assistantPlanName=assistant结果plan，空=当前plan输出，toolsetName为要加载的工具集(等价于fn.toolset(name))。
+// 注：图文对话模式使用：fn.chatImageFlag(...)，参数同fn.chatFlag(...)
+define('tpl_chat_bot', '''
+参考资料: {{reference_data}}
+用户的输入为：
+{{userPromptVar}}
+
+{{fn.chatFlag(systemPromptVar,userPromptVar,assistantPlanName,toolsetName,maxLength)}}
+''')
+
+### Agent 元信息与 Inner Agent
+// agent=方法：无状态，状态在框架可分离 memory。主 agent 脚本体即入口。调用 agt_xxx?p1=v1；定义 agent('agt_inner',{...})，inner 可读主 agent 变量。
+// 参数来源：脚本顶部的 /*{ "parameter":[{"name":"userInput",...}] }*/ 中 name 即脚本内变量名，如 {{userInput}}。
+/*{
+	"title":"Agent Demo",
+	"parameter":[
+		{"name":"userInput", "label":"需求", "required":true, "description":"用户输入的需求"},
+		{"name":"docContent", "label":"内容", "description":"待修改的内容"},
+		{"name":"kbSpaceId", "label":"知识空间ID", "description":"文件夹id"},
+		{"name":"kbSpaceFileId", "label":"知识空间文件ID"}
+	],
+	"version":1,
+	"resultPlan":"n_generated_result",	// plan的位置标记，格式为n_xxx，可选，默认最后一条plan
+	"discoverable": true	// 可选；省略时与 true 相同,false代表页面不可见
+}*/
+// 调用agent(存在同名inner agent时，优先调用Inner agent)(act_plan.run用于动态调用)： 后缀".test.webTest"为可选包名，它将查找test/webTest文件夹下的agt_test_steps.txt
+agt_test_steps.test?p1=v1
+agt_inner_agent?p1="{{test_item}}_{{test_item2}}"&async=true  // 见 FutureValue
+assign("n_generated_result", '{{agt_inner_agent.value}}')
+// 定义Inner agent，可传入参数p1
+agent('agt_inner_agent', {
+	assign('var1', '{{p1}}')
+})
+
+### Plan Comment（Chat界面显示控制）
+// 以 // 开头的注释，除说明外，还可控制 Chat 展示（仅在 LLM chat 模式生效）。无 comment，或 comment 不含下述控制前缀时，该 plan 输出默认不进入聊天展示区
+// 完整格式：// [层级] [可编辑] [显示区域] 实际注释文本
+//   层级：# / ## / ###（最多3级）；无 # 表示普通 plan
+//   显示区域：
+//     ^  首个回应（initial chat plan）-> 首个回应区域
+//     $  结果回应（end chat plan）-> 结果显示区域
+//     无 ^/$ -> 明细显示区域（或默认区域）
+//   实际注释文本：用于展示说明，支持模板变量（如 {{userInput}}、{{n_plan.index}}）
+// 常见写法：
+//#  二级内可改为 //## / //###（仅层级）
+//^   首个回应
+//$   结果回应
+//##^ 用户首句回复（2级 + 首个回应）
+//## 当前步骤：{{n_plan.index}} / {{n_plan.size}}（动态 comment 示例）

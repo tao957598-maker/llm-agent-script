@@ -1,0 +1,27 @@
+/*
+{
+	"title":"Save Metadata And Test Data",
+	"description":"Save Metadata And Test Data to Table",
+	"parameter":[
+		{
+			"name":"testData",
+			"label":"数据",
+			"type":"textarea"
+		},
+		{
+			"name":"parameter",
+			"label":"参数"
+		}
+	],
+	"life":1000,
+	"version":1
+}
+*/
+// 获取表名
+assign('tableName', '{{parameter.kb_name}}')
+
+// 元数据agent-> 插入元数据表
+agt_generate_metadata_table?sourceData="{{testData}}"&parameter="{{parameter}}"
+
+// 取元数据表 -> 表数据agent -> 插入数据表
+agt_gen_table_data?tableName="{{tableName}}"

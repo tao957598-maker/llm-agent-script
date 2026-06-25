@@ -1,0 +1,63 @@
+/*
+{
+	"title":"Web 自动化测试(类型判定)",
+	"description":"",
+	"parameter":[
+		{
+			"name":"steps",
+			"label":"测试步骤",
+			"type":"textarea",
+			"required":true
+		}
+	],
+    "resultPlan":"n_list_tmp",
+	"tag":"Automated Testing",
+	"displayOrder":40,
+	"version":2
+}
+*/
+
+
+n_list_tmp,act_func.run?script=''' 
+def originalData = steps 
+def targetExecutors = ['OPERATION_EXECUTE_TASK', 'PAMP_EXECUTE_TASK', 'TRIPLE_TASK']
+def taskMapping = [
+    ['agt_async_verify.webTestAutomation.test', 'VERIFICATION_TASK', 'Verify'],
+    ['agt_async_verify.webTestAutomation.test', 'VERIFICATION_TRIPLE_TASK', 'VerifyTriple'],
+    ['agt_async_verify.webTestAutomation.test', 'VERIFICATION_EXECUTE_TASK', 'VerifyExecute'],
+    ['agt_async_verify.webTestAutomation.test', 'VERIFICATION_EXIST_TASK', 'VerifyExist'],
+    ['agt_test_triple.webTestAutomation.test', 'TRIPLE_TASK', 'Triple'],
+    ['agt_test_selenium.webTestAutomation.test', 'OPERATION_EXECUTE_TASK', 'Execute'],
+    ['agt_test_selenium.webTestAutomation.test', 'OPERATION_EXIST_TASK', 'Exist']
+]
+def verifyMapping = [:]
+taskMapping.each { item ->
+    def executor = item[1]
+    def thirdValue = item[2]
+    
+    if (targetExecutors.contains(executor)) {
+        def verifyThird = "Verify${thirdValue}"
+        def verifyItem = taskMapping.find { it[2] == verifyThird }
+        if (verifyItem) {
+            verifyMapping[executor] = verifyItem[1]  // VERIFICATION_EXECUTE_TASK
+        }
+    }
+}
+def result = []
+originalData.each { item ->
+    result.add(item)
+    def executor = item.executor
+    if (verifyMapping.containsKey(executor)) {
+        def verifyExecutor = verifyMapping[executor]
+        def verifyItem = [
+            "application": item.application,
+            "executor": verifyExecutor,
+            "test_no": item.test_no,
+            "step": item.step,
+            "version": item.version
+        ]
+        result.add(verifyItem)
+    }
+}
+return result
+''' 

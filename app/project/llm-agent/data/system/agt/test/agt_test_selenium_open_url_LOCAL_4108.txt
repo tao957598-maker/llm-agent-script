@@ -1,0 +1,116 @@
+/*
+ {
+	 "title": "Gen code",
+	 "description": "Gen open url code",
+	 "parameter": "current_step=当前测试步骤",
+   "parameter": [
+    {
+        "name":"current_step",
+        "label":"当前测试步骤",
+        "required": true
+    },
+    {
+        "name":"envinfo",
+        "label":"环境变量"
+    }
+   ]
+	 "resultPlan": ""
+ }
+*/
+
+
+// 判断 kbSpaceFileId 是否有值，无值则赋值为空字符串
+when('!fn.hasValue(envinfo)', {
+    assign("envinfo", "No envinfo")
+})
+// Init variable for action type
+assign('current_step',"{{current_step}}")
+
+// tpl_test_script_open_url
+n_openurl_data,tpl_test_script_open_url,psr_json_python
+when('fn.hasValue(n_openurl_data) ', {
+		assign('result','false')
+	},
+  {
+  // sys_last_result
+  assign('python_code','{{n_openurl_data}}')
+  assign('result','true')
+  }
+  )
+
+// result 
+assign('result','{{fn.json("result,result,python_code,python_code")}}')
+
+define('tpl_test_script_open_url',"""
+- Role: Python自动化测试脚本开发专家
+- Background: 用户需要一个Python函数`run(browser)`，该函数将被主模块以`module.run(browser)`的方式调用，用于实现特定的自动化测试步骤。用户提供了详细的测试脚本要求、实际页面元素信息以及来自`autotest`库的可调用函数列表。用户希望对代码进行审查，以确定是否存在需要替换的元素，并根据审查结果返回特定的JSON格式结果。此外，用户还要求`局部测试步骤`依赖于`主模块涉及的测试步骤`的前序步骤，这些前序步骤环境和条件已经准备好，根据分析结果，返回`局部测试步骤`目的，生成`局部测试步骤`的代码。
+- Profile: 你是一位精通Python编程和自动化测试的专家，对自动化测试框架有深入的理解和丰富的实践经验。你熟悉JSON格式的数据处理，能够准确地分析代码逻辑，并根据实际页面元素信息生成符合要求的测试脚本。
+- Skills: 你具备Python编程能力、自动化测试脚本开发能力、JSON数据处理能力以及逻辑分析能力。你能够熟练使用用户提供封装的方法进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。
+- Goals: 
+    1. 分析`局部测试步骤`依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤分析结果，返回前序步骤已经完成的操作. 
+    3. 审查`run(browser)`函数代码，确定是否存在需要替换的元素。
+    4. 根据审查结果，按照指定的JSON格式返回结果。
+    5. 根据JSON格式结果和`局部测试步骤`目的,决定是否生成符合局部测试步骤要求的Python代码。
+- Constrains: 
+  1.优先使用`autotest`库中封装的方法:
+    
+	- gotoPage(browser, systemName, url), 用于打开指定的页面,验证页面并等待页面加载完成,systemName为待测试系统名,url为待测试的页面地址
+	
+
+  2.生成的Python代码要求:
+    - 代码第二行需要标注`run function dynamic parameters:`: 例如输入用户名字 '''{"user":"tester"}'''
+    - 代码注释必须要用英文
+    - 生成的代码应仅包含局部测试步骤，不补充前面步骤或提前实现后面步骤的代码。
+  
+  3.run函数必须传入参数:
+    - 第一个参数必须是browser浏览器实例 例如 `def run(browser):` 
+    - 其它传入参数根据步骤自己定义参数名称
+  4.说明具体的`URL`,且URL不能是占位符,若不存在具体URL返回:
+```json
+{"result":"false"}
+```
+
+- OutputFormat: 
+    1.`局部测试步骤`位置及依赖的前序步骤
+    2.结合`补充解释`和`局部测试步骤` 返回精准指令
+    3.解释是否有具体且明确的`URL`。
+    4.有具体且明确的`URL`,生成符合局部测试步骤要求的Python代码。
+- Workflow:
+    1. 分析`局部测试步骤`位置及依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤分析结果，返回前序步骤已经完成的操作. 
+    3. 说明具体的`URL`,且URL不能是占位符.
+    4. 根据分析结果，有具体且明确的`URL`,生成符合局部测试步骤要求的Python代码。
+- Examples:
+  - 例子1：打开网页。
+    ```json
+    {
+      "type": "verifyResult_1",
+      "plan": "next"
+    }
+    ```
+```python
+# -*- coding: utf-8 -*-
+# run function dynamic parameters:
+'''{"system_name":"system_name","url":"http://xxxxx"}'''
+from autotest import *
+
+def run(browser,system_name = "system_name", url = "http://xxxxx"):
+	try:
+		success = gotoPage(browser, system_name, url)
+		if not success:
+		writeResult(False, "Failed to navigate to the specified URL: " + url)
+		return
+		writeResult(success, "Step Success Description xxxx")
+	except Exception as e:
+		writeResult(False, "An error occurred during the test: " + str(e))
+```
+	
+# 局部测试步骤为（共1步, 注意：不要自主补充前面步骤已经完成过的代码，不要提前实现后面步骤待完成的代码。如果页面已经准备好，不用再次gotoPage）：
+{{current_step}}
+
+{{sys_hint}}
+
+# 补充信息
+{{envinfo}}
+""")

@@ -1,0 +1,30 @@
+/*
+{
+	"title":"test_yi",
+	"description":"Create scheduled tasks based on user questions",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		}
+	],
+	"tag":"job",
+	"uiEntrance":"chatDoc",
+	"displayOrder":0,
+	"version":1
+}
+*/
+// 定义提示词
+assign('select_agent_prompt','''
+   角色定义：你是一个智能定时任务生成助手，擅长从自然语言对话中提取时间、任务类型和细节，并生成结构化定时提醒。 请遵循以下规则:
+   核心能力：根据agent名称或agent标题&描述，选择一个合适的agent。
+   结构化输出模板（严格JSON格式）:
+         {
+             "name": "Agent名称（如果不存在，为空字符串）",
+             "describe": "Agent标题&描述（如果不存在，为空字符串）"
+         }
+''')

@@ -1,0 +1,156 @@
+/*
+{
+	"title":"测试案例统计Agent",
+	"description":"提供多种测试案例统计查询功能",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"life":100,
+	"version":2
+}
+*/
+assign('documentId', '{{kbSpaceFileId}}')
+// 1. 根据documentId过滤数据，统计该文档的总test case数量、正反案例数量及正反比例
+n_total_stats, act_kb.selectBy?sql='''
+SELECT 
+    COUNT(*) AS total_cases,
+    SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) AS positive_cases,
+    SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) AS negative_cases,
+    ROUND(SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS positive_ratio,
+    ROUND(SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS negative_ratio
+FROM kb_gen_test_case
+WHERE documentId = '{{documentId}}' and version = "{{version}}"
+'''
+
+// 2. 根据main_module_name分组统计每个主模块的总案例数、正反案例数量及正反比例
+n_module_stats, act_kb.selectBy?sql='''
+SELECT 
+    main_module_name,
+    COUNT(*) AS total_cases,
+    SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) AS positive_cases,
+    SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) AS negative_cases,
+    ROUND(SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS positive_ratio,
+    ROUND(SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS negative_ratio
+FROM kb_gen_test_case
+WHERE documentId = '{{documentId}}' and version = "{{version}}"
+GROUP BY main_module_name
+'''
+
+// 2.1 根据design_element分组统计每个主模块的总案例数、正反案例数量及正反比例
+n_design_element_stats, act_kb.selectBy?sql='''
+SELECT 
+    design_element,
+    COUNT(*) AS total_cases,
+    SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) AS positive_cases,
+    SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) AS negative_cases,
+    ROUND(SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS positive_ratio,
+    ROUND(SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS negative_ratio
+FROM kb_gen_test_case
+WHERE documentId = '{{documentId}}' and version = "{{version}}"
+GROUP BY design_element
+'''
+
+// 3. 根据main_module_name和submodule_name分组统计每个子模块的总案例数、正反案例数量及正反比例
+n_submodule_stats, act_kb.selectBy?sql='''
+SELECT 
+    main_module_name,
+    submodule_name,
+    COUNT(*) AS total_cases,
+    SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) AS positive_cases,
+    SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) AS negative_cases,
+    ROUND(SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS positive_ratio,
+    ROUND(SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS negative_ratio
+FROM kb_gen_test_case
+WHERE documentId = '{{documentId}}' and version = "{{version}}"
+GROUP BY main_module_name, submodule_name
+'''
+
+
+// 4. 根据main_module_name、submodule_name和test_content分组统计每个测试内容的总案例数、正反案例数量及正反比例
+n_content_stats, act_kb.selectBy?sql='''
+SELECT 
+    test_content,
+    COUNT(*) AS total_cases,
+    SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) AS positive_cases,
+    SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) AS negative_cases,
+    ROUND(SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS positive_ratio,
+    ROUND(SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS negative_ratio
+FROM kb_gen_test_case
+WHERE documentId = '{{documentId}}' and version = "{{version}}"
+GROUP BY test_content
+'''
+
+
+// 5. 根据test_content分组统计每个测试内容的总案例数、平均案例数、正反案例数量及正反比例
+n_test_content, act_kb.selectBy?sql='''
+SELECT 
+    test_content,
+    COUNT(*) AS total_cases,
+    AVG(COUNT(*)) OVER() AS avg_cases_per_content,
+    SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) AS positive_cases,
+    SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) AS negative_cases,
+    ROUND(SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS positive_ratio,
+    ROUND(SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS negative_ratio
+FROM kb_gen_test_case
+WHERE documentId = '{{documentId}}' and version = "{{version}}"
+GROUP BY test_content;
+'''
+
+// 6. 汇总统计所有test_content的平均案例数、平均正反案例数量及平均正反比例
+n_summary_stats, act_kb.selectBy?sql='''
+SELECT 
+    '平均每个测试点' AS category,
+    AVG(total_cases) AS avg_total_cases,
+    AVG(positive_cases) AS avg_positive_cases,
+    AVG(negative_cases) AS avg_negative_cases,
+    AVG(positive_ratio) AS avg_positive_ratio,
+    AVG(negative_ratio) AS avg_negative_ratio
+FROM (
+    SELECT 
+        COUNT(*) AS total_cases,
+        SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) AS positive_cases,
+        SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) AS negative_cases,
+        ROUND(SUM(CASE WHEN test_type = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS positive_ratio,
+        ROUND(SUM(CASE WHEN test_type = -1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS negative_ratio
+    FROM kb_gen_test_case
+    WHERE documentId = '{{documentId}}' and version = "{{version}}"
+    GROUP BY test_content
+) AS subquery
+'''
+n_data,tpl_test_case_stats,psr_md
+// 定义与大模型交互，将6个查询结果转化为markdown格式
+define('tpl_test_case_stats', '''
+请将以下6个查询结果转化为markdown格式，包含清晰的标题和表格展示：
+
+1. 根据documentId过滤数据，统计该文档的总test case数量、正反案例数量及正反比例
+{{n_total_stats}}
+
+2. 根据main_module_name分组统计每个主模块的总案例数、正反案例数量及正反比例
+{{n_module_stats}}
+
+3. 根据design_element分组统计每个设计元素的总案例数、正反案例数量及正反比例
+{{n_design_element_stats}}
+
+4. 根据main_module_name和submodule_name分组统计每个子模块的总案例数、正反案例数量及正反比例
+{{n_submodule_stats}}
+
+5. 根据main_module_name、submodule_name和test_content分组统计每个测试内容的总案例数、正反案例数量及正反比例
+{{n_content_stats}}
+
+6. 根据test_content分组统计每个测试内容的总案例数、平均案例数、正反案例数量及正反比例
+{{n_test_content}}
+
+7. 汇总统计所有test_content的平均案例数、平均正反案例数量及平均正反比例
+{{n_summary_stats}}
+
+汇总内容,直接返回markdown格式
+''')

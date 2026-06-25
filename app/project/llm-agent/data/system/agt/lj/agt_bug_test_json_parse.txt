@@ -1,0 +1,138 @@
+/*
+{
+	"title":"agt_bug_test_json_parse",
+	"description":"测试agt_bug_test_json_parse报错-lj",
+	"parameter":[],
+	"tag":"lj",
+	"displayOrder":0,
+	"version":4
+}
+*/
+// 调用大模型  报错原因：type和后端预留的字段type冲突了，导致拿的结果不是String。后端需要命名其他字段
+// n_json_data,tpl_gen_req_json,psr_json
+
+
+// 定义提示词
+define('tpl_gen_req_json', '''
+- 需要返回的内容：
+{
+  "page": 4,
+  "documentId": "252636466017435648",
+  "title": "INVESTMENTS IN ASSOCIATES (Continued)",
+  "section": "Other",
+  "type": ["definition", "other"],
+  "isFunctional": "false",
+  "description": "Provides summarised financial information for APT Mobile associate, including balance sheet items, income statement figures, and reconciliation to Group's investment carrying amount. Also includes aggregate information for other immaterial associates.",
+  "importantContent": "Summarised financial information of APT Mobile, adjusted for any differences in accounting policies, and reconciled to the carrying amounts in the consolidated financial statements... Gross amounts of the associate's Current assets 647,612 836,657 Non-current assets 5,497,355 5,537,724 Current liabilities (1,337,697) (915,624) Non-current liabilities (2,832,776) (3,233,788) Equity 1,974,494 2,224,969 Revenue 528,324 456,761 Loss from continuing operations (197,670) (195,013)... Group's effective interest 30% 30% Group's share of net assets of associate 592,348 667,491 Carrying amount in the consolidated financial statements 572,920 646,725",
+  "keywords": ["associates", "financial information", "APT Mobile", "consolidated financial statements", "carrying amount", "effective interest", "net assets"],
+  "notes": "Text, includes financial tables with comparative data for 2023 and 2022"
+}
+
+- OutputFormat: 仅输出markdow JSON 格式对象，结构一致
+
+- 输出JSON 示例:
+```json
+  {
+    "page": 6,
+    "documentId": "249384817481760768",
+    "title": "Customer Due Diligence Requirements",
+    "section": "Requirement",
+    "_type": ["requirement", "regulation"],
+    "isFunctional": "true",
+    "description": "Defines functional obligations under AMLO law, covering KYC, identity screening, and CDD enforcement.",
+    "importantContent": "All DNFBPs and TCSPs must establish due diligence processes under Cap.615, including identity verification, ongoing monitoring and AML measures...",
+    "keywords": ["CDD", "KYC", "AMLO", "Cap.615", "DNFBP"],
+    "notes": "Markdown, includes regulation table and acronym glossary"
+  }
+``` 
+''')
+// 真实数据
+//assign('n_data',"[{\"raw_content\":\"111111111112\",\"content\":\"111111111112\",\"meta_data\":{\"page\":\"1\",\"title\":\"每日環球市場速評\",\"keywords\":\"[\\\"ADP\\\",\\\"ISM\\\",\\\"美聯儲\\\",\\\"國債\\\",\\\"油價\\\",\\\"美元指數\\\",\\\"歐元\\\",\\\"日圓\\\",\\\"PPI\\\",\\\"CPI\\\"]\",\"description\":\"This page is a daily global market commentary from Bank of China (Hong Kong), dated 6/11/2025. It summ.\"}}]")
+// 模拟非正常数据
+assign('n_data',"[{\"raw_content\":\"111111111112\",\"content\":\"111111111112\",\"meta_data\":\"#page 1\"}]")
+
+ n_update_data,act_func?script='''
+    List<Map> items = new ArrayList();
+    for(int i = 0; i < n_data.size();i++){
+        def data = n_data[i];
+        data.put("status", "1")
+        data.put("update_time","now")
+        data.put("page",data.page +"")
+        if(null != data.meta_data && data.meta_data != ""){
+            def meta_data_map = fn.map(data.meta_data)
+            def title = meta_data_map?.title ?: ""
+            def keywords = fn.list(meta_data_map?.keywords)
+            def keywordsStr = (keywords ?: []).join(",")
+            def description = meta_data_map?.description ?: "" 
+            def content = [title, keywordsStr, description, data.raw_content]
+                .findAll { it }  // 过滤 null 或空字符串
+                .join("""\n""")     // 用换行拼接
+            data.put("content", content)
+        }else{
+            if(null != data.raw_content && data.raw_content != ""){
+                data.put("content",data.raw_content)
+            }
+        }
+        items.add(data);
+    }
+    return items
+'''
+log('========================:{{n_update_data}}')
+
+
+/*assign("n_mermaid_json"，"""
+{
+  "page": 1,
+  "documentId": "263244394018340864",
+  "title": "RPP QR Payment Functional Specification – December 2022 V1.9, Doc. Ref. 600-10/10/0005420, 1 QR Payment Overview",
+  "section": "Introduction",
+  "type": ["requirement", "process"],
+  "isFunctional": "true",
+  "description": "This page introduces the RPP QR Payment Functional Specification document and provides an overview of the QR payment system architecture. It describes the key components: RPP Host, Bank Host, and Bank Connector, along with their roles and interactions based on the ISO 20022 standard. A sequence diagram illustrates the message flow between User, Connectors, and RPP.",
+  "importantContent": "```mermaid\nsequenceDiagram\n    participant User\n    participant Connector1\n    participant RPP\n    participant Connector2\n\n    User ->> Connector1: \n    Connector1 ->> RPP: ISO 20022\n    RPP ->> Connector2: ISO 20022\n    Connector2 ->> RPP: ISO 20022\n    RPP ->> Connector1: ISO 20022\n```\n1.1 RPP Host\nThis module is used to provide the functionalities required by Real-time Retail Payments Platform (RPP). It is a core processing component that is based on ISO20022 messaging standard.\nIt will provide the following:\n• Validation of payments to prevent invalid or malformed payments being sent to RPP\n• Manage settlements and liquidity positions\n• Provides Services and workflows\n1.2 Bank Host\nThis is the bank host system at Participants that does the initiating, receiving and processing of payment transactions. The bank host will connect to the RPP host through the Bank Connector for Straight-Through-Processing (STP) via TCP/IP or MQ communication channel.\n1.3 Bank Connector\nThe Bank Connector is the gateway that is installed with the Participants' premises to allow them to send and receive messages to and from RPP.\nIt provides the following:",
+  "keywords": ["RPP", "QR Payment", "Functional Specification", "ISO 20022", "RPP Host", "Bank Host", "Bank Connector", "STP", "TCP/IP", "MQ"],
+  "notes": "Markdown, includes Mermaid diagram and numbered sections"
+}
+""")*/
+
+
+assign("n_verify_steps","""
+{
+    "result": "1. 执行流程：
+   - 检查步骤1：点击【Me】查看个人中心，再点击[Profile]按钮
+     - 步骤1包含两个子步骤：点击id_1780641033（Me）和点击id_1983377852（Profile）
+     - 根据页面元素信息，id_1780641033的name为"Me"，tag为"role-button"；id_1983377852的name为"Profile"，tag为"link"
+     - 这两个步骤不属于约束条件中的任何类别（非登出、非输入/修改/勾选/筛选/日期选择/搜索/翻页、非表格交互、非图片/纯文本、非新建/删除/提交/注册/保存）
+     - 因此步骤1合法，保留
+   - 检查步骤2：点击【Me】查看个人中心，再点击[Logout]按钮
+     - 步骤2包含两个子步骤：点击id_1780641033（Me）和点击id_1983437434（Logout）
+     - 根据页面元素信息，id_1983437434的name为"Logout"，tag为"link"
+     - 根据约束条件，登出类：元素text/aria-label/title/id包含"logout"、"sign out"、"登出"、"退出登录"、"注销"（不区分大小写）。此处name为"Logout"，包含"logout"，属于登出类操作
+     - 检查自定义参数：自定义参数为“账号："admin"          密码："xJbNmQnqk4wq0Fc””，未声明允许登出类操作（如“允许退出登录”、“允许登出”）
+     - 因此步骤2属于约束范围内的登出类操作，且自定义参数未允许，应剔除
+   - 最终合法步骤为步骤1 www.baidu.com
+
+2. 最终结果：
+{
+  "success": false,
+  "steps_list": [
+    {
+      "msg": "点击【Me】查看个人中心，再点击[Profile]按钮",
+      "run_steps": [
+        {
+          "type": "click",
+          "target": "id_1780641033"
+        },
+        {
+          "type": "click",
+          "target": "id_1983377852"
+        }
+      ]
+    }
+  ]
+}"
+}
+""")
+// 测试解释json报错
+// n_verify_steps,psr_json_python
+n_verify_steps,psr_ref?urlLinkEnabled=true

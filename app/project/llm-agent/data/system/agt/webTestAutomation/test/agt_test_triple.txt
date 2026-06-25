@@ -1,0 +1,87 @@
+/*
+{
+	"title":"Run existed triple file",
+	"description":"Run existed triple code",
+	"parameter":"test_no=Test Case No&current_step=当前验证步骤&steps=完整验证步骤&system=系统名称&envinfo=environment information&filename=triple file name",
+	"resultPlan":"n_python_file",
+	"version":1
+}
+*/
+// Use selenium
+assign('pythonType', 'selenium', 'subfolder', '{{test_no}}')
+n_global_variable, act_memory.retrieve?var=global_variable&global=true
+
+assign('script_subfolder', '{{n_global_variable.script_subfolder}}')
+when('!fn.hasValue(script_subfolder)', {
+	assign("n_programming_language","selenium")
+	assign("n_module","def_module")
+	assign("n_draft_tests","draft_steps")
+	//# triple 硬编码 script_subfolder
+	assign("script_subfolder","/{{system}}/{{n_programming_language}}/workflows/{{n_module}}/{{n_draft_tests}}/{{test_no}}")
+})
+//## Prepare to run test step
+n_python_file, act_python.read?requirement={{current_step.step}}&path={{script_subfolder}}
+// Check if script is generated
+when('n_python_file.filename=="N/A"', {
+	//## Load triple file resultCode: 0:不匹配  1:完全匹配  2:三元组 3:向量库匹配
+	n_similar_file, act_python.readSimilar?pythonType={{pythonType}}&requirement={{current_step}}&filePath={{subfolder}}&filename={{filename}}&application={{system}}
+	
+	// Check if script is generated
+	when("n_similar_file.hasFilename() && n_similar_file.resultCode==2", {
+		// Load test data
+		// n_testdata, act_kb.select?name=kb_testcase_data&where={{fn.json('test_no,test_no,name,system')}}
+		// new parameter
+		n_new_parameter_json, act_func?script='''
+			import com.alibaba.fastjson2.JSON
+			import com.alibaba.fastjson2.JSONObject
+			JSONObject jsonObj = JSON.parseObject(n_similar_file.parameter)
+			jsonObj.put("current_step", current_step)
+			
+			return JSON.toJSONString(jsonObj)
+		'''
+		//## Run selenium code similar_file
+		agt_run?python_file={{n_similar_file.filename}}&parameters={{n_new_parameter_json}}
+
+		
+		assign('python_code', '{{fn.readFile(n_similar_file.fullFilename)}}')
+		
+		// Write python script to new path
+		agt_test_save_file?current_step={{current_step}}&test_no={{test_no}}&sourceCode={{python_code}}
+
+		// Result
+		assign('result', '{{n_python_file_2.fullFilename}}')
+	}, {
+		// Announce failure
+		act_flow.fail?result='Miss triple file'
+	})
+}, {
+	// Load test data
+	// n_testdata, act_kb.select?name=kb_testcase_data&where={{fn.json('test_no,test_no,name,system')}}
+	
+	//## Run selenium code
+	agt_run?python_file={{n_python_file.filename}}&parameter={{n_python_file.parameter}}
+})
+
+
+// Parameters: 1.python_file; 2.parameter, 3. current_step
+// Agent for run script
+agent('agt_run', {
+	//## Run test step
+	n_python_result, act_rpa.send?name={{python_file}}&command=RunScript&parameters={{parameters}}
+	
+	// Save execution result to KB
+	act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,n_python_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+	
+	// Result
+	assign('result', '{{pythonType}}/{{python_file}}')
+	
+	// 2表示顺序执行，直到一个可成功执行的任务
+	// Try to run test step again
+	on_failure({
+		// Waiting 5 seconds
+		expression(true, 'act_flow.wait?second=5')
+		
+		// Try to Run test step again
+		n_python_result2, act_rpa.send?name={{python_file}}&command=RunScript&parameters={{parameters}}
+	}, 2)
+})

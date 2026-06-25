@@ -1,0 +1,126 @@
+/*
+ {
+	 "title": "PAMP构建",
+	 "description": "静态构建，包含ResolveActionPreconditionsAgent（Action Precheck）和按钮的前置字段检索Agent",
+	 "parameter": [
+        {
+            "name": "application",
+            "label": "应用名称",
+            "required": true
+        },
+        {
+            "name": "version",
+            "label": "版本",
+            "required": true
+        }
+    ],
+	 "llmType": "",
+	 "resultPlan": "n_python_file",
+	 "life": "50"
+ }
+*/
+
+
+
+n_collect_page, act_rpa.send?command=RunLocalJS&parameters='{"js_path":"collection_form_data.js"}'
+
+
+n_get_data,tpl_pamp_extraction_prompt,psr_json
+
+assign('actionArr', '{{n_get_data.actions}}')
+
+when('fn.hasValue(actionArr)',{
+  n_get_page_path_info, act_rpa.send?command=GetPageInfo
+  assign('page_url', '{{n_get_page_path_info[0].clean_path}}')
+	foreach('n_loop_id', 'actionArr', {
+     assign('action', '{{n_loop_id.item}}')
+     act_func?script="action.put('application', '''{{application}}''')"
+     act_func?script="action.put('version', '''{{version}}''')"
+     
+     act_func?script="action.put('page_url', '''{{page_url}}''')"
+     act_kb.defineAndImportData?schema='auto_test'&tableName='kb_page_action_min_preconditions'&data={{action}}
+    //  act_kb.merge?name='kb_page_action_min_preconditions'&columnValues={{action}}&where='{"application":"test","action_id":"id_864492000"}'
+    //  act_kb.update?name='kb_page_action_min_preconditions'&columnValues={{action}}&where='{"application":"test","action_id":"id_864492000"}'
+	})
+act_func.run?script='return action'
+})
+
+// 结合需求分析页面元素
+define('tpl_pamp_extraction_prompt', '''
+- Role: 页面动作条件模型（PAMP）解析专家与数据转换工程师
+- Background: 用户需要将前端表单元素数据（JSON格式）转换为结构化的PAMP（Page Action Precondition Model）格式，以便自动化识别页面交互的前置依赖关系，支撑测试自动化、流程编排或智能表单填充等场景。
+- Profile: 你是一位精通前端DOM结构分析、表单验证逻辑与数据建模的资深工程师，具备严谨的逻辑推导能力与JSON数据处理能力，能够精准识别按钮动作的语义类别并推断其前置条件。
+- Skills: 深度JSON解析与重构、XPath路径分析、表单验证规则映射、动作语义分类（提交/删除/添加）、置信度评估、数据一致性校验。
+- Goals:
+  1. 完整遍历输入数据的所有section，精确提取所有button类型元素作为候选动作
+  2. 基于按钮文本语义与上下文结构，智能分类动作类型（提交表单/删除/添加/其他）
+  3. 针对每类动作，严格依据输入数据推断前置条件，必填字段识别需综合required属性与标签"*"标记
+  4. 为每个字段匹配恰当的validation规则，确保规则与字段type属性对应
+  5. 设定合理的置信度评分，反映推断的确定性程度
+  6. 输出格式规范、结构完整、无语法错误的PAMP JSON
+- Constrains:
+  1. 严禁创造输入数据中不存在的任何信息，所有element_id、name、xpath必须与原数据完全一致
+  2. 必须先输出动作识别清单，再逐一生成前置条件分析，两阶段不可合并
+  3. 若fields字段不存在或为空数组，则默认该section下所有非button元素均为必填
+  4. row_selection的list_id必须从原始HTML结构（element_content）中解析提取，禁止臆测
+  5. validation规则仅允许使用：not_empty、email_format、phone_format、number_range、date_format、url_format、custom_regex
+  6. 输出JSON必须可通过标准解析器验证，禁止尾随逗号、非法转义字符
+- OutputFormat: 分阶段文本说明 + 最终结构化JSON代码块，包含actions数组
+- Workflow:
+  1. 扫描阶段：遍历data数组 → 展开每个section → 过滤element_type为"button"的元素 → 生成动作识别清单（含action_id、action_name、action_type、xpath）
+  2. 分类阶段：基于action_name关键词（提交/保存/确认/删除/移除/添加/新增/创建等）判定动作语义类别，输出分类结果
+  3. 条件推断阶段：针对每个动作，依据其类别执行差异化分析——提交类扫描同section内所有必填字段；删除类解析element_content提取列表容器ID；添加类置空字段要求
+  4. 验证规则映射阶段：根据字段type属性（text→not_empty, email→email_format, tel→phone_format, number→number_range, date→date_format, url→url_format）绑定validation规则
+  5. 置信度赋值阶段：按动作复杂度评分（添加0.9/删除0.8/提交0.7），输出带confidence的完整preconditions
+  6. 最终组装阶段：整合所有动作对象，生成符合Schema的JSON，执行语法自检
+
+## 输入数据结构
+
+输入数据包含以下结构：
+- 顶级 `data` 数组，包含多个 `section` 对象
+- 每个 `section` 对象包含：
+  - `section`：区域名称
+  - `elements`：元素数组，包含各种表单元素
+  - `element_content`：原始HTML内容
+
+每个 `element` 对象包含：
+- `element_type`：元素类型（input、select、button等）
+- `type`：输入类型（text、password、email等）
+- `name`：元素名称
+- `id`：元素唯一标识
+- `placeholder`：占位文本
+- `value`：当前值
+- `label_text`：标签文本
+- `xpath`：元素XPath
+- `required`：是否必填
+- `options`：下拉选项（仅select元素）
+
+## 输出数据结构
+
+输出应包含以下结构：
+- `actions`：动作数组，每个动作包含：
+  - `action_id`：动作唯一标识（使用元素的id）
+  - `action_name`：动作名称（使用按钮的text）
+  - `action_type`：动作类型（button）
+  - `preconditions`：前置条件定义，包含：
+    - `required_elements`：必需元素，包含：
+      - `fields`：字段数组，每个字段包含：
+        - `element_id`：元素ID
+        - `type`：元素类型
+        - `name`：元素名称
+        - `label_text`：标签文本
+        - `required`：是否必填
+        - `validation`：验证规则（如not_empty、email_format等）
+      - `row_selection`：行选择要求，包含：
+        - `required`：是否必需选择行
+        - `list_id`：列表ID
+    - `ui_states`：UI状态要求数组（通常为空）
+    - `constraints`：约束条件，包含：
+      - `ui_only`：是否仅UI条件
+      - `data_validation`：是否需要数据验证
+  - `source`：来源类型（固定为"inferred"）
+  - `confidence`：置信度
+# 输入数据
+{{n_collect_page}}
+''')
+ 

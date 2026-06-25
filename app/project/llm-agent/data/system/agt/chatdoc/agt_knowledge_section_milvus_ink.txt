@@ -1,0 +1,160 @@
+/*
+{
+	"title": "knowledge space sections-operation",
+	"description": "knowledge space sections-operation",
+    "parameter": [
+                    {
+                        "name":"sectionIds",
+                        "label":"切片ids",
+                        "type":"textarea"
+                    },
+					{
+                        "name":"knowledgeId",
+                        "label":"知识id",
+                        "type":"textarea"
+                    },
+					{
+                        "name":"content",
+                        "label":"切片内容",
+                        "type":"textarea"
+                    },
+					{
+                        "name":"operation",
+                        "label":"操作类型(1.切片向量化  2.新增切片信息  3.根据知识（id，orderByNum）或sectionIds找到对应的切片数据 4.根据对话，找到匹配的向量数据 5.对话检索-ink 6.文档切片向量化 7.回调切片数据)",
+                        "type":"textarea"
+                    },
+					{
+                        "name":"question",
+                        "label":"对话内容",
+                        "type":"textarea"
+                    },
+					{
+                        "name":"value",
+                        "label":"参数类型(folderName、folderIds、knowledgeIds、sectionIds值)",
+                        "type":"textarea"
+                    },
+					{
+                        "name":"knowledgeName",
+                        "label":"知识名称",
+                        "type":"textarea"
+                    }
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "uiEntrance": "chatdoc",
+	"tag":"chatdoc"
+} */
+
+when("operation==1", {
+    // 切片向量化
+    foreach('n_loop_id', 'sectionIds', {
+        assign('sectionId', '{{n_loop_id.item}}')
+
+        // 1.找到切片数据
+        n_data,act_kb.select?name='kb_spaces_knowledge_ink_section'&maxSize=1&where='{"id":{{n_loop_id.item}}}'
+
+        n_update_data,act_func?script='''
+                                        def data = n_data[0];
+                                        data.put("id", n_loop_id.item+"")
+                                        data.put("status", "1")
+                                        data.put("update_time","now")
+                                        data.put("page",data.page +"")
+                                        return data
+                                    '''
+        // 2.将切片数据修改状态，并向量化
+        act_kb.merge?name='kb_spaces_knowledge_ink_section'&columnValues={{n_update_data}}&where='{"id":{{n_loop_id.item}}}'&addColumnsMilvus=true&embedding=true
+    })
+
+    assign('last_result', '{{sys_last_result}}')
+})
+
+
+
+
+when("operation==2",{
+    // 新增切片
+    // 1.找到对应的知识信息，获取相关参数
+    n_data,act_kb.selectBy?sql='select * from kb_spaces_knowledge_ink_section where document_id = ? order by id desc limit 1'&parameters='{{knowledgeId}}'
+    n_import_data,act_func?script='''
+                                            def data = n_data[0];
+                                            data.remove("id")
+                                            data.put("status", "0")
+                                            data.put("content", content)
+                                            data.put("update_time","now")
+                                            data.put("order_by_num", (Integer.parseInt(String.valueOf(data.order_by_num)) + 1 ) + "")
+                                            return data
+                                        '''
+    // 2.保存db数据信息
+    act_kb.importData?name='kb_spaces_knowledge_ink_section'&data={{n_import_data}}&embedding=false
+    assign('last_result', '{{sys_last_result}}')
+})
+
+when("operation==3",{
+    // 切片查询
+    when("sectionIds=='' || sectionIds==null",{
+        assign('doSql', 'select skis.*,ksfk.knowledge_name,ksfk.extension from kb_spaces_knowledge_ink_section skis inner join kb_spaces_folder_knowledge ksfk on skis.document_id = ksfk.id where document_id = ? and order_by_num = ? ')
+        assign('doSqlParams', '{{knowledgeId}},{{orderByNum}}')
+    },{
+         n_where_quote,act_func?script='''
+                        def quote = ""
+                        def length = sectionIds.split(",").size()
+                        for(int i = 0; i < length; i++){
+                            if(i == 0){
+                                quote = "?"
+                            } else{
+                                quote = quote+",?"
+                            }
+                        }
+                        return quote
+                    '''
+        assign('doSql', 'select skis.*,ksfk.knowledge_name,ksfk.extension from kb_spaces_knowledge_ink_section skis inner join kb_spaces_folder_knowledge ksfk on skis.document_id = ksfk.id where skis.id in ({{n_where_quote}})')
+        assign('doSqlParams', '{{sectionIds}}')
+    })
+    // 1.找到对应的知识信息，获取相关参数
+    n_data,act_kb.selectBy?sql={{doSql}}&ql='onlyOneParameters'&parameters='{{doSqlParams}}'
+
+    n_merge_data,act_kbs.removeProp?params='{{n_data}}'&properties='emb_rerank,emb_content'
+
+    // 2.找到文件对应的知识
+    // n_kn_data,act_kb.select?name='kb_spaces_folder_knowledge'&maxSize=1&where='{"id":{{n_merge_data[0].document_id}}}'
+
+    // 2.加载对应的html文件
+    // n_file_data,act_kbs.readFile?name={{n_kn_data[0].store_uri}}
+
+    n_first_data,act_func?script='''
+        // def data = n_merge_data[0]
+        def data = n_merge_data
+        // data.put("html", n_file_data)
+        return data
+    '''
+
+    assign('last_result', '{{n_first_data}}')
+})
+
+when("operation==4",{
+    // 对话检索-ink
+    // 1.获取向量查询参数
+    n_data,act_kbs.callQuestionKnowledges?callType={{callType}}&value={{value}}&knowledgeName={{knowledgeName}}
+
+    n_has_value,act_func?script='''
+        def list = n_data
+        def size = list.size()
+        return size
+    '''
+
+    when("n_has_value > 0",{
+        n_api_data,act_api.doExecute?name='get_gientech_retrieval'&params='{"question":'{{question}}',"collection":"kb_spaces_knowledge_ink_section","document_id":{{n_data}}}'
+
+        n_merge_data,act_kbs.removeProp?params='{{n_api_data.reference_details}}'&properties='emb_content'
+
+        n_result_data,act_func?script='''
+            def map = new HashMap()
+            map.put("reference_contents", n_api_data.reference_contents)
+            map.put("sections", n_merge_data)
+            return map
+        '''
+        assign('last_result', '{{n_merge_data}}')
+    })
+})
+
+assign('return', '{{last_result}}')

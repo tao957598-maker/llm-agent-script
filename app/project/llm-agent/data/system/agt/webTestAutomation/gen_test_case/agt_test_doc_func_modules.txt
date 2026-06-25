@@ -1,0 +1,87 @@
+/*
+{
+	"title":"Gen testcase by KB",
+	"description":"Read requirement document to generate test cases",
+	"parameter":"{\"name\":\"input_data\",\"label\":\"Knowledge space path\"}",
+	"llmType":"alias.highquality",
+	"resultPlan":"result_functional",
+	"life":10000,
+	"version":1
+}
+*/
+when('!fn.hasValue(input_data)', {
+  // 不存在input_data 赋值为空
+  assign("result", '')
+},{
+// 调用 LLM
+n_get_functional, tpl_get_functional, psr_json
+//# functional result
+assign("result_functional", '{{n_get_functional}}')
+})
+
+// 定义 LLM 模板
+define('tpl_get_functional', '''
+### 🛠️ 优化后的提示词：功能分解（Functional Decomposition）/模块化设计（Modular Design）根据类型是 Functional
+
+**任务目标**：
+对系统或产品进行**一级功能分解**，侧重于**人机交互单元**的识别与拆解，以“功能页面”或“具体操作界面”为核心视角，构建清晰、精细的功能模块结构。
+
+---
+
+### ✅ 拆解原则
+按EARS方案(普通需求/事件需求/状态需求/可选需求/异常需求/复杂需求/模糊需求)做功能拆解
+
+1. **以产品界面或业务操作为主线视角**，而非抽象架构。
+2. **每个模块代表一个清晰、独立的用户交互单元**，通常对应于一个操作页面或一个功能触发点。
+3. **模块命名需细化到页面级别或流程节点级别**
+4. **使用连字符“-”连接上下文与具体页面**，体现模块所在路径或导航关系，保留模块层级语义。
+5. **功能颗粒度需细到“界面/操作流程最小单元”**：
+
+   * 一个独立操作页面 = 一个一级模块
+   * 弹窗、侧边栏、表单提交等重要交互单元也可单独视作模块
+6. **明确区分界面模块与非界面模块**：
+
+   * 非界面模块请显式标注，如：`【非界面模块】任务调度逻辑`
+7. **严格遵循命名模板**：
+
+   ```
+   [一级功能模块名称] - [页面或操作单元名称]
+   ```
+8. 标记来源哪些页码例如: Pagexx,Pagexxx
+语言风格: 遵从文档原始术语（如标题中是英文的）保持一致更好
+9. 若原文出现“权限/注册检查/feature registration/access control”等规则，必须在模块描述中保留该校验语义，不可丢失。
+10. 若原文出现“多语言/EN/TC/SC/localization/i18n”等规则，必须在模块或子模块中显式体现该语义（可在页面模块描述中体现，或拆出非界面模块）。
+11. 不得生成与原文无证据的模块；每个子模块必须可追溯到输入文本中的明确语句。
+12. 若仅为同一页面的同义称呼/渠道前缀差异（如 Counter/Online/Mobile 同一步骤且规则一致），优先合并为一个子模块，并在 description 中注明适用渠道；仅当流程、输入或规则确实不同才拆分多个子模块。
+13. 控制粒度：优先覆盖关键流程与规则，避免“仅改写措辞”的平行子模块重复输出。
+---
+
+### 🔁 辅助输入（建议提供以增强一致性）：
+
+* 产品导航结构（菜单、子菜单、Tab 栏等）
+* 页面截图或原型图
+* 典型业务流程描述（如用户注册、订单处理等）
+
+---
+# 输出格式,文字必须为英文:
+```json
+{
+  "platform": "system name",
+  "modules": [
+    {
+      "name": "一级功能模块名称",
+      "source": "PageXX, PageXX（一级功能模块涉及的具体页码）",
+      "submodules": [
+        {
+          "name": "具体页面/操作单元名称",
+          "description": "功能描述（交互目标+核心操作）",
+          "source": "PageXX, PageXX（涉及的具体页码）"
+        }
+      ]
+    }
+  ]
+}
+```
+# 系统或产品数据
+{{input_data}}
+''')

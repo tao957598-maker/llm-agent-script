@@ -1,0 +1,182 @@
+/*
+{
+	"title":"Generic Schema Transform Agent",
+	"description":"Transform aggregated indicator JSON into target output schema",
+	"parameter":[
+		{
+			"name":"sourceData",
+			"label":"源数据JSON",
+			"required":true,
+			"type":"textarea"
+		},
+		{
+			"name":"targetSchema",
+			"label":"目标输出结构JSON",
+			"required":true,
+			"type":"textarea"
+		},
+		{
+			"name":"caseId",
+			"label":"案例编号",
+			"required":false,
+			"type":"text"
+		}
+	],
+	"tag":"report",
+	"discoverable":true,
+	"displayOrder":0,
+	"version":5,
+	"life":200
+}
+*/
+//## ---------- 1. Parse sourceData ----------
+assign('n_source_data','{{sourceData}}')
+
+// ---------- 2. Parse targetSchema ----------
+n_target_schema,act_func?script='''\
+    def txt = targetSchema == null ? "" : String.valueOf(targetSchema).trim()
+    if(txt == ""){
+        return [:]
+    }
+
+    def obj = fn.map(txt)
+    return obj == null ? [:] : obj
+'''
+
+
+//## ---------- 3. Prepare output schema meta ----------
+log('***n_target_schema==={{n_target_schema}}')
+log('***n_source_data==={{n_source_data}}')
+
+// ---------- 4. LLM transform ----------
+define('tpl_transform_to_target_schema','''
+你是一个“结构化结果重组引擎（Structured Output Transformer）”。
+
+你的任务是：
+将【源数据 JSON】中的内容，按照【目标输出结构】重组为最终 output。
+
+====================
+【核心目标】
+====================
+
+1. 严格按照目标输出结构生成结果。
+2. 所有字段值只能来自源数据 JSON 或 caseId。
+3. 不允许编造字段值。
+4. 未找到对应值时，必须保留目标结构中的默认空值形式。
+5. 忽略以下 URL 字段，不需要填充真实值：
+   - customerProfileReportUrl
+   - customerProfileReportWithRationaleUrl
+   - transactionAnalysisReportUrl
+   - transactionAnalysisReportWithRationaleUrl
+   - transactionAnalysisReportWithRationale
+   - reportUrl
+   - reportWithRationaleUrl
+
+====================
+【输入说明】
+====================
+
+1. 源数据 JSON 是已经聚合好的多指标结果，顶层通常按指标名分组。
+2. 每个指标下通常包含：
+   - value
+   - knowledgeBaseUsed
+   - dataSource
+
+====================
+【字段映射规则】
+====================
+
+1. 目标结构中的字段对象通常包含：
+   - value
+   - aiRationale
+   - knowledgeBaseUsed
+   - dataSource
+
+2. 你必须优先从标准化上下文中找到最匹配的字段进行映射。
+
+3. value 映射规则：
+   - 若源数据存在直接对应字段，则直接填入 value。
+   - 若源数据只存在近似语义字段，则在不编造的前提下映射最合理字段。
+   - 若找不到对应字段，则保留目标结构中的默认空值。
+   - 布尔字段必须输出布尔值，不得输出字符串 "true"/"false"。
+   - 数组字段必须输出数组。
+   - 对象字段必须输出对象。
+
+4. aiRationale 映射规则：
+   - 若源数据中存在最贴近该字段的 aiRationale，则带入。
+   - 若无对应 aiRationale，则保留目标结构中的默认空字符串。
+
+5. knowledgeBaseUsed 映射规则：
+   - 若该字段最主要来源于某个指标，则带入该指标的 knowledgeBaseUsed。
+   - 若没有，则保留目标结构默认值。
+   - 不得编造知识库名称。
+
+6. dataSource 映射规则：
+   - 若该字段最主要来源于某个指标，则带入该指标的 dataSource。
+   - 若没有，则保留目标结构默认值。
+   - 不得编造 dataSource。
+
+7. 数组字段映射规则：
+   - 当目标结构中的某个字段是数组时，你必须优先从源数据中寻找语义最匹配的数组型 value。
+   - 若找到匹配数组，则将源数组中的每个元素映射为目标数组中的一个对象。
+   - 若目标数组元素中存在 sortOrder 字段，则按源数组顺序从 1 开始递增填充。
+   - 若未找到匹配数组，则保留目标结构中的默认空数组或默认模板空项，不得编造。
+
+8. 对象字段映射规则：
+   - 当目标结构中的某个字段是对象时，你必须优先从源数据中寻找语义最匹配的对象型 value。
+   - 若找到匹配对象，则从该对象中提取最相关字段填入目标结构。
+   - 若未找到直接匹配对象，则可从多个指标的 value 中提取最接近的字段进行组合，但不得编造。
+   - 若字段不存在，则保留目标结构中的默认空值。
+   - 不得预设任何固定业务对象名称（例如 profile、customer、relatedParties、transaction、screening 等），必须仅根据输入数据与目标结构本身进行映射。
+
+====================
+【健壮性规则】
+====================
+
+1. 输入 JSON 的字段名可能存在轻微差异，但语义相同；你应优先使用最接近语义的字段。
+2. 不得因为某个字段缺失而丢掉整个对象。
+3. 对找不到值的字段，必须保留目标结构中的占位形式，不得删除字段。
+4. 对数组模板，若源数据中存在多项，应扩展为多项输出；若源数据中不存在，则保留空数组或模板默认空项的最合理形式。
+5. 不得把整个源数据原封不动复制到某个字段里。
+6. 不得因为某个字段存在 aiRationale 就把整个指标对象塞进 value。
+
+====================
+【强制约束】
+====================
+
+1. 输出必须是一个合法 JSON。
+2. 输出结构必须严格遵循目标输出结构。
+3. 不得输出解释文字。
+4. 不得输出 markdown。
+5. 不得输出代码块。
+6. 不得添加目标结构中不存在的字段。
+7. 不得删除目标结构中要求保留的字段。
+8. URL 字段保持目标结构默认值即可，不要生成真实 URL。
+9. caseId 若有输入，则应优先填入目标结构中对应的 caseId 字段。
+
+====================
+【输入】
+====================
+
+caseId:
+{{caseId}}
+
+
+源数据 JSON:
+{{n_source_data}}
+
+目标输出结构:
+{{n_target_schema}}
+
+====================
+【输出要求】
+====================
+
+仅输出一个合法 JSON 对象，不要输出任何其他文字。
+''')
+
+//##最终输出
+n_transformed_output,tpl_transform_to_target_schema, psr_json
+log('***n_transformed_output==={{n_transformed_output}}')
+// ---------- 6. final return ----------
+assign('return','{{n_transformed_output}}')

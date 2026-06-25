@@ -1,0 +1,94 @@
+/*
+{
+	"title":"员工请假审批流程",
+	"description":"处理员工请假申请的全流程审批",
+	"parameter":[],
+	"tag":"OA审批",
+	"uiEntrance":"leave_application_form444444444444444",
+	"displayOrder":0,
+	"version":118
+}
+*/
+// 展示请假申请表单
+n_leave_form, act_flow.page?pageCode='leave_application_form'
+
+// 验证表单数据
+when('{{!fn.hasValue(n_leave_form.leave_type) || !fn.hasValue(n_leave_form.start_date) || !fn.hasValue(n_leave_form.end_date)}}', {
+	act_flow.fail?result='请填写完整的请假信息'
+})
+
+// 计算请假天数
+n_leave_days, act_func?script='''
+    import java.time.LocalDate
+    import java.time.temporal.ChronoUnit
+    
+    def startDate = LocalDate.parse('{{n_leave_form.start_date}}')
+    def endDate = LocalDate.parse('{{n_leave_form.end_date}}')
+    return ChronoUnit.DAYS.between(startDate, endDate) + 1
+'''
+
+// 直接主管审批
+approve('n_direct_supervisor_approval', '''	
+	{
+	  "assigneeConfig": {
+	    "type": "HIERARCHY",
+	    "strategy": "ALL",
+	    "targets": [
+	      {
+	        "targetType": "REPORTING_LINE",
+	        "value": "DIRECT_SUPERVISOR"
+	      }
+	    ]
+	  },
+	  "formKey": "n_leave_form",
+	  "commentRequired": false
+	}
+''', )
+
+// 检查审批结果
+when('{{n_direct_supervisor_approval.result != "APPROVED"}}', {
+	assign('result', '请假申请被主管拒绝: {{n_direct_supervisor_approval.comment}}')
+
+	act_flow.go?plan=end
+})
+
+// 根据请假天数判断是否需要HR审批
+when('{{n_leave_days > 3}}', {
+	// HR审批
+	approve('n_hr_approval', '''	
+		    {
+		      "assigneeConfig": {
+		        "type": "ROLE",
+		        "strategy": "ALL",
+		        "targets": [
+		          {
+		            "targetType": "ROLE_NAME",
+		            "value": "HR专员"
+		          }
+		        ]
+		      },
+		      "formKey": "n_leave_form",
+		      "commentRequired": true
+		    }
+		    
+	''', )
+
+	// 检查HR审批结果
+	when('{{n_hr_approval.result != "APPROVED"}}', {
+		assign('result', '请假申请被HR拒绝: {{n_hr_approval.comment}}')
+	
+		act_flow.go?plan=end
+	})
+})
+
+// 所有审批通过后的处理
+assign('result', '''
+您的{{n_leave_form.leave_type}}请假申请已批准:
+- 开始日期: {{n_leave_form.start_date}}
+- 结束日期: {{n_leave_form.end_date}}
+- 总天数: {{n_leave_days}}
+- 事由: {{n_leave_form.reason}}
+''')
+
+// 发送通知
+act_notification.send?recipient='{{n_leave_form.applicant_id}}'&title='请假申请结果'&content='{{result}}'

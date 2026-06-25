@@ -1,0 +1,17 @@
+/*
+{
+	"title":"自动生成图标测试",
+	"description":"agt_genereIcon ",
+	"parameter":[
+		{
+			"required":true,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"displayOrder":0,
+	"version":1
+}
+*/
+assign("abc","123")

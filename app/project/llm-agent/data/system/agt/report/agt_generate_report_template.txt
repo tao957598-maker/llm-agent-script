@@ -1,0 +1,493 @@
+/*
+{
+	"title":"Report Markdown Template Generator",
+	"description":"根据用户需求，自动生成包含 POI-TL 标签的 Markdown 报告模板，并保存到指定目录。",
+	"parameter":[
+		{
+			"name":"templateName",
+			"label":"模板名称",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"templateDesc",
+			"label":"模板需求描述",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"saveDir",
+			"label":"模板保存目录",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"fileName",
+			"label":"Markdown 文件名（可空）",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		}
+	],
+	"tag":"report",
+	"version":1
+}
+*/
+//## 从Milvus中查询与报告需求描述相关的模板信息
+n_history_template_info,rag_kbs.searchTemplate?question='{{templateDesc}}'&top=1
+//log("n_history_template_info-----------{{n_history_template_info}}")
+// Step 1：定义结构 Schema 生成模板
+define('tpl_md_schema', '''
+你是报表产品经理和模板设计专家，精通 Apache POI-TL 标签设计。
+**POI-TL 标签的占位符必须使用 [[ ]]，供系统后续转换为 Word 模板使用。**
+
+现在输入的是「报告需求描述」，请你将其拆解成一个结构化 Schema，
+描述报告由哪些章节、哪些变量构成，以及表格 / 图表 / 列表的字段信息。
+
+「参考模板内容」是用户之前使用过的模板 Schema 或模板片段，
+请根据其风格与结构特征，结合当前需求，生成一份**全新的**报告模板结构。
+
+--------------------------------------------
+【报告名称】
+{{templateName}}
+
+【报告需求描述】
+{{templateDesc}}
+
+【参考模板内容】
+{{n_history_template_info}}
+
+说明：
+- 上述内容为【历史模板 Schema 或模板片段】，仅用于【风格、结构、表达方式】参考
+- 你可以参考：
+  - 章节拆分思路（section 粒度）
+  - text / table / chart / list 的组合方式
+  - 变量命名的语义风格（如 summary、riskList、trendChart 等）
+- 你【不允许】：
+  - 原样复制任何历史 section
+  - 原样复用任何变量名、tableVar、chartVar、varList
+  - 因历史模板而忽略当前【报告需求描述】
+
+规则优先级（从高到低）：
+1. 当前【报告需求描述】
+2. Schema 输出 JSON 规范
+3. 本 Prompt 中的字段生成规则
+4. 参考模板内容（仅作风格启发）
+
+--------------------------------------------
+【参考模板风格说明】（仅作风格参考，不要照抄字段）：
+- 标题：全球市场指数名称[[$mktIndicator]]
+- 表头行：最后更新日期 / 最新收市价 / 1日变动(%) …
+- 数据行变量：[index] / [close] / [1DC] …
+- 表格变量：  [[$tableVarName]]
+- 图表变量：  [[@chartVarName]]
+- 文本变量：  [[varName]]
+
+--------------------------------------------
+【结构化列表变量（list 类型）格式】：
+列表变量必须使用 POI-TL 循环结构：
+  [[?varList]]
+  [[itemVar1]]
+  [[itemVar2]]
+  [[/varList]]
+
+--------------------------------------------
+【Schema 输出 JSON 格式（必须完全遵守）】
+
+{
+  "reportTitle": "xxx",
+  "sections": [
+    {
+      "title": "章节标题",
+      "type": "text | table | chart | mixed | list",
+      "desc": "可选的章节说明",
+      "blocks": [
+
+        {
+          "blockType": "text",
+          "var": "summary",
+          "label": "摘要说明"
+        },
+
+        {
+          "blockType": "table",
+          "tableVar": "mktIndicator",
+          "tableTitle": "全球市场指數名稱[[$mktIndicator]]",
+          "columns": [
+            { "header": "指数名称", "var": "index" },
+            { "header": "最后更新日期", "var": "lastUpd" }
+          ]
+        },
+
+        {
+          "blockType": "chart",
+          "chartVar": "us10YYield",
+          "chartTitle": "美国10年期国债孳息率[[ @us10YYield ]]"
+        },
+
+        {
+          "blockType": "list",
+          "varList": "riskList",
+          "items": ["risk1", "risk2", "risk3"]
+        }
+
+      ]
+    }
+  ]
+}
+
+--------------------------------------------
+【字段生成规则】
+
+### 1. 文本变量 (blockType=text)
+- 需求中提到普通文本的地方生成 text 块
+- 变量名如：summary、remark、intro、analysis 等
+
+### 2. 表格变量 (blockType=table)
+- 需求提到“表格”“表”“数据表”“表格展示”时触发
+- 必须生成：
+  - tableVar（例如 forexList、priceTable）
+  - tableTitle（必须包含 [[$tableVar]]）
+  - columns（每列一个 header + var）
+
+### 3. 图表变量 (blockType=chart)
+- 需求包含以下关键词时触发：
+  “走势 / 孳息率 / 价格曲线 / 变化趋势 / chart”
+- chartVar 建议以 Yield / Trend / Chart 结尾
+- chartTitle 必须包含 [[@chartVar]]
+
+### 4. 列表变量（blockType=list）——必须支持
+如果需求中出现以下任意词语，必须生成 list 块，而不是 text：
+- “列表”
+- “List”
+- “清单”
+- “逐条列出”
+- “多项内容”
+- “多条内容”
+- “以列表形式展示”
+- “风险提示是列表”
+- “重点是列表”
+- “注意事项列表”
+
+生成格式：
+{
+  "blockType": "list",
+  "varList": "riskList",
+  "items": ["risk1", "risk2", "risk3"]
+}
+
+规则：
+- varList 名称自动生成（如 riskList / keyPointsList / tipsList）
+- items 数量 2–5 个
+- 不能降级为 text
+
+### 5. mixed 类型
+- 若同一 section 中同时包含：
+  - text + chart
+  - text + table
+  - table + chart
+  则 type = "mixed"
+
+--------------------------------------------
+【历史模板融合规则（新增）】
+
+当 {{n_history_template_info}} 不为空时：
+
+- 你应当：
+  - 对历史模板进行“抽象理解”，提炼其结构与表达习惯
+  - 在不冲突当前需求的前提下，生成更完整、更专业的章节结构
+  - 当当前需求描述较简略时，合理补充必要章节（如摘要、风险提示、结论）
+
+- 你必须避免：
+  - 直接复刻历史模板结构或章节顺序
+  - 使用历史模板中出现过的变量名
+  - 生成当前需求未涉及的主题内容
+
+- 若历史模板与当前需求冲突：
+  → 以【当前报告需求描述】为准
+
+--------------------------------------------
+【最终输出要求】
+
+- 你必须输出合法 JSON（不能包含 markdown、注释等）
+- 不能输出任何解释性文字，只能输出 JSON
+- 所有变量名使用驼峰命名（camelCase）
+- 不能输出空 sections 或空 blocks
+- 即使 {{n_history_template_info}} 中存在完整 Schema，也必须重新生成一份
+  “全新变量命名 + 全新结构顺序”的 Schema
+
+请根据 {{templateName}}、{{templateDesc}}、{{n_history_template_info}}
+生成最终 Schema。
+''')
+
+
+
+// Step 2：调用大模型生成 Schema
+n_md_schema, tpl_md_schema, psr_json
+log('MD Schema: {{n_md_schema}}')
+
+// Step 3：定义 Markdown 生成模板
+define('tpl_md_content', '''
+你是 Apache POI-TL 模板设计专家与 Markdown 模板工程师。
+
+输入是一份「报告结构 Schema」，你必须基于它生成 **Markdown 模板内容**，
+其中所有 POI-TL 模板标签必须使用 [[ ]] 占位符。
+
+【输入 Schema】
+{{n_md_schema}}
+
+--------------------------------------------
+必须严格遵守以下规则（包含强制“双换行”排版规范）
+--------------------------------------------
+1. 所有 POI-TL 标签一律使用 [[ ]] 占位符：
+   - 文本变量：         [[var]]
+   - 表格变量：         [[$tableVar]]
+   - 图表变量：         [[@chartVar]]
+   - 列表循环块：       [[?varList]] ... [[!varList]]
+
+2. 输出必须是纯 Markdown 文本：
+   - 不允许出现 JSON
+   - 不允许出现 markdown 代码块 ```
+   - 不允许出现解释或说明
+   - 只输出最终 Markdown 模板内容
+
+3. **所有需要换行的地方必须使用“双换行”（两个换行符 \n\n），包括：**
+   - section 标题与内容之间
+   - section 与下一个 section 之间
+   - 文本变量块之间
+   - 表格前后必须双换行
+   - 图表前后必须双换行
+   - 列表块前后必须双换行
+   - 表格中每个结构块之间必须双换行
+   - 图表单独一行上下均为双换行
+   - mixed 类型中不同 block 必须双换行分隔
+
+--------------------------------------------
+1. 顶层标题生成规则
+--------------------------------------------
+- 第一行必须输出：
+  # [[reportTitle]]
+
+- reportTitle 必须使用变量形式输出：
+  - 必须是 [[reportTitle]]
+  - 不允许写成 reportTitle
+  - 不允许替换为实际文本
+- "#" 与变量之间必须有空格
+
+**此行后必须紧跟两个换行符。**
+
+--------------------------------------------
+2. 章节生成规则
+--------------------------------------------
+每个 section 生成：
+
+## section.title
+
+（必须双换行）
+
+如果 section.desc 不为空，则单独一行输出 desc 文本，然后继续双换行。
+
+不同 section 之间必须使用“双换行 + 双换行”（即空出一个完整空行块）。
+
+--------------------------------------------
+3. 文本变量块：blockType = "text"
+--------------------------------------------
+输出格式如下：
+
+labelText：[[varName]]
+
+**此块结束后必须双换行。**
+
+--------------------------------------------
+4. 表格变量块：blockType = "table"
+--------------------------------------------
+格式如下：
+
+① 表格标题行：  
+tableTitle(标题行不能有[[$tableVar]])
+
+（双换行）
+
+② Markdown 表格结构：
+
+| header1[[$tableVar]] | header2 | header3 | ... |
+| ------ | ------ | ------ | --- |
+| [colVar1] | [colVar2] | [colVar3] | ... |
+
+规则说明：
+- tableTitle 完全原样输出，不插入任何变量（不加 [[$tableVar]]）。
+- Markdown 表格的第一列表头（header1）后必须自动追加 [[$tableVar]]。
+- 列名：| [colVar1] | [colVar2] | [colVar3] | ... | 必须使用单[]包含，觉得不能使用[[]]包含
+- 其他 header 不追加任何变量。
+- 表格结构前后必须空两行（双换行）。
+- 表格结束后也必须空两行（双换行）。
+
+**表格整体前后必须双换行，结束后必须再追加双换行。**
+
+
+--------------------------------------------
+5. 图表变量块：blockType = "chart"
+--------------------------------------------
+
+所有 chart 块必须严格按照如下格式输出（每个 chart 独立一块）：
+【强制格式：每个图表固定 4 行结构】
+第 1 行：chartTitle 文本（只输出纯标题文本，不做任何字符串替换）
+第 2 行：[[@chartVar]] （变量必须独占一行，不能缺失，不能并入标题）
+第 3 行：空行（必须）
+第 4 行：空行（必须）
+
+也就是说，每一个图表块的最终 Markdown 模板必须长这样：
+chartTitle(标题行不能有[[@chartVar]])
+[[@chartVar]]
+
+（中间是两个换行符，即一行空行）
+
+示例（仅示意，不要照抄文案）：
+美国10年期孳息率
+[[@us10YYield]]
+
+日本10年期孳息率
+[[@jp10YYield]]
+
+英国10年期孳息率
+[[@uk10YYield]]
+
+内地10年期孳息率
+[[@cn10YYield]]
+
+强制约束（禁止以下行为）：
+- 不允许省略第 2 行的 [[@chartVar]]
+- 不允许把 [[@chartVar]] 合并到标题行里
+- 不允许删除 [[@chartVar]] 或只保留标题
+- 不允许用表格形式展示图表（禁止 | 标题A | 标题B | 这种表格）
+- 不允许横向并排多个图表，所有图表必须逐个纵向排列
+
+无论一个 section 中有多少个图表，必须按上述「标题一行 + 变量一行 + 双换行」的模式依次输出
+
+6. 列表变量块：blockType = "list"
+
+列表块必须使用如下格式，并且 **每一行之间必须强制加入一个空行（两个换行符）**：
+
+[[?varList]]
+
+[[itemVar1]]
+
+[[itemVar2]]
+
+...
+
+[[!varList]]
+
+严格要求：
+- 列表块顶部必须有一个空行（在 [[?varList]] 前）
+- 每个 [[itemVarX]] 前必须自动插入一个空行
+- [[!varList]] 前必须自动插入一个空行
+- 不允许移除空行、合并空行、或自行压缩空行
+- 不允许使用 markdown 项目符号（如 "-" 或 "*"）
+
+列表块上下均必须 **双换行**。
+
+--------------------------------------------
+7. 排版要求（已强化成双换行规范）
+--------------------------------------------
+- 章节之间必须两个换行符
+- 文本块之间双换行
+- 表格上下双换行
+- 图表上下双换行
+- 列表上下双换行
+- 所有 block 渲染结束后还需补一个双换行
+- 不得出现单换行导致视觉粘连
+
+--------------------------------------------
+8. 输出要求
+--------------------------------------------
+- 必须输出纯 Markdown 内容
+- 必须严格按照 Schema 中的 sections 顺序生成
+- 不得输出任何 JSON 或解释文字
+
+--------------------------------------------
+
+请基于 {{n_md_schema}} 输出最终 Markdown 模板内容，并确保所有需要换行的位置都使用“双换行”。
+''')
+
+
+// Step 4：生成 Markdown 内容
+n_md_content, tpl_md_content, psr_all
+log('Markdown content generated.')
+assign('n_md_data', '''{"mdData":"{{n_md_content}}"}''')
+//## Step 5: 替换 n_md_content 中的占位符：[[xx]]-->{{xx}}
+n_format_md_content_result,act_api.doExecute?name='report_format_md_data'&params='{{n_md_data}}'
+when('n_format_md_content_result.code==200',{
+  //转换成功,将最新内容赋值给n_md_content
+  assign('n_md_content', '''{{n_format_md_content_result.data}}''')
+})
+// Step 6：生成最终文件名（若用户没传 fileName 就自动生成）
+n_md_file_info, act_func?script='''
+    import java.text.SimpleDateFormat
+    def tempName = templateName+".md"
+    //生成到tmp目录下（会被定时清理）
+    def baseDir ="/appdata/template"
+    // 兼容 Windows / Linux 路径简单处理
+    def sep = baseDir.contains("\\\\") ? "\\\\" : "/"
+    def fullPath = baseDir.endsWith(sep) ? (baseDir + tempName) : (baseDir + sep + tempName)
+
+    def info = [:]
+    info.put("dir", baseDir)
+    info.put("fileName", tempName)
+    info.put("mdFilePath", fullPath)
+    return info
+'''
+
+log('MD file path: {{n_md_file_info.fullPath}}')
+
+// Step 7：写入 Markdown 文件
+n_write_result, act_func.write?filename="{{n_md_file_info.mdFilePath}}"&data="{{n_md_content}}"
+
+// Step 8：返回结果
+assign('result', '''
+Markdown 模板已生成并保存：
+- 报告名称：{{templateName}}
+- 保存路径：{{n_md_file_info.mdFilePath}}
+''')
+
+// Step 9：Md转word(复用report_word_to_pdf)
+assign("n_converter_type",'''{"converter_type":"md_to_word"}''')
+//## Call  Api to convert Md to Word
+n_word_url,act_api.doExecute?name='report_word_to_pdf'&fileNames='{{n_md_file_info.mdFilePath}}'&params='{{n_converter_type}}'
+when('n_word_url.code=="200"',{
+  n_word_url_path,act_func?script='''
+    def wordUrl = n_word_url.relativePath
+    return  wordUrl.replace("/app/data/", "/")
+  '''
+
+  //## 将word文件上传到用户空间的template目录下
+  n_store_template_word_path,act_api.doExecute?name='report_kbs_upload_user_file'&fileNames="{{n_word_url_path}}"&params='{"folderName":"template"}'
+  //n_kbs,act_kbs.fileSyncKbSpace?filePath='system/tmp/api/hello_test_report_template_20260112101109.docx'
+
+  n_main_result,act_func?script='''
+    if(n_store_template_word_path.code==200){
+      def wordMap=n_store_template_word_path.data[0]
+      def wordFileName = wordMap.keySet().iterator().next()
+      def wordFileId = wordMap.get(wordFileName)  
+      def result=[:]
+      result.put("code",200)
+      result.put("wordFileId",wordFileId)
+      return result
+    }
+'''
+  log('{{n_main_result}}')
+})
+//log('Word file path: {{n_word_url}}')
+//assign("n_converter_result","{{n_word_url}}")
+// Step 9：统一错误处理
+on_failure({
+    assign('n_error_result', '''{"code":502,"msg":"Markdown 模板生成失败：{{sys_last_error}}"}''')
+    log('{{sys_last_error}}')
+})

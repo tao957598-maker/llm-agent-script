@@ -1,0 +1,12 @@
+/*
+{
+	"title":"test_03161645",
+	"tag":"可视化",
+	"displayOrder":0,
+	"version":1
+}
+*/
+
+assign('sync_result', '123456')
+
+

@@ -1,0 +1,52 @@
+/*
+{
+	"title": "knowledge space - milvus(siliconflow)",
+	"description": "knowledge space - milvus(siliconflow)",
+    "parameter": [
+                    {
+                        "name":"knowledgeId",
+                        "label":"知识文件Id",
+                        "type":"textarea"
+                    }
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "uiEntrance": "chatdoc",
+	"tag":"chatdoc"
+} */
+
+
+// 1.文件解析之前，需要将已经解析的数据、分析的数据清理，避免重复录入
+act_kb.delete?name='kbs_doc_page_parse'&where='{"documentId":"{{knowledgeId}}"}'&maxSize=10000
+act_kb.delete?name='kb_spaces_knowledge_section'&where='{"document_id":"{{knowledgeId}}"}'&maxSize=10000
+
+// 2.知识状态为->文件解析
+act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"1","msg":"-"}'&where='{"id":{{knowledgeId}}}'
+
+// 3.查询出需要处理的知识
+n_data,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,kb_spaces_folder_id,extension,store_uri,knowledge_name'&maxSize=1&where='{"id":{{knowledgeId}}}'
+n_first_data,act_func?script='''
+                        return n_data[0]
+                    '''
+// 4.通过文件类型，获取对应的api后缀
+n_data_apiPostfix,act_kbs.getApiPostfix?extension='{{n_first_data.extension}}'
+when("n_data_apiPostfix!=null && n_data_apiPostfix !=''", {
+    // 5.获取api编码
+    n_api_code,act_func?script='''
+                        def api_code = 'rag'
+                        api_code += "_" + n_data_apiPostfix + "_parse"
+                        return api_code
+                    '''
+
+    // 6.调用ocr的接口，将知识进行解析
+    n_api_data,act_api.doExecute?name={{n_api_code}}&fileNames='{{n_first_data.store_uri}}'
+    when("n_api_data.success==false", {
+        // 7.更新知识状态->fail
+        act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"Failed to access OCR service, please contact the system administrator"}'&where='{"id":{{knowledgeId}}}'
+    })
+},{
+     // 8.更新知识状态->fail
+    act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"fail,the file type cannot be parsed."}'&where='{"id":{{knowledgeId}}}'
+})
+
+assign('return', '{{sys_last_result}}')

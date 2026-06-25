@@ -1,0 +1,64 @@
+/*{
+	"title":"Gen testcase by KB (Entry)",
+	"description":"Unified entry: route to web/api pipelines by source_type with auto detection",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+        {
+			"name":"source_type",
+			"label":"文档类型",
+			"args":[
+                {
+					"label":"Auto",
+					"value":"auto"
+				},
+				{
+					"label":"Web",
+					"value":"web"
+				},
+				{
+					"label":"Api",
+					"value":"api"
+				}
+			],
+			"required":true,
+			"type":"select"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"resultPlan":"status,n_combined_result,n_doc_mind_map,routed_source_type",
+	"version":1
+}*/
+// Agent status
+assign("status", "Agent is running")
+assign("routed_source_type", "{{source_type}}")
+
+// route by selected type
+when('"{{source_type}}" == "web"', {
+    assign("routed_source_type", "web")
+    // web must keep old logic untouched
+    n_entry_result,agt_test_doc_summary?kbSpaceFileId={{kbSpaceFileId}}&pages={{pages}}&version={{version}}&source_type=web
+},{
+    when('"{{source_type}}" == "api"', {
+        assign("routed_source_type", "api")
+        n_entry_result,agt_gen_test_case_api_root?kbSpaceFileId={{kbSpaceFileId}}&pages={{pages}}&version={{version}}
+    },{
+        // auto means mixed orchestration, not global one-shot classification
+        assign("routed_source_type", "auto")
+        n_entry_result,agt_gen_test_case_auto_root?kbSpaceFileId={{kbSpaceFileId}}&pages={{pages}}&version={{version}}
+    })
+})
+
+assign("n_combined_result", "{{n_entry_result.n_combined_result}}")
+assign("n_doc_mind_map", "{{n_entry_result.n_doc_mind_map}}")

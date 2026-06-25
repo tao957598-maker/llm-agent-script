@@ -1,0 +1,75 @@
+/*
+{
+	"title":"agt_bug_test_assignPlan",
+	"description":"测试paln设置executor是否正确-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_test_step",
+	"version":1
+}
+*/
+assign('test_no','test_0234')
+assign('system','CloudBank')
+assign('version','')
+
+// Load business information from knowledge base
+n_envinfo, act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'
+
+// Set system language
+assign('language', '{{fn.str(n_envinfo, "language")}}')
+
+
+// Load steps from knowledge base
+act_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("test_no,test_no,application,system,version,version")}}',act_memory.assign?var=steps 
+
+foreach('n_test_step', 'steps', {
+	// Reset system variables and initialize counter
+    act_memory.forgetSystemVariable
+    act_memory.increase?var=count_{{n_test_step.index}}&max=10
+
+    // Initialize current step variables
+    assign('current_step', '{{n_test_step.item}}', 'steps', '{{n_test_step.items}}')
+	
+	// Map task type to agent
+	n_new_taskType, act_func?script='''
+		def taskType = 'OPERATION_EXECUTE_TASK'
+		def agentList = [
+			['TRIPLE_TASK','Triple'],
+			['VERIFICATION_TASK','Verify'],
+			['OPERATION_EXECUTE_TASK','Execute'],
+			['DYNAMIC_SELECT_TASK','Select'],
+			['DYNAMIC_PLAN_TASK','Plan']
+		]
+		def newTaskType = agentList.find { it[0] == taskType }?.getAt(1) ?: 'OPERATION_EXECUTE_TASK'
+		return newTaskType
+	'''
+	assign('new_taskType', '{{n_new_taskType}}')
+	log("---------------new_taskType:{{new_taskType}}")
+					
+
+	// Map task type to specific agent
+	n_plan_agent_map, act_func?script='''
+		def taskType = '{{new_taskType}}'
+		def agentList = [
+			['agt_test_triple.test','TRIPLE_TASK','Triple'],
+			['agt_test_verification.test','VERIFICATION_TASK','Verify'],
+			['agt_test_selenium.test','OPERATION_EXECUTE_TASK','Execute'],
+			['agt_test_selenium_dyna.test','DYNAMIC_SELECT_TASK','Select'],
+			['agt_test_planlist.test','DYNAMIC_PLAN_TASK','Plan']
+		]
+		def agent = agentList.find { it[1] == taskType }?.getAt(0) ?: "['agt_test_selenium.test','OPERATION_EXECUTE_TASK','Execute']"
+		return agent
+	'''
+	// executor为空后再次赋值
+	assign('plan_agent', '{{n_plan_agent_map}}')
+	log("---------------plan_agent:{{plan_agent}}")
+	act_plan.assignAgent?var=n_test_step&index={{n_test_step.index}}&executor={{plan_agent}}
+
+	assign('n_agentCallNames', '{{n_plan_agent_map}}')
+	// envinfoenvinfo
+	assign('envinfoenvinfo', '{{n_envinfo}}')
+	// Execute the plan with selected agent
+	act_plan.runPlan?executor={{plan_agent}}&parameters='test_no={{test_no}}&steps={{n_test_step.items}}&step_index={{n_test_step.index}}&current_step={{current_step}}&application={{system}}&version={{version}}&envinfo={{n_envinfo.envinfo}}&agentCallNames={{n_agentCallNames}}'
+
+})

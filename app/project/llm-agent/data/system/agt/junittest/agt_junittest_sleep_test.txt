@@ -1,0 +1,22 @@
+/*
+{
+	"title":"单元测试：休眠测试用",
+	"parameter":"sleepSeconds=休眠时间秒",
+	"resultPlan":"n_test_result_plan1, n_test_result_plan2",
+	"version":2
+}
+*/
+// 睡眠第【1】步
+act_flow.wait?second=1
+
+// 睡眠第【2】步
+act_flow.wait?second=2
+
+// 睡眠第【3】步
+n_test_result_plan1, act_flow.wait?second=3
+
+// 调用其他agt: agt_junittest_sleep_other
+agt_junittest_sleep_other.junittest?async=false
+
+// 睡眠第【4】步
+n_test_result_plan2, act_flow.wait?second=4

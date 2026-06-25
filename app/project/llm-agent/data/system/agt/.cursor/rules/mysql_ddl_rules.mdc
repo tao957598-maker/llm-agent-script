@@ -1,0 +1,118 @@
+# MySQL DDL 脚本编写规范
+
+## SQL 文件位置
+
+| 文件 | 路径 | 用途 |
+|---|---|---|
+| **mysql_upgrade.sql** | `llm-agent\agent-platform-starter\db\mysql_upgrade.sql` | 所有数据库升级脚本（DDL/DML） |
+
+---
+
+## 编写规范
+
+### 1. 新增字段
+
+```sql
+-- 日期 + 简短说明
+ALTER TABLE `llm_agent`.`表名`
+    ADD COLUMN `column_name` varchar(255) NULL COMMENT '字段说明' AFTER `上一个字段名`;
+```
+
+### 2. 修改字段
+
+```sql
+-- 日期 + 简短说明
+ALTER TABLE `llm_agent`.`表名`
+    MODIFY COLUMN `column_name` varchar(255) NULL COMMENT '修改后的说明' AFTER `上一个字段名`;
+```
+
+### 3. 新增表
+
+```sql
+-- 日期 + 简短说明
+CREATE TABLE `llm_agent`.`表名` (
+    `id` bigint NOT NULL,
+    `name` varchar(255) NULL COMMENT '字段说明',
+    PRIMARY KEY (`id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='表说明';
+```
+
+### 4. 新增索引
+
+```sql
+-- 日期 + 简短说明
+ALTER TABLE `llm_agent`.`表名`
+    ADD INDEX `idx_xxx` (`column_name`);
+```
+
+### 5. 唯一索引
+
+```sql
+-- 日期 + 简短说明
+ALTER TABLE `llm_agent`.`表名`
+    ADD UNIQUE INDEX `uk_xxx` (`column1`, `column2`);
+```
+
+### 6. 新增数据
+
+```sql
+-- 日期 + 简短说明
+INSERT INTO `llm_agent`.`sys_system_config` (`id`, `type`, `config_key`, `description`, `value`, `env_flag`)
+VALUES (xxx, 'type', 'key', '说明', 'value', b'0');
+```
+
+### 7. 新增 meta_table_column 记录
+
+```sql
+-- 日期 + 简短说明
+INSERT INTO `llm_agent`.`meta_table_column` 
+(`id`, `table_id`, `column_name`, `column_type`, `column_comment`, `nullable`, `column_default`, `max_length`, `dimension`, `vector_type`, `is_graph`, `is_index`, `index_type`, `display_length`, `display_order`, `create_time`, `update_time`) 
+VALUES (xxx, xxx, 'column_name', 'varchar', '字段说明', b'1', NULL, 255, NULL, NULL, 0, NULL, 0, 50, 10, '2026-05-28 18:00:00', '2026-05-28 18:00:00');
+```
+
+---
+
+## 注意事项
+
+### 日期格式
+```
+格式：YYYY-MM-DD
+示例：2026-05-28
+```
+
+### 注释格式
+- 单行注释：`-- 注释内容`
+- 日期 + 简短说明作为注释头
+
+### 数据库名
+- 统一使用：`` `llm_agent` ``
+
+### ID 生成规则
+- 使用雪花算法生成 ID
+- 或使用 `Select max(id) + 1 from xxx` 查询最大值
+
+### nullable 字段
+- `b'0'` = 非空
+- `b'1'` = 可空
+
+### 批量操作
+多个相关操作写在一起，用空行分隔：
+
+```sql
+-- 2026-05-28 新增字段
+ALTER TABLE `llm_agent`.`llm_tool_integration`
+    ADD COLUMN `source_table` varchar(100) NULL COMMENT '来源表名' AFTER `tool_type`;
+
+ALTER TABLE `llm_agent`.`llm_tool_integration`
+    ADD INDEX `idx_source_table` (`source_table`);
+```
+
+---
+
+## 快速检查清单
+
+- [ ] 日期格式正确（YYYY-MM-DD）？
+- [ ] 使用 `` `llm_agent` `` 作为数据库名？
+- [ ] 新增字段有 AFTER 指定位置？
+- [ ] 字段有 COMMENT 说明？
+- [ ] ID 值唯一不冲突？

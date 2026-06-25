@@ -1,0 +1,164 @@
+/*
+{
+	"title":"API Test Data Generation Platform",
+	"description":"AI-enhanced testing solution based on OpenAPI 3.0 specification, automating API metadata collection to provide foundational support for test case and documentation generation",
+	"parameter":[
+		{
+			"name":"kbAPIFileId",
+			"label":"API File",
+			"type":"knowledge_space"
+		},
+        {
+			"name":"application",
+			"label":"System Name",
+            "required":true
+		},
+        {
+			"name":"is_need_performance",
+			"label":"Generate Performance Test Data",
+			"args":[
+				{
+					"label":"Yes",
+					"value":"1"
+				},
+				{
+					"label":"No",
+					"value":"0"
+				}
+			],
+			"defaultValue":"1",
+			"type":"select",
+			"required":true
+		},
+        {
+			"name":"version",
+			"label":"version",
+			"required":true,
+			"defaultValue":"V1.0",
+		}
+	],
+	"tag":"Automated Testing",
+	"resultPlan":"answer_summary",
+	"displayOrder":71,
+	"life":1000
+}
+*/ 
+
+// API File Id
+when('fn.hasValue(kbAPIFileId)', {
+	//# DocumentId
+    assign("documentId", "{{kbAPIFileId}}")
+
+    //# Read file from kbs
+    n_api_content,act_kb.select?name='kbs_doc_page_parse'&column='fileName,content'&where='{"documentId":"{{documentId}}"}'
+
+    // File name
+    n_file_name,act_func?script='''return n_api_content[0].fileName'''
+
+    // File content
+    n_file_content,act_func?script='''return n_api_content[0].content'''
+
+	// Get api content
+	assign("n_api_data", "{{n_file_content}}")
+
+    // 拆分API接口文档
+    n_api_list, act_func?js='''
+    (function() {
+        // 原始OpenAPI文档
+        let openApiDoc = {{n_api_data}};
+
+        // 拆分函数
+        function splitOpenApiDoc(doc) {
+            const result = [];
+            const baseInfo = {
+                openapi: doc.openapi,
+                info: doc.info,
+                components: {
+                    schemas: {
+                        HTTPValidationError: doc.components.schemas.HTTPValidationError,
+                        ValidationError: doc.components.schemas.ValidationError
+                    }
+                }
+            };
+
+            for (const [path, methods] of Object.entries(doc.paths)) {
+                for (const [method, operation] of Object.entries(methods)) {
+                    const singleEndpoint = JSON.parse(JSON.stringify(baseInfo));
+                    // 添加路径和操作
+                    singleEndpoint.paths = {
+                        [path]: {
+                            [method]: operation
+                        }
+                    };
+                    
+                    // 添加相关的schema
+                    const refs = findSchemaRefs(operation);
+                    for (const ref of refs) {
+                        const schemaName = ref.split('/').pop();
+                        if (doc.components.schemas[schemaName]) {
+                            singleEndpoint.components.schemas[schemaName] = doc.components.schemas[schemaName];
+                        }
+                    }
+                    result.push(JSON.stringify(singleEndpoint));
+                }
+            }
+            return JSON.stringify(result);
+        }
+
+        // 辅助函数：查找schema引用
+        function findSchemaRefs(obj, refs = new Set()) {
+            if (typeof obj !== 'object' || obj === null) return refs;
+            
+            for (const [key, value] of Object.entries(obj)) {
+                if (key === '$ref') {
+                    refs.add(value);
+                } else if (typeof value === 'object') {
+                    findSchemaRefs(value, refs);
+                }
+            }
+            return refs;
+        }
+
+        // 执行拆分
+        const splitApis = splitOpenApiDoc(openApiDoc);
+
+        // 返回拆分结果
+        return splitApis;
+    })();
+    '''
+    on_failure({
+		// 拆分失败
+		// =========================================================================
+	})
+
+    // Get version
+    assign("n_version", "{{version}}")
+    assign('async_list', '[]')
+    // 获取application
+    assign('n_application', '{{application}}')
+
+    // Generate the data for api test
+    foreach('n_api','n_api_list', {
+        // 单个api接口数据
+        assign('api_json_data', '{{n_api.item}}')
+    	n_gen_task,agt_gen_api_test_data?application={{n_application}}&file_name={{n_file_name}}&openapi_data={{api_json_data}}&performance={{is_need_performance}}&version={{version}}&async=true
+    	n_gen_task_tmp,act_func?script='''
+			def var_tmp = n_gen_task
+			async_list.add(var_tmp)
+			return var_tmp
+    	'''
+    })
+
+    // 对数据生成结果进行循环处理并分类
+    foreach('n_item', 'async_list', {
+        assign('async_summary', '{{n_item.item}}')
+        // Current async result
+        assign('answer_summary', '{{async_summary.value}}')
+    })
+},
+{
+    // Raise error
+    assign("answer_summary", "Please select the correct file")
+
+})
+

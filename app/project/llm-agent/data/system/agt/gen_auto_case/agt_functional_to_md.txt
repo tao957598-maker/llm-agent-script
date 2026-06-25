@@ -1,0 +1,64 @@
+/*
+{
+  "title": "Functional List 转 Markdown",
+  "description": "将 functional_list 数据通过 GPT 转换为 Markdown 格式",
+  "parameter": [
+    {
+      "name": "functional_list",
+      "label": "Background列表数据"
+    }
+  ],
+  "llm_type": "deepseek-chat",
+  "life": "100",
+  "modified_by": "lht",
+  "resultPlan": "n_functional_md_result",
+  "modified_time": "2024-11-28",
+  "version": "1"
+}
+*/
+
+n_dbg_func_md_in,act_func?script='''
+try {
+  def fl = functional_list
+  println("[agt_functional_to_md] functional_list_size=" + (fl instanceof List ? fl.size() : (fl == null ? "null" : fl.getClass().getSimpleName())))
+} catch (Throwable t) { println("[agt_functional_to_md] param_error=" + t.message) }
+return ""
+'''
+
+// 定义 GPT 模板
+
+define('tpl_functional_to_md', '''
+# 任务
+将下方「内容信息」压缩为精简 Markdown，避免冗长与重复表述。
+
+# 格式
+- 不要一级标题；仅一个二级标题（结合 requirement_type 与主题自拟）。
+- 仅保留“主要标题/主功能点”，删除实现细节、示例、解释性语句。
+- 正文最多 3 个三级标题；每个三级标题下最多 3 条要点。
+- 每条要点不超过 20 个汉字或 12 个英文词，相近要点必须合并。
+- 术语与原文一致（中英繁按原文）；只在必要时标注页码，如 Page3、Page4。
+- 若输入重复或相似，输出只保留一条主结论。
+
+只输出一个代码块：
+```markdown
+……
+```
+
+# 内容信息
+{{functional_list}}
+''')
+
+// 调用 GPT 进行转换
+n_functional_md_result, tpl_functional_to_md, psr_md
+
+// 保存转换结果
+assign('functional_md_result', '{{n_functional_md_result}}')
+
+// 输出结果
+assign('result', '{{functional_md_result}}')
+
+// 捕捉失败定义运行失败
+on_failure({
+  assign('result', 'fail')
+  act_flow.go?plan=end
+})

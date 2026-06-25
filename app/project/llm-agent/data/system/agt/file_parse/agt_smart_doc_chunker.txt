@@ -1,0 +1,211 @@
+/*
+{
+	"title":"智能文档分片引擎",
+	"description":"基于AI的文档内容智能解析系统，支持多种分片策略，实现高效文本处理与语义分析",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"knowledge_space"
+		},
+		{
+			"name":"chunkMethodConst",
+			"label":"智能分片策略",
+			"args":[
+				{
+					"label":"chunk_by_page",
+					"value":"chunk_by_page"
+				},
+				{
+					"label":"chunk_by_length",
+					"value":"chunk_by_length"
+				},
+				{
+					"label":"chunk_by_row",
+					"value":"chunk_by_row"
+				},
+				{
+					"label":"chunk_by_empty_row",
+					"value":"chunk_by_empty_row"
+				},
+				{
+					"label":"chunk_by_smart",
+					"value":"chunk_by_smart"
+				}
+			],
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"select"
+		},
+		{
+			"name":"chunkSizeConst",
+			"label":"分片大小",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"repeatRateConst",
+			"label":"分片重叠率(百分比)",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"file_parse",
+	"version":3
+}
+*/
+assign("file_id", '{{kbSpaceFileId}}')
+assign("chunkSize", '{{chunkSizeConst}}')
+when('!fn.hasValue(chunkSize)', {
+	// 转换为整数
+	assign("chunkSize", '5000')
+})
+assign("chunkMethod", '{{chunkMethodConst}}')
+when('!fn.hasValue(chunkMethod)', {
+assign("chunkMethod", 'chunk_by_smart')
+})
+assign("repeatRate", '{{repeatRateConst}}')
+when('!fn.hasValue(repeatRate)', {
+assign("repeatRate", '0.2')
+},
+{
+	n_repeatRate,act_func?script='''
+  		def num_rate = repeatRate as Integer
+  		return num_rate/100
+	'''
+	assign("repeatRate", '{{n_repeatRate}}')
+}
+)
+
+// 分析之前，修改状态为：执行中
+act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"1","msg":""}'&where='{"id":{{kbSpaceFileId}}}'
+
+// 查询kbs_doc_page_parse表数据
+n_result, act_kb.selectBy?sql='
+select * from (
+SELECT
+    p.documentId as document_id,
+    p.page as page,
+    CASE
+		WHEN p.analysis_content IS NULL OR p.analysis_content = ""
+		THEN p.content
+		ELSE p.analysis_content
+	END AS content,
+	p.meta_data as meta_data,
+	p.content_md as content_md,
+    f.kb_spaces_folder_id as folder_id,
+	"0" as status,
+	DATE_FORMAT(CURRENT_TIMESTAMP, "%Y-%m-%d %H:%i:%s") as update_time
+FROM
+    kbs_doc_page_parse p
+JOIN
+    kb_spaces_folder_knowledge f
+    ON p.documentId = f.id
+WHERE
+    p.documentId = "{{kbSpaceFileId}}" ) as a where a.content is not null 
+	'
+// 查询kb_test_req_metadata表数据
+n_result2, act_kb.selectBy?sql='''SELECT
+    m.page as page,
+    JSON_OBJECT(
+        'page', m.page,
+        'title', m.title,
+        'keywords', m.keywords,
+        'description', m.description
+    ) as content
+FROM
+    kb_doc_req_metadata m
+WHERE
+    documentId = "{{kbSpaceFileId}}"
+	'''
+n_result_map, act_func?script='''
+def resultMap = [:]
+n_result2.each { item ->
+    resultMap[item.page] = item.content
+}
+return resultMap
+'''
+
+// file extension
+n_file_extension, act_kb.selectBy?sql='SELECT extension, CONCAT(knowledge_name, '.', extension) AS knowledge_name FROM kb_spaces_folder_knowledge WHERE id="{{kbSpaceFileId}}"'
+assign("file_extension", '{{n_file_extension[0].extension}}')
+assign("file_name", '{{n_file_extension[0].knowledge_name}}')
+
+// 查询结果
+assign("content_list", '{{n_result}}')
+// 切片配置
+assign('chunks_config', '{{fn.json("chunks_num,chunkSize,chunks_type,chunkMethod,repeat_rate,repeatRate,file_extension,file_extension,file_name,file_name")}}')
+log('========================================================================================================================================================')
+log('{{chunks_config}}')
+log('========================================================================================================================================================')
+// 切片处理
+n_result_data, act_api.doExecuteDynamic?name="file_parse_chunks"&dynamicParamData='{"content_list":{{content_list}},"chunks_config":{{chunks_config}}}'
+
+
+// 获取API返回的meta_data数据
+n_updated_data, act_func?script='''
+    def newList = []
+    n_result_data.each { map ->
+        def newMap = [:] + map  // 创建map的副本
+
+        pageValue1 = map.meta_data 
+        pageValue2 = fn.map(n_result_map[map.page+""])
+        if (pageValue1 == null) {
+          pageValue1 = [:]
+        }
+        pageValue = pageValue1 + pageValue2       
+        newMap.meta_data = fn.str(pageValue)
+
+		newMap.raw_content = newMap.content
+		newMap.remove('content')
+        newList << newMap
+    }
+    return newList
+'''
+
+// 组装数据 kb_doc_req_metadata + kbs_doc_page_parse
+n_updated_data_2, act_func?script='''
+def newList = []
+n_result_data.each { map ->
+    def newMap = [:] + map  // 创建map的副本
+    def pageValue = n_result_map[map.page]
+    if(pageValue) {
+        newMap.raw_content = newMap.content
+		newMap.meta_data = pageValue
+        newMap.remove('content')
+    } else {
+        newMap.raw_content = newMap.content
+        pageValue = map.page 
+        newMap.meta_data =  '# page \\n' + pageValue
+        newMap.remove('content')
+    }
+    newList << newMap
+}
+return newList
+'''
+
+
+// 删除kb_spaces_knowledge_section表数据
+// act_kb.selectBy?sql='DELETE FROM kb_spaces_knowledge_section WHERE document_id = "{{kbSpaceFileId}}"'
+act_kb.delete?name='kb_spaces_knowledge_section'&where='{"document_id":"{{kbSpaceFileId}}"}'&maxSize=30000
+
+when("fn.hasValue(n_updated_data)", {
+	// 将查询结果插入kb_spaces_knowledge_section表
+	act_kb.importData?name='kb_spaces_knowledge_section'&data='{{n_updated_data}}'&embedding=false
+	// 修改状态为：完成
+	act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"2","msg":""}'&where='{"id":{{kbSpaceFileId}}}'
+	assign('sys_last_result', '{"status":2,"nodeName":"slice","msg":""}')
+},{
+	act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"slice failed,unable to find chunk data that can be sliced"}'&where='{"id":{{kbSpaceFileId}}}'
+	act_flow.fail?result='slice failed,unable to find chunk data that can be sliced'
+})
+on_failure({
+	// 分析失败，修改状态为：分析失败
+	act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"{{sys_failure_task.result}}"}'&where='{"id":{{kbSpaceFileId}}}'
+})

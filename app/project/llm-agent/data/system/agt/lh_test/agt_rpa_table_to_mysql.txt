@@ -1,0 +1,42 @@
+/*
+{
+	"title": "RPA表格数据解析与存储",
+	"parameter": [
+    {
+			"name": "tableName",
+			"label": "表格名称",
+			"required": true
+		},
+		{
+			"name": "userInput",
+			"label": "需求描述",
+			"required": false
+		}
+	],
+	"version": 1
+}
+*/
+
+// 通过RPA获取页面表格数据
+n_collect_page, act_rpa.send?command=CollectTableData
+
+// 检查是否成功获取页面数据
+when('{{fn.hasValue(n_collect_page)}}', {
+	assign('page_data', '{{n_collect_page}}')
+	log('成功获取页面数据：{{page_data}}')
+},{
+	assign('error_msg', '未能获取页面数据，请检查RPA连接')
+	log('{{error_msg}}')
+	act_flow.go?plan=end
+})
+
+// 处理返回数据
+n_result,act_func.run?script='''
+	def result = n_collect_page?.size() == 1 ?n_collect_page[0] : n_collect_page
+	return result
+'''
+log('result:{{n_result}}')
+
+
+// 处理页面数据并插入数据表 
+act_kb.importData?name='kb_cy_table_metadata'&data={{n_result}}

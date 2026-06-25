@@ -1,0 +1,139 @@
+/*
+{
+	"title":"主程序入口",
+	"parameter":[
+		{
+			"name":"system_name",
+			"label":"系统名称",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name": "userInput",
+			"label": "用户需求",
+			"required": true
+		}
+	],
+	"version":1
+}
+*/
+// Set parameter
+assign('params','{"question":"{{userInput}}","folderIds":"{{folderIds!}}","knowledgeIds":"{{knowledgeIds!}}"}')
+// n_listn_list
+n_list,agt_get_list_url?system_name={{system_name}}&userInput={{userInput}}
+when('!fn.hasValue(n_list)', {
+	assign('result', '[]')
+
+},{
+assign('n_pamp_answer', '[]')
+
+// 页面之间跳转的操作
+n_search_condition,agt_get_start_end_url?system_name={{system_name}}&list_uri={{n_list}}
+assign('start',"{{n_search_condition.start_url}}")
+assign('end',"{{n_search_condition.end_url}}")
+
+	when('start==end', {
+		assign("sql", "SELECT collect_data FROM llm_agent.kb_spiderdeep_content where system_name = '{{system_name}}'  and current_uri = '{{start}}'  ")
+		// 执行SQL查询
+		n_search_graph_data,act_kb.selectBy?sql={{sql}}
+		
+
+	},{
+	// search_graph_data
+	assign('passThrough','{{ fn.when(fn.hasValue(n_search_condition.passThrough), n_search_condition.passThrough,"[]") }}')
+	n_search_graph_data,act_kb.searchGraphShortPath?label='kb_spiderdeep_directory_graph_content'&filterKey='current_uri'&start={{start}}&passThrough={{passThrough}}&end={{end}}&systemName={{system_name}}
+	})
+	// tpl_get_page_action_info
+	n_data,tpl_get_page_action_info,psr_json
+
+	assign('async_list', '[]')
+	n_get_url_node,act_func.run?script='''
+	def newList2 = n_data.collect { [No: it.No, Current_URI: it.Current_URI] }
+	return newList2
+	'''
+
+	// 异步处理每页数据
+	agt_async_get_pamp?userInput={{userInput}}
+	n_pamp_tmp_result,act_memory.retrieve?var=agt_async_pamp_answer&global=true
+	//# 异步处理页面数据的结果
+	append('n_pamp_answer', '{{n_pamp_tmp_result}}')
+})
+assign('result', '{{n_pamp_answer}}')
+
+
+// 补充 TODO 页面里边的操作序列
+
+define('tpl_get_page_action_info', '''
+{{n_search_graph_data}}
+# 用户目标:
+{{userInput}}
+
+# 以上数据用json展示,4个字段如下:
+**No**: 顺序数字
+**Current_URI**: 当前页面URI
+
+**Operation_Sequence**:
+包含:`序号`+`步骤描述`+`[操作类型 target id]`
+`步骤描述`中关键重要的信息需要用``标记: 例如: 点击`Transfer`,输入`lht`密码
+
+**Target_URI**:  完成操作序列后导航到的页面路径
+
+# 返回json数据格式
+```json
+[{},{}...]
+```
+''')
+
+agent('agt_async_get_pamp', {
+	assign('async_list_pamp', '[]')
+	assign('answer_summay_list_pamp', '[]')
+	assign('answer_summay_pamp', '[]')
+	assign('n_pamp_result', '[]')
+
+	foreach('n_page_content', 'n_data', {
+		// 获取当前模块名称
+		assign('page_content', '{{n_page_content.item}}')
+		// 计算数据
+		n_pamp_result,agt_get_pamp?application='{{system_name}}'&page_url={{page_content.Current_URI}}&data={{page_content}}&userInput={{n_get_url_node}}
+		n_pamp_result_temp,act_func?script='''
+		def expert = n_pamp_result
+		async_list_pamp.add([n_pamp_result:expert])
+		return expert
+		'''
+	})
+
+	foreach('n_item', 'async_list_pamp', {
+		assign('async_map', '{{n_item.item}}')
+		assign('answer_summay_pamp', '[]')
+		n_key,act_func?script='''
+		def data = async_map
+		def entry = data.entrySet().first()  
+		def key = entry.key
+		return key
+		'''
+
+		n_value,act_func?script='''
+		def data = async_map
+		def entry = data.entrySet().first()  
+		def value = entry.value
+		return value
+		'''
+		// answer_summay_pamp answer_summay_pamp 1
+		assign('answer_summay_pamp', '{{fn.hasValue(n_value,"value") ? n_value.value : "[]"}}')
+
+		// n_tmp_answern_tmp_answer 1
+		n_pamp_result,act_func?script='''
+		def newList = answer_summay_pamp
+		answer_summay_list_pamp.addAll([
+			key: n_key,
+			value: newList
+		])
+		return newList
+		'''
+	})
+
+	act_memory.assign?var=agt_async_pamp_answer&value={{answer_summay_list_pamp}}&global=true
+
+})

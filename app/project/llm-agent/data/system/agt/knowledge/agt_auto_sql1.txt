@@ -1,0 +1,57 @@
+/*
+{
+	"title":"Smart SQL Query Generator",
+	"description":"Automatically generates and executes SQL queries based on natural language input",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"客户问题\",\"type\":\"textarea\"}",
+	"life":100,
+	"version":1
+}
+*/
+// 第一步：接收用户输入
+assign("input_parameter", "{{userInput}}")
+
+// 第二步：提取用户请求中可能的表名（预处理）
+define("tpl_extract_table", '''
+你是一位SQL分析助手，请从用户请求中提取出数据库表名，不加解释，直接返回表名或空字符串。
+请求：{{input_parameter}}
+返回格式：{"table": "xxx"} 或 {"table": ""}
+''')
+
+n_table, tpl_extract_table
+assign("table_name", "{{n_table.table}}")
+
+// 第三步：获取该表字段结构
+n_fields_raw, act_kb.selectBy?sql='SHOW COLUMNS FROM {{table_name}}'
+n_field_names, act_func?script='''return n_fields_raw.collect { it["Field"] }'''
+
+// 第四步：生成SQL（结合自然语言 + 字段结构 + LLM推理）
+define("tpl_gen_auto_sql", '''
+你是一位SQL专家，请结合表字段与用户请求生成一条安全、准确的SQL查询。规则如下：
+
+1. 表名：{{table_name}}
+2. 可用字段：{{n_field_names}}
+3. 遍历【可用字段】，完全相符时，优先精确匹配。
+4. 支持模糊多个匹配，例：用户提出取“name”或“名称”字段，但【可用字段】没有“name”精确匹配，则取【可用字段】内所有包含“name”的字段如“nick_name”,“real_name”等)，sql用“OR”连接，
+5. 支持条件筛选（WHERE）、字段选择、模糊匹配（LIKE）、排序、分页等常规语句。
+6. 如果用户没有指定返回行数，并且没有明确指出“查询所有数据”或者“查询全部数据”之类的描述，请默认添加 `LIMIT 100` 限制返回行数。
+7. 禁止生成除 SELECT 以外的任何语句（如 INSERT、DELETE、UPDATE）。
+8. 若找不到合适字段，返回：{"sql": "找不到匹配字段"}
+9. 不用解释，不要添加注释或解释说明。
+
+# 补充信息:
+严格保留用户输入中的特殊字符（如连字符"-"），不得将其替换为下划线"_"或其他字符。
+
+用户请求：{{input_parameter}}
+
+返回格式：
+{"sql": "SELECT * FROM kb_test_meta WHERE age = 30"}
+
+''')
+n_gen_sql, tpl_gen_auto_sql
+
+// 第五步：执行 SQL 查询
+assign("final_sql", "{{n_gen_sql.sql}}")
+n_result_data, act_kb.selectBy?sql='{{final_sql}}'
+
+// 第六步：输出查询结果
+assign("generated_data", "{{final_sql}}")

@@ -1,0 +1,75 @@
+/*
+{
+	"title":"API functional decomposition",
+	"description":"Decompose API specification text into module/submodule tree (parallel to Web func_modules)",
+	"parameter":"{\"name\":\"input_data\",\"label\":\"Knowledge space path\"}",
+	"llmType":"alias.highquality",
+	"resultPlan":"result_functional",
+	"life":10000,
+	"version":1
+}
+*/
+when('!fn.hasValue(input_data)', {
+  // [FUNC-API] 无 input_data 时短路：与 Web 版一致；勿把空串当「全量 spec」否则会胡编模块
+  assign("result", '')
+},{
+n_dbg_fm_api_in,act_func?script='println("[agt_test_doc_func_modules_api] input_data_present=true"); return ""'
+// [FUNC-API] LLM 仅契约分解；调用方须为 root 拆分后的 api functional 列表序列化结果，不可混入 Web 行
+n_get_functional, tpl_get_functional_api, psr_json
+//# functional result
+assign("result_functional", '{{n_get_functional}}')
+})
+
+// 定义 LLM 模板
+define('tpl_get_functional_api', '''
+### API functional decomposition (HTTP contract view)
+
+**Goal**: From API specification fragments, build a **hierarchical module tree** where each **submodule** is a testable API surface (one endpoint/operation whenever a `METHOD path` is present).
+
+**Principles**
+1. For API endpoints, prefer a precise action name over a broad service area. Derive it from the last meaningful URL segment when possible: `POST /api/auth/login` -> `Login`, `POST /api/auth/logout` -> `Logout`.
+2. Avoid broad top-level names such as `Authentication`, `User Management`, `API`, or `Service` when a concrete endpoint/action is available.
+3. **Submodules** name concrete operations: include HTTP verb + resource path pattern when present.
+4. **Description** must cite evidence: status codes, auth scheme, idempotency, pagination, error body.
+5. **source** field: list page numbers like Page3,Page4 when available from input.
+6. Do **not** invent endpoints not supported by the text.
+7. Prefer English naming aligned with the document.
+8. Ignore UI-only wording unless it maps to an API (e.g. “download” as GET export).
+
+## Same JSON keys as Web module tree — API semantics
+- **platform**: API product or spec title (e.g. from `info.title`), not a browser name.
+- **modules[].name**: Short endpoint/action display name. Prefer URL-derived verbs/nouns such as `Login`, `Logout`, `Create Order`, `List Items`; do not collapse multiple endpoints under `Authentication` if their paths differ.
+- **submodules[].name**: Must be testable surface: **`METHOD path`** pattern or **`operationId` — short summary** (not a literal screen or page title).
+- **submodules[].description**: Contract-only: auth, path/query/body params, success + main error responses, pagination, idempotency keys—no screen navigation.
+- **source**: Page numbers as `PageN` from input for traceability.
+
+## Naming normalization examples
+- `POST /api/agent-instance/add` -> module name `Create Agent Instance`
+- `PUT /api/user/profile` -> module name `Profile`
+- `GET /api/order/list` -> module name `List Order`
+- `DELETE /api/user/{id}` -> module name `Delete User`
+
+---
+# Output JSON (English), same shape as Web func_modules:
+```json
+{
+  "platform": "system or API name",
+  "modules": [
+    {
+      "name": "Login",
+      "source": "PageXX",
+      "submodules": [
+        {
+          "name": "POST /api/auth/login",
+          "description": "Contract + key validations",
+          "source": "PageXX"
+        }
+      ]
+    }
+  ]
+}
+```
+
+# Input
+{{input_data}}
+''')

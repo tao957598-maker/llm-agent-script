@@ -1,0 +1,1369 @@
+/*
+{
+	"title":"Collect Report Data Based On Template Defination ",
+	"description":"Collect Report Data Based On Template Definatione ",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户需求",
+			"maxLength":50,
+			"type":"textarea"
+		},
+		{
+			"name":"kbTemplateName",
+			"label":"报告模版名称（全匹配）",
+			"maxLength":50,
+			"type":"textarea"
+		},
+		{
+			"name":"reportName",
+			"label":"报告名称",
+			"maxLength":50,
+			"type":"textarea"
+		}
+	],
+	"tag":"report",
+	"version":1,
+    "life": 1000
+}
+*/
+assign('n_tpl_variable_common_parser','''
+    你是一个“报表指标智能解析与内容生成专家”。
+    你的任务：
+    根据输入的 JSON 数组【参数变量】（包含 var、key、desc、type、value 等字段），结合【所属知识库数据】与【用户需求】，自动生成一个合法的 JSON 对象（UTF-8 编码），该 JSON 将用于 Apache POI 模板渲染生成报表。
+    【所属知识库数据】来源于向量数据库Milvus,各个数据片段之间可能并不连贯，你需要先归纳总结理解召回的数据之后再生成内容。
+
+    ---
+
+    ### 一、输入说明
+    1. 【参数变量】：
+    - 每个元素代表一个待渲染字段；
+    - 包含：
+        - `var`: 输出 JSON 中的键名（区分大小写）；
+        - `key`: 变量名称或标题；
+        - `desc`: 变量的语义描述，用于指导内容生成；
+        - `type`: 渲染类型（text、longText、list、chart,table）；
+        - `value`: 模板中的 Apache POI 标签渲染时需要考虑的指标，如果type为list,需要按【3. **list**（列表数据）】中的格式和要求处理。
+    2. 【所属知识库数据】：包含实际业务数据，字段名不固定，可能嵌套 JSON；
+    3. 【用户需求】：可能包含任务目标、期望展示内容或主题。
+
+    ---
+
+    ### 二、解析与生成规则
+    #### 1. 键名规则
+    - 输出 JSON 的 key 必须取自 `var` 字段；
+    - 严格区分大小写；
+    - 每个变量都必须出现在输出结果中。
+
+    #### 2. 值生成优先级
+    a. **精确匹配**：在【知识库数据】中查找与 `desc` 或 `key` 精确匹配的字段值（忽略大小写与空格）；  
+    b. **语义匹配**：若未匹配成功，则尝试匹配语义相近字段（同义词、上下文相关）；  
+    c. **智能生成**：若仍无匹配结果，则基于 `key` 与 `desc` 的含义，从【知识库数据】中总结或计算出合理值；  
+    d. **保守补充**：若【用户需求】中有说明，可作为辅助来源；  
+    e. 若所有步骤均失败，则输出 `null` 或空字符串（按类型决定）。
+
+    #### 3. 时间约束规则（重要 · 全局生效）
+
+    - 若【用户需求】中**明确指定了日期、时间点或时间范围**
+    （例如：某日、某天的资讯、截至某日的数据）：
+    - 该日期必须被视为**时间上限（Time Upper Bound）**；
+    - 在理解与归纳【所属知识库数据】时：
+        - **只允许使用该日期当天或之前的内容**；
+        - **严禁引用、总结、暗示或推断任何晚于该日期的资讯、数据或事件**。
+
+    - 若【知识库数据】中包含多个不同日期的内容：
+    - 你需要先识别每条内容对应的日期（来自字段、文本描述或上下文）；
+    - 对所有 **晚于用户指定日期** 的内容，必须：
+        - 完全忽略；
+        - 不参与归纳、总结与推理；
+        - 不得以“趋势、后续发展、后来发生”等形式间接体现。
+
+    - 若【用户需求】未明确指定日期：
+    - 可默认使用知识库中时间**最新且合理**的数据；
+    - 但仍需避免无依据的未来推断或预测性结论。
+
+    - 若无法明确判断某条知识库内容的日期是否晚于用户指定日期：
+    - 你必须采取**保守策略**：
+        - 优先不使用该内容；
+        - 或仅在不引入时间歧义的前提下进行概括性描述。
+
+    >**时间约束规则的优先级高于语义匹配与智能生成规则。**
+
+    #### 4. 生成后时间校验与修正（强制执行）
+
+    - 在生成最终输出内容之前，你必须对【即将输出的所有文本】执行一次时间一致性校验：
+    - 检查是否出现任何 **晚于用户指定日期** 的明确日期、时间点或“截至某日”的表述；
+    - 检查是否隐含使用了用户指定日期之后才能确认的事实状态。
+
+    - 若发现存在以下任一情况：
+    - 明确出现晚于用户指定日期的日期（如：9 月 9 日、9 月 10 日、9 月 11 日等）；
+    - 使用了“截至最新”“目前”“当前已确认”等仅能在未来时间点成立的表述；
+    
+    你必须 **强制修正输出内容**，修正方式包括但不限于：
+    - 将时间表述改写为“截至用户指定日期之前”“在此前一段时间内”“在 9 月 8 日前的已知信息显示”；
+    - 或直接删除依赖未来日期才能成立的句子。
+    - **最终输出结果中，严禁出现任何晚于用户指定日期的具体日期或事实描述。**
+
+    ---
+    
+    ### 三、类型与格式规则
+    根据变量的 `type` 决定最终的输出格式与生成逻辑：
+''')
+
+//## Collect data: Query Template Data By TemplateName
+n_template_data,act_kb.selectBy?sql='select id,name,file_path as filePath,kb_folder_path as kbFolderPath,kb_folder_id as kbFolderId,file_path as kbTemplateFilePath,template_variables as templateVariables from kb_file_template where name = ?'&parameters='{{kbTemplateName}}'
+assign('n_kb_folder_path',"{{n_template_data[0].kbFolderPath}}")
+
+when('!fn.hasValue(n_template_data)',{
+    //# Sorry, can't find template data by templateName
+    log('n_template_data is null')
+    act_flow.go?step='exit'
+})
+
+//## Collect data: Search Data by userInput
+//n_kbs_space_data, act_kbs.searchQuestion?paramData={{fn.json('question, userInput, folderPath, n_kb_folder_path')}}&similarity='0.5'
+//n_kbs_space_data,act_kb.selectBy?sql='select content from kb_template_test_data;'
+assign('n_template_variables',"{{n_template_data.templateVariables}}")
+//Step2: group variables by type
+act_func?script='''
+    def inputList = n_template_variables
+    def short_txt_list = []
+    def long_txt_list = []
+    def chart_list = []
+    def list_list = []
+    def table_list = []
+
+    // 拼接成一个整体字符串
+    def jsonText = inputList.join(",")
+    jsonText = jsonText.trim()
+    // 自动补齐括号
+    if (!jsonText.startsWith("[")) {
+        jsonText = "[" + jsonText
+    }
+    if (!jsonText.endsWith("]")) {
+        jsonText = jsonText + "]"
+    }
+    // 使用内置 fn.mapList 解析 JSON 数组（如果没有就用 fn.map 循环解析）
+    def items = fn.list(jsonText)
+    if (items == null || items.size() == 0) {
+        // 兼容没有 list() 的情况
+        def single = fn.map(jsonText)
+        if (single != null) {
+            items = [single]
+        } else {
+            items = []
+        }
+    }
+
+    // 分类
+    for (i in 0..<items.size()) {
+        def item = items[i]
+        if (item == null) {
+            continue
+        }
+
+        def type = item.type
+        if (type == null) {
+            continue
+        }
+
+        type = type.toString().toLowerCase()
+        if (type == "text") {
+            short_txt_list.add(item)
+        } else if (type == "longtext") {
+            long_txt_list.add(item)
+        } else if (type == "chart") {
+            chart_list.add(item)
+        } else if (type == "list") {
+            list_list.add(item)
+        } else if (type == "table"){
+            table_list.add(item)
+        }
+    }
+    // 输出结果
+    fn.put("short_txt_list", short_txt_list)
+    fn.put("long_txt_list", long_txt_list)
+    fn.put("chart_list", chart_list)
+    fn.put("list_list", list_list)
+    fn.put("table_list",table_list)
+'''
+
+n_txt_group_list,act_func?script='''
+    // 每10个分一组
+    def groupSize = 10
+    def groupedList = short_txt_list.collate(groupSize)
+    return groupedList
+'''
+//log('...n_txt_group_list=={{n_txt_group_list}}')
+
+//assign('n_combined_result', '')
+//Step3: Parser short text variables
+foreach('n_txt_group','n_txt_group_list',{
+    assign('n_txt_ref_store_uri_map','')
+    foreach('n_txt_variable','n_txt_group.item',{
+        log('n_txt_variable.item.desc==={{n_txt_variable.item.desc}}')
+        assign('n_txt_variable_desc',"{{userInput}} {{n_txt_variable.item.desc}}")
+       // assign('n_txt_variable_var',"{{n_txt_variable.item.var}}")
+        assign('n_txt_variable_tool_set',"{{n_txt_variable.item.toolSetCode}}")
+        assign('n_txt_tool_set_result','')
+        assign('n_txt_tool_set_data','Xx')
+        when('fn.hasValue(n_txt_variable_tool_set)',{
+            n_txt_tool_set_result,agt_toolset_executor.chatdoc?userInput={{n_txt_variable.item.desc}}&needManual=false&toosetCode={{n_txt_variable_tool_set}}
+        })
+        //# n_txt_search_data
+         n_txt_search_data, act_kbs.searchQuestion?paramData={{fn.json('question, n_txt_variable_desc, folderPath, n_kb_folder_path')}}&similarity='0.5'
+         log('*******n_txt_search_data==={{n_txt_search_data}}')
+        // 将本次调用的返回数据跟引用id绑定，后续从报告记录中查看每个指标的source来源
+        n_ref_id, act_func?script='''
+            import java.util.UUID
+            def refId = UUID.randomUUID().toString().replace("-", "")
+            def refKey = n_txt_variable.item.var
+            def refRel = [(refKey): refId]
+            fn.put('n_ref_rel',refRel)
+            return refId
+        '''
+        //Call rag_kbs.markReference to bind the return data of this call with the reference id
+         rag_kbs.markReference?data="{{n_txt_search_data}}"&invokeId="{{n_ref_id}}"
+         append('n_refId_array',"{{n_ref_rel}}")
+         n_kb_refs,act_kb.selectBy?sql="select ref_properties from kb_rag_reference where invoke_id='{{n_ref_id}}'"
+         n_txt_ref_store_uri,act_func?script='''
+            def refs = n_kb_refs
+            def storeUris = []
+            if (refs != null) {
+                for (int i = 0; i < refs.size(); i++) {
+                    def row = refs[i]
+                    def props = row
+                    if (row instanceof Map && row.containsKey("ref_properties")) {
+                        props = row.ref_properties
+                    }
+
+                    def refMap = null
+                    if (props instanceof Map) {
+                        refMap = props
+                    } else if (props != null) {
+                        refMap = fn.map(props.toString())
+                    }
+
+                    if (refMap != null && refMap.storeUri != null) {
+                        def storeUri = refMap.storeUri.toString().trim()
+                        if (storeUri.length() > 0 && !storeUris.contains(storeUri)) {
+                            storeUris.add(storeUri)
+                        }
+                    }
+                }
+            }
+            if (storeUris.size() == 0) {
+                return [:]
+            }
+            def refText = " (References: " + storeUris.join(", ") + ")"
+            def refKey = n_txt_variable.item.var
+            return [(refKey): refText]
+         '''
+         append('n_txt_ref_store_uri_map',"{{n_txt_ref_store_uri}}")
+         append('n_txt_data',"{{n_txt_search_data}}")
+         append('n_txt_tool_set_data',"{{n_txt_tool_set_result}}")
+    })
+    assign('n_txt_group_desc',"{{n_txt_group.item}}")
+    //Call LLM
+    //## Collect data: Generating indicator data of {{n_txt_group.item}}
+    n_txt_llm_data,tpl_parser_text_variable
+    //Append n_txt_llm_data to n_combined_result
+    when('fn.hasValue(n_txt_llm_data)',{
+       append('n_combined_result',"{{n_txt_llm_data}}")
+    })
+})
+
+//Step4: Parser type longText variables
+foreach('long_txt_variable','long_txt_list',{
+    //log('long_txt_variable.item==={{long_txt_variable.item}}')
+    assign('n_long_txt_variable_desc',"{{userInput}}{{long_txt_variable.item.desc}}")
+    //assign('n_long_txt_variable_var',"{{userInput}}{{long_txt_variable.item.var}}")
+    //## Collect data: Retrieve long text data by indicator {{long_txt_variable.item.key}} description
+    n_long_txt_search_data, act_kbs.searchQuestion?paramData={{fn.json('question, n_long_txt_variable_desc, folderPath, n_kb_folder_path')}}&similarity='0.5'
+    assign('n_long_txt_group_desc',"{{long_txt_variable.item}}")
+    assign('n_long_txt_variable_tool_set',"{{long_txt_variable.item.toolSetCode}}")
+    assign('n_long_text_tool_set_result','no data')
+    when('fn.hasValue(n_long_txt_variable_tool_set)',{
+        n_long_text_tool_set_result,agt_toolset_executor.chatdoc?userInput={{long_txt_variable.item.desc}}&needManual=false&toosetCode={{n_long_txt_variable_tool_set}}
+    })
+    
+    // 将本次调用的返回数据跟引用id绑定，后续从报告记录中查看每个指标的source来源
+    n_ref_id,act_func?script='''
+        import java.util.UUID
+        def refId = UUID.randomUUID().toString().replace("-", "")
+        def refKey = long_txt_variable.item.var
+        def refRel = [(refKey): refId]
+        fn.put('n_ref_rel',refRel)
+        return refId
+    '''
+    
+    //Call rag_kbs.markReference to bind the return data of this call with the reference id
+    rag_kbs.markReference?data={{n_long_txt_search_data}}&invokeId="{{n_ref_id}}"
+    append('n_refId_array',"{{n_ref_rel}}")
+
+    n_kb_refs,act_kb.selectBy?sql="select ref_properties from kb_rag_reference where invoke_id='{{n_ref_id}}'"
+    n_kb_ref_store_uris,act_func?script='''
+        def refs = n_kb_refs
+        def storeUris = []
+        if (refs != null) {
+            for (int i = 0; i < refs.size(); i++) {
+                def row = refs[i]
+                def props = row
+                if (row instanceof Map && row.containsKey("ref_properties")) {
+                    props = row.ref_properties
+                }
+
+                def refMap = null
+                if (props instanceof Map) {
+                    refMap = props
+                } else if (props != null) {
+                    refMap = fn.map(props.toString())
+                }
+
+                if (refMap != null && refMap.storeUri != null) {
+                    def storeUri = refMap.storeUri.toString().trim()
+                    if (storeUri.length() > 0 && !storeUris.contains(storeUri)) {
+                        storeUris.add(storeUri)
+                    }
+                }
+            }
+        }
+        if (storeUris.size() == 0) {
+            return ""
+        }
+        return " (References: " + storeUris.join(", ") + ")"
+    '''
+    
+    //## Collect data： Generating indicator data of {{long_txt_variable.item.key}}
+    n_long_txt_llm_data,tpl_parser_long_text_variable
+    when('fn.hasValue(n_long_txt_llm_data)',{
+        append('n_combined_result',"{{n_long_txt_llm_data}}")
+    })
+ 
+
+})
+
+//Step5: Parser type list variables
+foreach('list_variable','list_list',{
+    assign('n_list_variable_desc',"{{userInput}} {{list_variable.item.desc}}")
+    //## Collect data: Retrieve list data by indicator {{list_variable.item.key}} description
+    log("----n_list_variable_desc=={{n_list_variable_desc}}")
+    log("----n_kb_folder_path=={{n_kb_folder_path}}")
+    n_list_search_data, act_kbs.searchQuestion?paramData={{fn.json('question, n_list_variable_desc, folderPath, n_kb_folder_path')}}&similarity='0.5'
+    assign('n_list_group_desc',"{{list_variable.item}}")
+    // Call ToolSet if exists
+    assign('n_list_variable_tool_set',"{{list_variable.item.toolSetCode}}")
+    assign('n_list_tool_set_result','no data')
+    //assign('n_list_variable_var',"{{list_variable.item.var}}")
+    when('fn.hasValue(n_list_variable_tool_set)',{
+        n_list_tool_set_result,agt_toolset_executor.chatdoc?userInput={{list_variable.item.desc}}&needManual=false&toosetCode={{n_list_variable_tool_set}}
+    })
+    assign("n_chart_desc","{{list_variable.item.desc}}")
+    //## Semantic analysis result--List Type
+    n_diagram_sa_result,tpl_parser_echart_or_mermaid,psr_all
+    log('-----n_diagram_sa_result=={{n_diagram_sa_result}}')
+    //判断是Echart或者是Mermaid
+    n_diagram_result,act_func?script='''
+        def saResult = n_diagram_sa_result        
+        if(saResult == null){
+            return "N"
+        }
+        saResult = saResult.toString().toLowerCase()
+        if(saResult.contains("diagram")){
+            return "Y"
+        } else if(saResult.contains("table")){
+            return "T"
+        } else {
+            return "N"
+        }
+    '''
+    log('---n_diagram_result=={{n_diagram_result}}')
+    when('n_diagram_result=="Y"||n_diagram_result==Y',{
+        // Call ToolSet if exists
+        n_diagram_ui_results,agt_generator_html.ui?html_description="{{n_list_variable_desc}}"
+        //n_chart_tool_set_result,agt_toolset_executor.chatdoc?userInput={{chart_variable.item.desc}}&needManual=false&toosetCode={{n_chart_variable_tool_set}}
+        log('-----------n_diagram_ui_results========={{n_diagram_ui_results}}')
+        when('fn.hasValue(n_diagram_ui_results)',{
+            act_func?script='''
+                def key=list_variable.item.var
+                def value=n_diagram_ui_results
+                fn.put('n_diagram_uri', [(key): value])
+            '''
+            //log('loglog----n_diagram_format_params=={{n_diagram_format_params}}')
+            //调用apitool
+            //## Generate report: Store the report file path in the database
+            n_diagram_format_result,act_api.doExecute?name='report_fromat_diagrams_data'&params='{"dataKey": "{{list_variable.item.var}}","templateId": "{{n_template_data[0].id}}","storeUri":"{{n_diagram_ui_results}}"}'
+           //n_api_data,act_api.doExecute?name='ui_dev_save'&params='{"systemUI":"0","pageName":"{{json_item.title}}","pageCode":"{{json_item.file}}","pageType":200,"tag":"mobile","storeUri":"{{file_path}}","description":"","metaDataColumns":[]}'
+
+            log('call n_diagram_format_result response=={{n_diagram_format_result}}')
+            when('n_diagram_format_result.code==200||n_diagram_format_result=="200"',{
+                append('n_combined_result',"{{n_diagram_format_result.data.formatData}}")
+                assign("n_relative_paths","{{n_diagram_format_result.data.relativePaths}}")
+                log('n_relative_paths=={{n_relative_paths}}')
+                foreach('relative_path','n_relative_paths',{       
+                    assign("n_diagram_path","n_diagram_image_{{relative_path.index}}")
+                    log('n_diagram_image_===={{n_diagram_path}}')
+                    //## System Architecture Diagram {{n_diagram_path}}
+                    act_memory.assign?var='{{n_diagram_path}}'&value='{{relative_path.item}}'&type='image'
+                    
+                })
+            })
+        })
+    },{
+        when('n_diagram_result=="T"||n_diagram_result==T',{
+                assign("userDesc","{{n_list_variable_desc}}")
+                log('table schema user desc==={{userDesc}}')
+                n_tables_schema,tpl_parser_table_schema,psr_all
+                log('tables schema json result==={{n_tables_schema}}')
+                when('fn.hasValue(n_tables_schema)',{
+                    n_table_schema_data,act_func?script='''
+                        def params=list_variable.item.value
+                        def schemas=n_tables_schema
+                        def dataKey = list_variable.item.var
+                        def dataMap=[(dataKey): schemas]                       
+                        return dataMap
+                    '''
+                    append('n_combined_result',"{{n_table_schema_data}}")
+                })
+        },{
+            // 将本次调用的返回数据跟引用id绑定，后续从报告记录中查看每个指标的source来源
+            n_ref_id,act_func?script='''
+                import java.util.UUID
+                def refId = UUID.randomUUID().toString().replace("-", "")
+                def refKey = list_variable.item.var
+                def refRel = [(refKey): refId]
+                fn.put('n_ref_rel',refRel)
+                return refId
+            '''
+            //Call rag_kbs.markReference to bind the return data of this call with the reference id
+            rag_kbs.markReference?data={{n_list_search_data}}&invokeId="{{n_ref_id}}"
+            append('n_refId_array',"{{n_ref_rel}}")
+            n_kb_refs,act_kb.selectBy?sql="select ref_properties from kb_rag_reference where invoke_id='{{n_ref_id}}'"
+            n_list_ref_store_uri_map,act_func?script='''
+                def refs = n_kb_refs
+                def storeUris = []
+                if (refs != null) {
+                    for (int i = 0; i < refs.size(); i++) {
+                        def row = refs[i]
+                        def props = row
+                        if (row instanceof Map && row.containsKey("ref_properties")) {
+                            props = row.ref_properties
+                        }
+
+                        def refMap = null
+                        if (props instanceof Map) {
+                            refMap = props
+                        } else if (props != null) {
+                            refMap = fn.map(props.toString())
+                        }
+
+                        if (refMap != null && refMap.storeUri != null) {
+                            def storeUri = refMap.storeUri.toString().trim()
+                            if (storeUri.length() > 0 && !storeUris.contains(storeUri)) {
+                                storeUris.add(storeUri)
+                            }
+                        }
+                    }
+                }
+                if (storeUris.size() == 0) {
+                    return [:]
+                }
+                def refText = "References: " + storeUris.join(", ")
+                def refKey = list_variable.item.var
+                return [(refKey): refText]
+            '''
+            //## Collect data: Generating indicator data of {{list_variable.item.key}}
+            n_list_llm_data,tpl_parser_list_variable
+            when('fn.hasValue(n_list_llm_data)',{
+                n_list_llm_data_with_refs,act_func?script='''
+                    def data = fn.map(n_list_llm_data)
+                    if (data == null) {
+                        return n_list_llm_data
+                    }
+
+                    def varName = list_variable.item.var == null ? null : list_variable.item.var.toString()
+                    if (varName == null || !data.containsKey(varName)) {
+                        return data
+                    }
+
+                    def refMap = n_list_ref_store_uri_map
+                    if (!(refMap instanceof Map) && refMap != null) {
+                        refMap = fn.map(refMap.toString())
+                    }
+                    def refText = refMap instanceof Map && refMap[varName] != null ? refMap[varName].toString().trim() : ""
+                    if (refText.length() == 0) {
+                        return data
+                    }
+
+                    def rows = data[varName]
+                    if (!(rows instanceof List)) {
+                        return data
+                    }
+
+                    def cfg = fn.map(list_variable.item.value)
+                    def tagArry = cfg == null ? null : cfg.tagArry
+                    def textKey = null
+                    if (tagArry instanceof List) {
+                        for (int i = 0; i < tagArry.size(); i++) {
+                            def tag = tagArry[i]
+                            if (tag instanceof Map && tag.type != null && tag.key != null && tag.type.toString().equalsIgnoreCase("text")) {
+                                textKey = tag.key.toString()
+                                break
+                            }
+                        }
+                    }
+                    if (textKey == null || textKey.trim().length() == 0) {
+                        return data
+                    }
+
+                    rows.add([(textKey): refText])
+                    return data
+                '''
+                append('n_combined_result',"{{n_list_llm_data_with_refs}}")
+            })
+        })
+        
+    })
+
+})
+
+//Step6: Parser type Chart variables;Text2Sql
+foreach('chart_variable','chart_list',{
+    assign('n_chart_desc',"{{chart_variable.item.desc}}")
+    assign('n_chart_label',"{{chart_variable.item.key}}")
+
+    //处理指标描述，查询入参和赋值llm生成数据部分提示词
+    act_func?script='''
+        def chartDesc = n_chart_desc?.toString()?.trim() ?: ""
+        // 按 && 分割描述，第一部分为数据库查询参数，第二部分（可选）为生成提示
+        def descArray = chartDesc.split("&&")
+
+        // 第一部分：数据库搜索入参
+        fn.put("n_chart_search_param", descArray[0])
+
+        // 第二部分存在时才放入提示词
+        if (descArray.size() > 1) {
+            def generate_chart_data_prompt = descArray[1].trim()
+            fn.put("generate_chart_data_prompt", generate_chart_data_prompt)
+        } else {
+            //如果没有&&部分，则直接将chartDesc赋值给generate_chart_data_prompt
+            fn.put("generate_chart_data_prompt", chartDesc)
+        }
+    '''
+
+    //## Semantic analysis result
+    n_chart_sa_result,tpl_parser_echart_or_mermaid,psr_all
+    log('***********Semantic analysis results:{{n_chart_sa_result}}')
+    //判断是Echart或者是Mermaid
+    n_echar_or_mermaid,act_func?script='''
+        def saResult = n_chart_sa_result        
+        if(saResult == null){
+            return "E"
+        }
+        saResult = saResult.toString().toLowerCase()
+        if(saResult.contains("echart")){
+            return "E"
+        }else if(saResult.contains("diagram")){
+            return "D"
+        }else{
+            return "M"
+        }
+    '''
+       log('***********n_echar_or_mermaid results:{{n_echar_or_mermaid}}')
+    when('n_echar_or_mermaid=="E"',{
+        //## Collect data: Get Echart query statement from MongoDB of {{n_chart_label}}
+        n_sql_result,agt_text_to_mongoql?kbsFileName="{{n_kb_folder_path}}"&indicatorDesc="{{userInput}} {{n_chart_desc}}"
+        //log('*******n_sql_result==={{n_sql_result}}')
+        when('fn.hasValue(n_sql_result)',{
+            act_func?script='''
+                def key=chart_variable.item.var
+                def value=n_sql_result
+                fn.put('n_chart_format_data', [(key): value])
+            '''
+            when('fn.hasValue(n_chart_format_data)',{
+            //Append n_sql_result to n_combined_result
+                append('n_combined_result',"{{n_chart_format_data}}")
+            })
+        })
+    },{
+        when('n_echar_or_mermaid=="D"',{
+            //System Prototype Diagrams
+            // Call ToolSet if exists
+            n_ui_results,agt_generator_html.ui?html_description="{{chart_variable.item.desc}}"
+            //n_chart_tool_set_result,agt_toolset_executor.chatdoc?userInput={{chart_variable.item.desc}}&needManual=false&toosetCode={{n_chart_variable_tool_set}}
+            log('-----------n_ui_results========={{n_ui_results}}')
+            log('-----------n_ui_results.result ========={{n_ui_results.result}}')
+            when('fn.hasValue(n_ui_results)',{
+               act_func?script='''
+                    def key=chart_variable.item.var
+                    def value=n_ui_results
+                    fn.put('n_diagram_uri', [(key): value])
+                '''
+                append('n_combined_result',"{{n_diagram_uri}}")
+            })
+        },{
+            act_func?script='''
+                def key=chart_variable.item.var
+                def value=n_chart_sa_result
+                fn.put('n_mermaid_format_data', [(key): value])
+            '''
+             append('n_combined_result',"{{n_mermaid_format_data}}")
+        })
+    })
+    
+})
+
+//Step6-2:Parser type Table variables
+foreach('table_variable','table_list',{
+    assign('n_table_desc',"{{table_variable.item.desc}}")
+    assign('n_table_value',"{{table_variable.item.value}}")
+
+    assign('n_table_search_params','最终生成的mql语句必须用columnVar对应的值当做表头列名称，columnLabel的值禁止用作查询语句的字段名。（columnLabel与columnVar之间以JSON格式一一对应。它们的对应关系如下：{{n_table_value}}')
+    log('n_table_search_params_all==={{userInput}}...{{n_table_desc}}...{{n_table_search_params}}')
+    //## Collect data: Get Table query statement from MongoDB of {{table_variable.item.key}}
+    n_table_search_data,agt_text_to_mongoql?kbsFileName="{{n_kb_folder_path}}"&indicatorDesc="{{userInput}} {{n_table_desc}} {{n_table_search_params}}"
+    // 格式化从mongodb查出回来的数据，加一个顶层key
+    n_table_mongo_data,act_func?script='''
+        def varName=table_variable.item.var
+        def tableFormat = [:]
+        tableFormat.put(varName,n_table_search_data)
+        return tableFormat
+    '''
+    //log('*******n_table_mongo_data==={{n_table_mongo_data}}')
+    when('fn.hasValue(n_table_mongo_data)',{
+        append('n_combined_result',"{{n_table_mongo_data}}")
+    })
+})
+
+log('-----n_combined_result=={{n_combined_result}}---')
+//## Collect data: Combined all indicator data to a big json
+n_report_data,act_func?script='''
+    // n_combined_result 是你前面步骤聚起来的那个数组
+    def dataList = n_combined_result
+    // 最终要合并成的那个大JSON对象
+    def merged = [:]
+    // 安全遍历
+    for (int i = 0; i < dataList.size(); i++) {
+        def item = dataList[i]
+        if (item == null) {
+            continue
+        }
+        // 关键：用你引擎内置的 fn.map 来把 “字符串JSON” → Map
+        // 它既能吃字符串，也能吃部分结构化数据
+        def obj = fn.map(item)
+        if (obj == null) {
+            // 转不了就跳过
+            continue
+        }
+        // 合并到一个对象里，后面的键会覆盖前面的同名键
+        merged.putAll(obj)
+    }
+    // 返回合并后的大JSON
+    return merged
+'''
+
+// 将各个指标合并到 templateVariables中
+n_format_vars, act_func?script='''
+    // ===============================
+    // 1. 入参
+    // ===============================
+    def refIdArray   = n_refId_array
+    def templateRaw  = n_template_data[0].templateVariables
+    templateRaw=fn.list(templateRaw)
+    def finalVars    = []
+
+    // ===============================
+    // 2. 构建 refMap：var -> kid
+    // ===============================
+    def refMap = [:]
+
+    if (refIdArray != null) {
+        for (int i = 0; i < refIdArray.size(); i++) {
+            def refItem = refIdArray[i]
+            if (!(refItem instanceof Map)) {
+                continue
+            }
+            for (def entry : refItem.entrySet()) {
+                if (entry.key != null && entry.value != null) {
+                    refMap[entry.key] = entry.value
+                }
+            }
+        }
+    }
+    fn.put("refMap",refMap)
+    fn.put("templateRaw",templateRaw)
+
+    // ===============================
+    //  3. for 循环补 kid
+    // ===============================
+    for (int i = 0; i < templateRaw.size(); i++) {
+        def item = fn.map(templateRaw[i])
+        if (item==null) {
+            continue
+        }
+        def varName = item.var
+        if (varName != null && refMap.containsKey(varName)) {
+            item.put("kid", refMap[varName])
+        }
+        finalVars.add(item)
+    }
+    return finalVars
+'''
+
+log('------n_report_data=={{n_report_data}}')
+ //Save n_report_data to DB
+ act_func?script='''
+    def tempDefine = n_template_data[0]
+    def paramsMap=[:]
+    paramsMap.put("report_name",reportName)
+    paramsMap.put("kb_folder_path",tempDefine.kbFolderPath)
+    paramsMap.put("kb_template_name",kbTemplateName)
+    paramsMap.put("kb_template_file_path",tempDefine.kbTemplateFilePath)
+    paramsMap.put("report_source",n_report_data)
+    paramsMap.put("creator","admin")
+    paramsMap.put("kb_template_id",tempDefine.id)
+    paramsMap.put("user_input",userInput)
+    paramsMap.put("template_variables",n_format_vars)
+    paramsMap.put("data_source",1)
+    fn.put("import_params",paramsMap)
+ '''
+
+ //## Collect data: Store the report data into the database.
+act_kb.importData?name='kb_template_report_record'&data='{{import_params}}'&embedding=false
+n_report_id,act_kb.selectBy?sql='select id from kb_template_report_record where report_name="{{reportName}}" order by create_time desc limit 1 '
+
+//## Collect data: Return reportId and templateId (Transmit data to agt_report_generator agent)
+assign("return",'''{"reportId":"{{n_report_id[0].id}}","templateId":"{{n_template_data[0].id}}"}''')
+
+define('tpl_parser_text_variable','''
+   {{n_tpl_variable_common_parser}}
+
+    refs requirement:
+    - 【refs references】 is a list of maps. Each map key is a text variable var, and each value is the reference text for that var.
+    - If a variable has non-empty refs text, append that refs text exactly to the end of that variable's generated field value.
+    - Do not add a new JSON key for refs; keep every output key exactly the same as the input var.
+    - Example: {"Status": "Success. (References: DTT/DTT/CSS-requirements-tables.xlsx)"}
+    ---
+
+    ### 三、类型与格式规则
+    根据变量的 `type` 决定最终的输出格式与生成逻辑：
+    ---
+    ### 三、类型与格式规则
+    你的任务是根据变量的 `type`处理类型为'text'的变量解析并按格式生成数据：
+
+    #### 1. **text**（普通文本）
+    - 输出单个值、指标或短句；
+    - 通常用于简短字段、状态、标题、任务名、结果值等；
+    - 内容应尽量简洁、准确；
+    - 示例：
+    ```json
+    {"Status": "执行成功"}
+
+    ---
+
+    ### 四、注意事项：
+    - 若 type 未在上述定义范围内，请保守输出 null；
+    - 输出必须是合法 JSON 格式，不得包含多余文字；
+    - 所有 key 均需与输入参数的 var 字段严格一致；
+    - 数组、对象、文本等应当与其渲染类型对应；
+    - 若某字段内容为复杂嵌套结构，请完整保留其 JSON 层级；
+    - 日期字段推荐采用 ISO 8601 格式（YYYY-MM-DD HH:mm:ss 或 YYYY-MM-DDTHH:mm:ssZ）。
+
+    ---
+
+    ### 五、输出要求
+    - 输出必须是一个合法、可解析的 JSON 对象；
+    - 不能包含任何人类语言说明、注释、提示语；
+    - 所有字段均需来源于输入参数变量；
+    - 输出的 JSON 数据应可直接被 Apache POI 模板渲染使用。
+
+    ---
+
+    ### 六、输入变量
+
+    【参数变量】
+    {{n_txt_group_desc}}
+
+    【所属知识库数据】
+    {{n_txt_data}}
+    {{n_txt_tool_set_data}}
+
+    【refs references】
+    {{n_txt_ref_store_uri_map}}
+
+    【用户需求】
+     {{userInput}}
+    
+    ---
+
+    若无法确定字段内容，请保守输出，不得虚构信息。
+    输出必须是合法 JSON 对象，不包含多余文字或注释。",
+''')
+
+
+define('tpl_parser_long_text_variable','''
+   {{n_tpl_variable_common_parser}}
+
+    refs requirement:
+    - If {{n_kb_ref_store_uris}} is not empty, append it exactly to the end of the generated longText field value.
+    - Do not add a new JSON key for refs; keep the output key exactly the same as the input var.
+    - Example: {"SummaryText": "Report body content. (References: DTT/DTT/GM FX-Requirement Spec_Draft v0.1.docx)"}
+
+    ---
+    
+    ### 三、类型与格式规则
+    你的任务是根据变量的 `type`处理类型为'longText'或者'LongText'的变量解析并按格式生成数据：
+
+     #### 2. **longText**（总结性文本）
+    - 用于生成自然语言总结性内容，例如总体描述、结论分析、运行说明、任务回顾等；
+    - 内容应当流畅连贯，具备报告语气，表达对任务整体或特定指标的分析与归纳；
+    - 优先基于 desc 的含义在知识库中抽取语义相关的文本信息；若无匹配字段，可智能生成总结；
+    - 不允许生成无意义的模板句；
+    - 示例：
+    {"SummaryText": "本次系统测试运行平稳，各模块响应正常，性能指标符合预期。未发现严重异常。"}
+
+    ---
+        
+    ### 四、注意事项：
+    - 若 type 未在上述定义范围内，请保守输出 null；
+    - 输出必须是合法 JSON 格式，不得包含多余文字；
+    - 所有 key 均需与输入参数的 var 字段严格一致；
+    - 数组、对象、文本等应当与其渲染类型对应；
+    - 若某字段内容为复杂嵌套结构，请完整保留其 JSON 层级；
+    - 日期字段推荐采用 ISO 8601 格式（YYYY-MM-DD HH:mm:ss 或 YYYY-MM-DDTHH:mm:ssZ）。
+
+    ---
+
+    ### 五、输出要求
+    - 输出必须是一个合法、可解析的 JSON 对象；
+    - 不能包含任何人类语言说明、注释、提示语；
+    - 所有字段均需来源于输入参数变量；
+    - 输出的 JSON 数据应可直接被 Apache POI 模板渲染使用。
+
+    ---
+
+    ### 六、输入变量
+
+    【参数变量】
+    {{n_long_txt_group_desc}}
+
+    【所属知识库数据】
+    {{n_long_txt_search_data}}
+    {{n_long_text_tool_set_result}}
+
+    【refs references】
+    {{n_kb_ref_store_uris}}
+
+    【用户需求】
+     {{userInput}}
+    
+    ---
+
+    若无法确定字段内容，请保守输出，不得虚构信息。
+    输出必须是合法 JSON 对象，不包含多余文字或注释。",
+''')
+
+//Define List type LLM prompt
+define('tpl_parser_list_variable','''
+        {{n_tpl_variable_common_parser}}
+        refs requirement:
+        - 【refs references】 is a map. The map key is the current list variable var, and the value is the reference text for that var.
+        - If a list variable has non-empty refs text, append one additional row object at the end of that list variable's output array.
+        - The additional row object must contain exactly one field: use the first tagArry item whose type is "text" as the field key, and set its value to the refs text.
+        - Example: if tagArry contains {"key":"constraint","type":"text"} and refs text is "References: DTT/DTT/CSS-CL Report Spec.doc", append {"constraint":"References: DTT/DTT/CSS-CL Report Spec.doc"} as the final array item.
+        - If there is no text field in tagArry, do not create extra JSON keys and do not output refs.
+        - Do not add a new top-level JSON key for refs; keep every output key exactly the same as the input var.
+        你需要遍历输入【参数变量数组】中 **所有** `type` 为 `"list"` 或 `"List"` 的变量，并为每个变量生成 **可用于 Apache POI 模板循环渲染** 的数组数据。  
+        输出统一合并在**同一个顶层 JSON 对象**里；每个 list 变量以其 `var` 为键。
+
+        ---
+
+        ### A. 输入配置约定
+        每个 `list` 变量的 `value` 字段包含一个 **JSON 字符串**，定义行对象结构：
+        ```json
+        {
+            "label": "<必须等于 var（大小写严格一致）>",
+            "tagArry": [
+                { "key": "<字段名1>", "type": "image|text" },
+                { "key": "<字段名2>", "type": "image|text" }
+            ]
+        }
+
+        ### B. 校验与回退
+        1. 解析 value 为 JSON；若解析失败、无 tagArry、或 label != var → 对该变量输出 []。
+        2. tagArry 中每个条目需包含 key 与 type；缺失者忽略。若全部无效 → 输出 []。
+        3. 仅在 确无可用数据 时输出空数组；不得输出 null、空对象 {}、或附加说明文字。
+
+        ### C. 数据取数（智能匹配）
+        从【知识库数据 / Milvus 召回内容 / 调用侧上下文输入 JSON】中取值，采用语义匹配优先、精确匹配兜底：
+        type = "image"：
+            a. 优先匹配 带“@”前缀的字段 或 字段名/值语义包含：image、images、screenshot、screen_shot、pic、picture、capture；
+            b. 可匹配数组或标量（数组表示多张图）；
+            c. 路径规范化：允许以 http://、https:// 开头的 URL；不改写文件名。
+        type = "text"：
+            a. 优先使用与 tagArry.key 精确同名字段；
+            b. 其次在同义/相近语义字段中匹配（可结合变量的 key、desc 提示）；
+            c. 支持数组（多段文本）或标量（单段文本）。
+        多源聚合：若同一语义在多处来源出现（例如多个 document_id / 多条记录），可按出现顺序合并为同一字段的候选队列。
+        
+        ### D. 行对象生成（行对齐策略）
+            最终需生成 “每项为完整对象” 的数组，以适配模板
+
+            算法说明：
+                1. 将 tagArry 中每个字段映射为一个“候选值序列”（数组）。
+                    a. 标量视为长度为 1 的序列；空或未命中则为空序列。
+                2. 设最大长度 N = max(len(seq(field_i)))；循环 i = 0..N-1 生成行对象：
+                    a. 按 tagArry 顺序依次尝试取 seq(field).get(i)；
+                    b. 若该字段此轮无值 → 跳过该键（不填空、不置 null）；
+                    c. 若整行所有字段都无值 → 结束循环（避免尾部空行）。
+                3. 将每一轮得到的对象依次推入数组，形成结构:
+                ```json 示例（仅供参考）
+                    "<var>": [
+                        { "field1": "...", "field2": "...", "imageField": "..." },
+                        { "field1": "...", "field2": "...", "imageField": "..." }
+                    ]
+                ```
+        ### E. 清洗与规范化
+            1. HTML / 富文本清洗：剥离标签（如 <tr><td>…）、实体转义；保留纯文本与必要分隔符（如 ;、换行）。
+            2. 去重：对同一字段序列做相邻去重与全局去重优先相邻。
+            3. 空白过滤：过滤仅空白或仅分隔符的项。
+            4. 安全字符：不输出控制字符；保持 UTF-8 编码。
+
+        ### F. 输出要求
+            1. 仅输出 JSON，UTF-8，无注释/说明文字/多余字段。
+            2. 顶层为对象，包含所有被解析到的 list 变量。
+            示例（仅供参考）：
+                ```json
+                    {
+                        "picList": [
+                            { "step": "Click login", "attr2": "Dashboard visible", "picture": "selenium/result/tmp/1.png" },
+                            { "step": "Go to Deposit", "attr2": "Confirm success", "picture": "selenium/result/tmp/2.png" }
+                        ],
+                        "summary": [
+                            { "screenShot": "xxxx1.png", "root": "xxxx1" },
+                            { "screenShot": "xxxx2.png", "root": "xxxxf" },
+                            { "screenShot": "xxxx3.png", "root": "xxxxr" }
+                        ]
+                    }
+                ```
+        ### G. 失败与极端场景
+            1. value 解析失败 / label 不一致 / tagArry 全无效：该变量键对应 []；其他变量照常输出。
+            2. 所有 list 变量均失败：输出 {} 或包含空数组（推荐包含空数组）。
+            3. 图片字段若值为数组，逐项参与行对齐；若混合（字符串 + 数组），视为数组化处理并按出现顺序合并。
+
+        ### H. 适配样例（与 Apache POI 模板对齐）
+            目标输出(仅供参考)：
+            ```json
+                {
+                "picList": [
+                        { "step": "Step 1: Login", "attr2": "Dashboard visible", "picture": "selenium/result/tmp/1_login.png" },
+                        { "step": "Step 2: Deposit", "attr2": "Deposit confirmed", "picture": "selenium/result/tmp/2_deposit.png" }
+                    ]
+                }
+
+    ---
+        
+    ### 四、注意事项：
+    - 若 type 未在上述定义范围内，请保守输出 null；
+    - 输出必须是合法 JSON 格式，不得包含多余文字；
+    - 所有 key 均需与输入参数的 var 字段严格一致；
+    - 数组、对象、文本等应当与其渲染类型对应；
+    - 若某字段内容为复杂嵌套结构，请完整保留其 JSON 层级；
+    - 日期字段推荐采用 ISO 8601 格式（YYYY-MM-DD HH:mm:ss 或 YYYY-MM-DDTHH:mm:ssZ）。
+
+    ---
+
+    ### 五、输出要求
+    - 输出必须是一个合法、可解析的 JSON 对象；
+    - 不能包含任何人类语言说明、注释、提示语；
+    - 所有字段均需来源于输入参数变量；
+    - 输出的 JSON 数据应可直接被 Apache POI 模板渲染使用。
+
+    ### 六、输入变量
+    【参数变量】—— 含 var、key、type、desc、value 等字段的数组
+    {{n_list_group_desc}}
+
+    【所属知识库数据】—— 来自 Milvus 或数据库召回的原始知识内容
+    {{n_list_search_data}}
+    {{n_list_tool_set_result}}
+
+    【refs references】
+    {{n_list_ref_store_uri_map}}
+
+    【用户需求】—— 当前用户自然语言描述的任务目标
+    {{userInput}}
+
+
+    若无法确定字段内容，请保守输出，不得虚构信息。
+    输出必须是合法 JSON 对象，不包含多余文字或注释。
+''')
+
+define('tpl_parser_echart_or_mermaid',''' 
+    你是一个“意图识别与图表代码生成专家”。
+
+    你的任务：
+    根据【用户输入】的描述自动识别用户意图，并根据意图返回相应的内容。
+
+    系统目前支持五种返回结果：
+    1. ECharts 数据图表
+    2. Mermaid 架构/流程图
+    3. 系统页面原型图（Diagram）
+    4. 数据库表结构设计（table）
+    5. 不属于以上任一类型时返回 N
+
+    ---
+
+    ### 一、意图识别规则
+
+    #### 1. ECharts 图表
+    如果用户输入中包含与 **数据统计、数据分析、数据展示、趋势变化、占比分析、分布分析** 相关的描述，例如：
+
+    `Bar`, `pie`, `Scatter`, `柱状图`, `条形图`, `饼状图`, `折线图`, `统计图`,
+    `趋势图`, `分布图`, `数据可视化`, `图表`, `数据图`, `分析图`, `图形展示`
+
+    且用户核心目标明确是生成 **数据图表或统计展示图**，
+
+    则表示用户需要生成 **ECharts 图表**。
+
+    你只需要返回字符串：
+    "eChart"
+
+    不允许返回任何其他内容。
+
+    ---
+
+    #### 2. Mermaid 图（架构 / 流程 / 时序）
+    如果用户输入中包含与 **系统结构、模块关系、服务关系、流程关系、时序关系、数据流转** 相关的描述，例如：
+
+    `架构图`, `系统架构`, `流程图`, `流程`, `工作流`, `时序图`,
+    `模块关系`, `系统结构`, `系统设计图`, `结构图`, `数据流图`, `业务流程图`,
+    `服务调用关系`, `模块依赖关系`, `时序关系`, `数据流转`
+
+    且用户核心目标明确是生成 **系统结构关系图、流程关系图、时序图或数据流转图**，
+
+    则表示用户需要生成 **Mermaid 图**。
+
+    你需要根据用户输入生成 **Mermaid代码字符串**。
+
+    示例格式（仅供参考）：
+    ```mermaid
+    graph LR
+        A[用户] -->|发送请求| B(前端服务)
+        B -->|调用| C(API网关)
+        C -->|路由请求| D[身份验证服务]
+        C -->|路由请求| E[数据库服务]
+        D -->|验证用户身份| F[用户数据库]
+        E -->|数据存储| G[主数据库]
+        E -->|缓存数据| H[Redis缓存]
+        G -->|同步数据| I[日志服务]
+        H -->|缓存数据| I
+        B -->|显示数据| J[前端页面]
+    ```
+
+    ---
+
+    #### 3. 系统页面原型图（Diagram）
+    如果用户输入中包含与 **页面设计、界面设计、UI布局、页面结构、原型设计、页面交互、用户体验** 相关的描述，例如：
+
+    `原型图`, `页面原型`, `系统原型`, `界面原型`, `页面结构图`,
+    `UI原型`, `页面设计`, `界面设计`, `后台页面`, `管理页面`,
+    `系统页面`, `页面布局`, `wireframe`, `界面草图`,
+    `用户界面`, `UI界面`, `页面流转`, `页面跳转`, `页面关系`,
+    `页面交互`, `交互设计`, `视觉设计`, `产品原型`, `高保真原型`,
+    `低保真原型`, `可用性`, `用户体验路径`, `功能页面`, `界面逻辑`, `页面逻辑`
+
+    且用户核心目标明确是生成 **页面原型、界面布局、交互界面、视觉设计方案或页面关系图**，
+
+    则表示用户需要生成 **系统页面原型图**。
+
+    你只需要返回字符串：
+    "Diagram"
+
+    不允许返回任何其他内容。
+
+    ---
+
+    #### 4. 数据库表结构设计（table）
+    如果用户输入中包含与 **数据库设计、表结构设计、字段设计、建表、数据表、表定义、表结构说明** 相关的描述，例如：
+
+    `数据库设计`, `表设计`, `表结构`, `字段设计`, `建表`, `建表语句`,
+    `数据表`, `表定义`, `数据库表`, `字段列表`, `字段说明`,
+    `数据库建模`, `ER设计`, `表关系设计`, `schema设计`,
+    `用户表`, `角色表`, `订单表`, `商品表`, `表结构设计`
+
+    且用户核心意图明确是描述 **数据库表、字段结构或建模设计**，
+
+    则表示用户需要生成 **数据库表结构设计**。
+
+    你只需要返回字符串：
+    "table"
+
+    不允许返回任何其他内容。
+
+    ---
+
+    #### 5. 无明确意图时返回 N
+    如果用户输入 **不明确属于以上四种类型中的任意一种**，或者仅有少量相关词但**核心目标不清晰、意图不明确、无法稳定判断**，则必须返回：
+
+    "N"
+
+    适用场景包括但不限于：
+    - 只是普通说明、普通问答、普通描述，不是在请求生成图表、Mermaid图、原型图或表结构；
+    - 描述内容过于模糊，无法明确判断属于哪一种类型；
+    - 仅出现零散关键词，但不足以支撑明确分类；
+    - 同时涉及多个方向，但没有明显主意图；
+    - 需求偏向文本说明、方案说明、总结说明，而不是图形/表结构生成。
+
+    注意：
+    - 不允许为了匹配而强行归类；
+    - 不允许在意图模糊时随意返回 eChart、Diagram、table 或 Mermaid代码；
+    - 只有当用户意图足够明确时，才允许返回对应类别。
+
+    ---
+
+    ### 二、优先级规则（非常重要）
+
+    当用户输入同时包含 **Diagram相关语义** 与 **Mermaid相关语义** 时，必须优先判断是否属于“系统页面原型图”。
+
+    也就是说：
+
+    - 如果输入中出现 `页面`、`界面`、`UI`、`原型`、`布局`、`交互设计`、`视觉设计`、`用户体验`、`可用性`、`页面流转`、`界面逻辑` 等语义，
+      即使同时出现 `流程`、`路径`、`交互流程`、`逻辑关系` 等词，
+      只要核心目标是描述 **页面原型、界面布局、交互界面、视觉设计、用户体验或原型方案**，
+      都必须优先返回：
+
+    "Diagram"
+
+    而不是 Mermaid 代码。
+
+    只有当用户核心意图明显是描述 **系统模块关系、服务调用关系、流程关系、时序关系、数据流转关系** 时，才返回 Mermaid 代码。
+
+    ---
+
+    ### 三、兜底判断规则（非常重要）
+
+    在完成上述所有判断后：
+
+    - 如果可以**明确稳定地判断**属于 ECharts 图表，则返回 `"eChart"`
+    - 如果可以**明确稳定地判断**属于 Mermaid 图，则返回 Mermaid 代码字符串
+    - 如果可以**明确稳定地判断**属于系统页面原型图，则返回 `"Diagram"`
+    - 如果可以**明确稳定地判断**属于数据库表结构设计，则返回 `"table"`
+    - 如果 **不能明确稳定判断** 属于以上任意一种，则必须返回：
+
+    "N"
+
+    ---
+
+    ### 四、输入说明
+    【用户需求】：用户想生成内容的意图
+    {{n_chart_desc}}
+
+    ---
+
+    ### 五、输出要求（必须严格遵守）
+
+    输出必须是 **一个合法字符串**，且只能是以下五种情况之一：
+
+    1. 如果用户意图是 **ECharts图表**
+    返回：
+    "eChart"
+
+    2. 如果用户意图是 **Mermaid图**
+    返回：
+    Mermaid代码字符串
+
+    3. 如果用户意图是 **系统页面原型图**
+    返回：
+    "Diagram"
+
+    4. 如果用户意图是 **数据库表结构设计**
+    返回：
+    "table"
+
+    5. 如果用户意图 **不明确** 或 **不属于以上四种类型**
+    返回：
+    "N"
+
+    ---
+
+    严禁输出任何解释、说明、注释或额外文字。
+    严禁在意图不明确时强行归类。
+''')
+
+
+define('tpl_parser_table_schema',''' 
+### 三、类型与格式规则
+
+你的任务是根据用户需求，设计数据库表结构（如用户表、角色表、部门表等），并生成可直接用于 Apache POI 表格渲染的 JSON 数组数据。
+
+---
+
+#### tableSchema（数据库表设计）
+
+- 根据【用户需求】识别系统涉及的核心业务实体，并为每个核心实体设计一张数据库表；
+- 常见实体包括但不限于：用户、角色、部门、岗位、菜单、权限、字典、日志、订单、商品、客户、项目、任务等；
+- 设计结果应符合常见关系型数据库设计规范，默认按 MySQL 风格生成；
+- 表结构应具有合理性、可实施性和业务完整性；
+- 不得生成明显无意义、重复或自相矛盾的字段；
+- 若用户需求较明确，应优先生成与需求强相关的表；
+- 若用户需求较模糊，应保守生成 1~3 张核心表，不得过度虚构复杂表。
+
+---
+
+### 四、输出目标
+
+你必须输出一个合法 JSON 数组，数组中的每个元素代表一张数据库表。
+
+每张表必须包含以下字段：
+
+- `tableName`：表中文名称，例如“用户表”
+- `tableCode`：表英文名称/物理表名，例如“sys_user”
+- `tableDesc`：表说明，例如“存储系统用户基础信息”
+- `columnDefs`：用于 Apache POI 渲染的表头定义
+- `dataList`：用于 Apache POI 渲染的字段数据行
+
+---
+
+### 五、columnDefs 定义规则
+
+`columnDefs` 必须是固定结构数组，且每张表的 `columnDefs` 结构必须一致。
+
+固定输出如下：
+
+[
+  {"name":"字段名","key":"fieldName","widthCm":3.0},
+  {"name":"字段类型","key":"fieldType","widthCm":3.0},
+  {"name":"是否主键","key":"pk","widthCm":2.0},
+  {"name":"是否必填","key":"required","widthCm":2.0},
+  {"name":"默认值","key":"defaultValue","widthCm":3.0},
+  {"name":"字段说明","key":"fieldDesc","widthCm":6.0}
+]
+
+要求：
+- `name` 为表头显示名称；
+- `key` 为数据行字段键，必须固定，不可随意更改；
+- `widthCm` 为数字类型；
+- 不得使用业务字段名（如 id、username、email）作为 `columnDefs.key`；
+- 所有表的 `columnDefs` 必须完全一致。
+
+---
+
+### 六、dataList 定义规则
+
+`dataList` 是字段列表，每一行代表数据库表中的一个字段定义。
+
+每一行必须严格包含以下 key：
+
+- `fieldName`：字段名，例如 `id`、`username`、`dept_id`
+- `fieldType`：字段类型，例如 `bigint`、`varchar(64)`、`datetime`、`int`
+- `pk`：是否主键，固定值只能是 `"是"` 或 `"否"`
+- `required`：是否必填，固定值只能是 `"是"` 或 `"否"`
+- `defaultValue`：默认值，没有则填空字符串 `""`
+- `fieldDesc`：字段说明
+
+示例：
+
+[
+  {
+    "fieldName":"id",
+    "fieldType":"bigint",
+    "pk":"是",
+    "required":"是",
+    "defaultValue":"",
+    "fieldDesc":"主键ID"
+  },
+  {
+    "fieldName":"username",
+    "fieldType":"varchar(64)",
+    "pk":"否",
+    "required":"是",
+    "defaultValue":"",
+    "fieldDesc":"用户名"
+  }
+]
+
+---
+
+### 七、字段设计规范
+
+生成字段时，应遵循以下规范：
+
+#### 1. 通用字段规范
+大多数业务主表建议包含以下通用字段：
+- `id`：主键，类型为 `bigint`
+- `create_time`：创建时间，类型为 `datetime`
+- `update_time`：更新时间，类型为 `datetime`
+
+如业务合理，也可补充：
+- `create_by`：创建人
+- `update_by`：更新人
+- `status`：状态
+- `remark`：备注
+
+#### 2. 命名规范
+- 字段名使用小写英文加下划线风格，例如：`user_name`、`dept_id`、`role_code`
+- 表名使用小写英文加下划线风格，例如：`sys_user`、`sys_role`
+- 不得混用驼峰和下划线命名
+- 不得生成重复字段名
+
+#### 3. 类型规范
+- 主键统一优先使用：`bigint`
+- 名称/编码类字段优先使用：`varchar(64)`、`varchar(128)`
+- 描述/备注类字段可使用：`varchar(255)` 或 `text`
+- 时间字段优先使用：`datetime`
+- 状态类字段可使用：`int` 或 `tinyint`
+- 外键关联字段通常使用：`bigint`
+
+#### 4. 主键与必填规则
+- 每张表必须且只能有一个主键字段；
+- 主键字段必须为 `id`，除非用户需求明确要求其他主键设计；
+- 主键字段 `pk` 必须为 `"是"`；
+- 主键字段 `required` 必须为 `"是"`；
+- 关键业务字段应标记为必填；
+- 非关键补充字段可标记为非必填。
+
+---
+
+### 八、关联关系设计规则
+
+- 若用户需求明显涉及多实体关系，应合理设计关联字段；
+- 一对多关系可在子表中增加外键字段，例如 `dept_id`、`role_id`；
+- 多对多关系在必要时可生成中间表，例如 `sys_user_role`；
+- 是否生成中间表应以用户需求复杂度为准，避免过度设计；
+- 若生成中间表，中间表也必须遵循同样的 `columnDefs` 和 `dataList` 输出结构。
+
+---
+
+### 九、保守策略
+
+- 若用户需求明确指出表名称或业务模块，应严格围绕这些内容设计；
+- 若需求中仅描述系统类型，例如“用户权限管理系统”，可生成典型核心表，例如用户表、角色表、部门表、用户角色关联表；
+- 若无法确定某些非核心字段，可省略，不得为了凑数虚构复杂字段；
+- 若无法确定某张表是否需要生成，应优先保留核心表，避免过度扩展。
+
+---
+
+### 十、输出要求
+
+- 输出必须是合法 JSON；
+- 输出顶层必须是 JSON 数组；
+- 不得输出任何说明性文字；
+- 不得输出 Markdown 代码块标记；
+- 不得输出注释；
+- 不得输出 null、undefined、占位符文本；
+- 所有 `dataList` 中每一行的 key 必须与 `columnDefs.key` 对应；
+- 所有表的 `columnDefs` 必须保持一致；
+- 输出结果必须可直接被 Apache POI 模板渲染使用。
+
+---
+
+### 十一、输入变量
+
+【用户需求】
+{{userDesc}}
+
+---
+
+若无法完全确定字段内容，请基于常见数据库设计规范保守生成。
+输出必须是合法 JSON 数组，不包含任何多余文字。
+''')

@@ -1,0 +1,71 @@
+/*
+{
+  "title": "Codex Cloud CLI Assistant",
+  "description": "模仿 Codex Cloud CLI 的简单 assistant agent，支持发送消息并在异步时轮询结果",
+  "parameter": [
+    {
+      "name": "userInput",
+      "label": "用户输入",
+      "required": true
+    }
+  ],
+  "resultPlan": "n_final_result",
+  "uiEntrance": "chatDoc",
+  "discoverable": true,
+  "tag": "assistant",
+  "life": "100"
+}
+*/
+
+assign('n_final_result', '')
+assign('n_poll_count', '0')
+
+//# 发送消息
+n_send_result, act_api.doExecuteDynamic?name="send_codex_msg"&dynamicParamData='{"message":"{{userInput}}"}'
+
+//# 解析 thread_id 和 turn_id
+act_func?script='''
+  def data = n_send_result?.data
+  fn.put("n_thread_id", data?.thread_id ?: "")
+  fn.put("n_turn_id", data?.turn_id ?: "")
+'''
+
+//# 轮询（指数退避，最多8次约30分钟）
+assign('n_poll_count', '0')
+assign('n_poll_list', '[1,2,3,4,5,6,7,8]')
+foreach('n_poll_item', 'n_poll_list', {
+  when('fn.hasValue(n_thread_id) && fn.hasValue(n_turn_id) && !fn.hasValue(n_final_result) && (n_poll_count as int) < 8', {
+    act_func?script='''
+      def count = (n_poll_count ?: "0") as int
+      def waitSeconds = (5 * Math.pow(1.8, count)) as int
+      fn.put("n_wait_seconds", waitSeconds)
+      fn.put("n_poll_count", count + 1)
+    '''
+    log("[POLL] 第 {{n_poll_count}} 次，等待 {{n_wait_seconds}} 秒")
+    act_flow.wait?second={{n_wait_seconds}}
+    
+    n_get_result, act_api.doExecuteDynamic?name="get_codex_msg"&dynamicParamData='{"thread_id":"{{n_thread_id}}","turn_id":"{{n_turn_id}}"}'
+    act_func?script='''
+      def data = n_get_result?.data
+      def text = data?.output?.text
+      if (text) fn.put("n_final_result", text)
+    '''
+  })
+})
+
+//# 轮询超限提示
+when('!fn.hasValue(n_final_result) && fn.hasValue(n_thread_id)', {
+  assign('n_final_result', '等待时间过长，请人工跟进。\n\nthread_id: {{n_thread_id}}\nturn_id: {{n_turn_id}}')
+})
+
+//# 无需轮询时直接取结果
+when('!fn.hasValue(n_final_result)', {
+  act_func?script='''
+    def data = n_send_result?.data
+    fn.put("n_final_result", data?.output?.text ?: "")
+  '''
+})
+
+on_failure({
+  assign('n_final_result', 'codex 执行失败：{{sys_failure_task.result}}')
+})

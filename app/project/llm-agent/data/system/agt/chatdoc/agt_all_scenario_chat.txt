@@ -1,0 +1,24 @@
+/*
+ {
+	 "title": "All-scenario intelligent chat",
+	 "description": "All scenario AI chat agent.",
+	 "parameter": [
+	 	{
+	 		"name":"userInput",
+	 		"label":"用户输入"
+	 	}
+	 ],
+	 "llmType": "",
+	 "resultPlan": "",
+	 "uiEntrance": "chatDoc",
+	 "tag": "chatdoc",
+	 "life": "100"
+ }
+*/
+
+
+//# 自动获取或者创建工具集
+n_tool_set_code, agt_toolset_generator?userInput={{userInput}}
+
+//# 工具集执行
+agt_toolset_executor?userInput={{userInput}}&toosetCode={{n_tool_set_code}}&manualRequired=false

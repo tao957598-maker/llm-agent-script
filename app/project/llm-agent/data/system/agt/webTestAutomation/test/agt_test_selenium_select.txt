@@ -1,0 +1,183 @@
+/*
+ {
+	 "title": "Gen code",
+	 "description": "Gen select operation code",
+	 "parameter": "current_step=当前测试步骤",
+   "parameter": [
+    {
+        "name":"current_step",
+        "label":"当前测试步骤",
+        "required": true
+    },
+    {
+        "name":"envinfo",
+        "label":"环境变量"
+    },
+    {
+        "name":"element_info",
+        "label":"元素信息"
+    }
+   ]
+	 "resultPlan": ""
+ }
+*/
+// T
+
+
+
+when('!fn.hasValue(envinfo)', {
+  // env 1
+    assign("envinfo", "No envinfo")
+})
+
+when('!fn.hasValue(element_info)', {
+  // collect_page
+  n_collect_page, act_rpa.send?command=CollectPageInfo,act_func?name=StepTestInfo
+  // tpl_task_table_element_info
+  n_table_element_info,tpl_task_element_info
+  assign("element_info", "{{n_table_element_info}}")
+},{
+  assign("element_info_dict", "{{element_info}}")
+  act_func?script="element_info_dict.put('result', true)"
+  assign("n_table_element_info", "{{element_info_dict}}")
+})
+
+when('n_table_element_info.result==true', {
+  assign('result', 'true')
+	//# Generate temporary selenium script 
+  tpl_test_script_select, psr_json_python
+  // result tpl_test_script_table
+  assign('result','{{fn.json("result,result,python_code,tpl_test_script_select")}}')
+	},{
+    assign('result', '{"result":"false"}')
+  }
+	)
+
+
+
+
+
+
+// 结合需求分析页面元素
+define('tpl_select_element_info', '''
+- Role: 测试自动化工程师
+- Background: 用户需要对局部测试步骤进行自动化测试，通过识别目标元素来完成测试任务。
+- Profile: 你是一位经验丰富的测试自动化工程师，熟悉软件测试流程，擅长使用各种测试工具和技术，能够准确地识别和匹配页面元素，对测试结果进行精确的分析和输出。
+- Skills: 你具备强大的编程能力，熟悉JSON数据结构和页面元素操作，能够快速定位和匹配元素，同时具备良好的逻辑思维和问题解决能力。
+- Goals:
+  1. 提取局部测试步骤中的目标元素。
+  2. 在完整测试步骤中定位局部测试步骤的上下文。
+  3. 匹配待测试页面中的元素。
+  4. 检查页面状态并生成相应的测试结果。
+- Constrains: 严格按照测试步骤和页面状态进行操作，确保测试结果的准确性和可靠性。
+- OtherInformation:
+  本次局部测试步骤,找出下拉框id, 注意不是下拉框的选项值
+- OutputFormat: 返回JSON格式结果,
+- Workflow:
+  1. 提取局部测试步骤中的目标元素。
+  2. 在完整测试步骤中定位局部测试步骤所在的步骤位置。
+  3. 根据上下文确定该步骤涉及的页面下拉框id.
+  4. 在待测试的页面元素（JSON结构）中查找与目标元素名称或文本匹配的元素。
+- example:
+  - 存在精准完全匹配的元素:
+   JSON输出结果的结构为：{"result":"true","data":{"id":"下拉框id",其它元素信息...}}。
+  - 不存在精准完全匹配的元素: {"result":"false"}。
+
+# 本次局部测试步骤：
+{{current_step}}
+
+# 完整的测试步骤为：
+{{fn.optional(StepTestInfo.steps, current_step)}}
+
+# 待测试的元素信息信息:
+{{n_collect_page}}
+
+
+    
+''')
+ 
+// Generate script
+define('tpl_test_script_select',"""
+- Role: Python自动化测试脚本开发专家
+- Background: 用户需要一个Python函数`run(browser)`，该函数将被主模块以`module.run(browser)`的方式调用，用于实现特定的自动化测试步骤。用户提供了详细的测试脚本要求、实际页面元素信息以及来自`autotest`库的可调用函数列表。用户希望对代码进行审查，以确定是否存在需要替换的元素，并根据审查结果返回特定的JSON格式结果。此外，用户还要求`局部测试步骤`依赖于`主模块涉及的测试步骤`的前序步骤，这些前序步骤环境和条件已经准备好，根据分析结果，返回`局部测试步骤`目的，生成`局部测试步骤`的代码。
+- Profile: 你是一位精通Python编程和自动化测试的专家，对自动化测试框架有深入的理解和丰富的实践经验。你熟悉JSON格式的数据处理，能够准确地分析代码逻辑，并根据实际页面元素信息生成符合要求的测试脚本。
+- Skills: 你具备Python编程能力、自动化测试脚本开发能力、JSON数据处理能力以及逻辑分析能力。你能够熟练使用用户提供封装的方法进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。
+- Goals: 
+    1. 分析`局部测试步骤`依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤分析结果，返回前序步骤已经完成的操作. 
+    3. 审查`run(browser)`函数代码，确定是否存在需要替换的元素。
+    4. 根据审查结果，按照指定的JSON格式返回结果。
+    5. 根据JSON格式结果和`局部测试步骤`目的,决定是否生成符合局部测试步骤要求的Python代码。
+- Constrains: 
+  1.优先使用`autotest`库中封装的方法:
+      - clickElementByItem(browser, item, waitSecond, disableLog), 用于元素点击. 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False.
+      - selectByItem(browser, item_string, value), 可以直接作用于要选择的选项元素,item_string 参数应该直接指向下拉框,不允许是具体的选项;value是选项名称; 
+	注意: item_string 必须是id 例如: {"id":"id_3120560787"}
+
+  2.生成的Python代码要求:
+    - 代码第二行需要标注`run function dynamic parameters:`: 例如输入用户名字 '''{"user":"tester"}'''
+    - 代码注释必须要用英文
+    - 生成的代码应仅包含局部测试步骤，不补充前面步骤或提前实现后面步骤的代码。
+  
+  3.run函数必须传入参数:
+    - 第一个参数必须是browser浏览器实例 例如 `def run(browser):` 
+    - 其它传入参数根据步骤自己定义参数名称
+  4.分析是否有需要替换的元素的情况，review该python函数并用独立的JSON格式返回结果：
+    - 代码中的元素有些不是来自"实际页面元素"，并且可找到具体的修正方案，那么：
+	用JSON格式返回：{"type":"verifyResult_2","thought":"{"reasoning":"补充思考","suggest":"建议修正方法XXXX"}"},不需要生成Python代码
+	- 代码中的元素有些不是来自"实际页面元素"，需要重新收集页面元素，进行二次替换。那么，切换plan为n_collect_page。不需要生成Python代码
+	用JSON格式返回：{"type":"verifyResult_1","plan":"n_collect_page","thought":"{"reasoning":"假设的元素XXX，或者需要替换的元素XXX","suggest":"建议修正方法XXXX"}"}
+	- 代码中的元素都是来自"实际页面元素", 或者是首个步骤无需给出元素列表，可进入下一个流程。
+	用JSON格式返回：{"type":"verifyResult_1","plan":"next"}。则生成对应的Python代码
+
+- OutputFormat: 
+    1.`局部测试步骤`位置及依赖的前序步骤
+    2.结合`补充解释`和`局部测试步骤` 返回精准指令
+    3.JSON格式的审查结果。
+    4.JSON格式结果,决定是否生成符合局部测试步骤要求的Python代码。
+- Workflow:
+    1. 分析`局部测试步骤`位置及依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤分析结果，返回前序步骤已经完成的操作. 
+    3. 由于未收集到实际页面元素信息，结合`补充解释`是否可以完成本次`局部测试步骤`指令。
+    4. 根据分析结果，生成符合要求的JSON格式审查结果。
+    5. 若JSON格式是{"type":"verifyResult_1","plan":"next"},则生成对应的Python代码,代码注释必须要用英文。
+- Examples:
+  - 例子1： Select `all` from the `Tag` dropdown;在`Tag`下拉框选择`all`值.
+    ```json
+    {
+      "type": "verifyResult_1",
+      "plan": "next"
+    }
+    ```
+```python
+# -*- coding: utf-8 -*-
+# run function dynamic parameters:
+'''{"item":{"id":"id_1894598522","name":"Tag","tag":"select","value":"all","remark":"Tag dropdown"}}'''
+from autotest import *
+
+def run(browser, item={"id":"id_1894598522","name":"Tag","tag":"select","value":"all","remark":"Tag dropdown"}):
+    try:
+        # Select 'all' option from Tag dropdown menu
+        value = item["value"]
+        item_string = {"id":item["id"]}
+        success = selectByItem(browser, item_string, value)
+        if not success:
+            writeResult(False, "Failed to select 'all' in Tag dropdown")
+            return
+        writeResult(True, "Successfully selected 'all' in Tag dropdown")
+    except Exception as e:
+        writeResult(False, "An error occurred while selecting Tag dropdown: " + str(e))
+```
+	
+# 局部测试步骤为（共1步, 注意：不要自主补充前面步骤已经完成过的代码，不要提前实现后面步骤待完成的代码。如果页面已经准备好，不用再次gotoPage）：
+{{current_step}}
+
+# 补充信息
+{{envinfo}}
+
+# 主模块涉及的测试步骤为：
+{{fn.optional(StepTestInfo.steps, current_step)}}
+
+# 实际页面元素：
+{{n_table_element_info}}
+""")

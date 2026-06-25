@@ -1,0 +1,27 @@
+/*
+{
+	"title":"agt_chat_test_initmsg",
+	"description":"测试欢迎语-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"tpl_do_the_math",
+	"version":1
+}
+*/
+
+// 赋值 
+assign("a", "8") 
+assign("b", "9") 
+
+//#$ 欢迎进入chat测试
+log('-------欢迎进入chat测试------')
+
+// 数学加减乘除计算
+tpl_do_the_math, psr_all 
+ 
+define('tpl_do_the_math', ''' 
+	{{a}}
+	请帮我计算值：8*12+3
+''')
+ 

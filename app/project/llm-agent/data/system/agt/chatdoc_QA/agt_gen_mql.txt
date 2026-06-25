@@ -1,0 +1,112 @@
+/*
+ {
+	 "title": "Query report data",
+	 "description": "Query report data by indicator desc.",
+	 "parameter": [
+        {
+	 		"name":"indicatorDesc",
+	 		"label":"Indicator desc"
+	 	},
+        {
+            "name":"kbSpacePaths",
+            "label":"目录ID（支持多个）",
+            "type":"knowledge_fold"
+        },
+        {
+            "name":"kbSpaceFilePaths",
+            "label":"File",
+            "type":"knowledge_space"
+        }
+    ],
+    "llmType": "",
+    "uiEntrance": "chatdoc",
+    "resultPlan":"mql",
+    "tag": "chatdoc",
+    "life": "100"
+}
+*/
+// params - list metadata
+assign("param_mongo_metadata", '''
+{
+  'folders': {{kbSpacePaths}},
+  'fileNames': {{kbSpaceFilePaths}},
+  'description': '{{indicatorDesc}}'
+}
+''')
+ 
+// Query metadata in Milvus
+n_mongo_metadatas_response, act_plan.run?toolType=API&code='get_reportData_metadata'&parameters='{{fn.str(param_mongo_metadata)}}'
+assign('n_mongo_metadatas_data', '{{n_mongo_metadatas_response.data}}')
+assign('metadata_data_list','[]')
+
+when('!fn.hasValue(n_mongo_metadatas_data)', {
+    // Empty data
+	assign('mql', '')
+}, {
+    // Query metadata in MongoDB
+    foreach('mongo_metadata', 'n_mongo_metadatas_data', {
+        assign('mongo_metadata_data', '{{mongo_metadata.item}}')
+        // params - query by titles
+        assign("queryByTitles", '{"fileNamePrefix": "{{mongo_metadata_data.fileName}}", "titles": "{{mongo_metadata_data.title}}", "dataLimit": 10}')
+
+        // Query metadata by title
+        n_titleMetaData, act_api.doExecuteDynamic?name=ReportMetaData&dynamicParamData='{{queryByTitles}}'
+        n_metadata_data_list,act_func?script='''
+            def list_temp = metadata_data_list
+            list_temp.add(n_titleMetaData)
+            return list_temp
+        '''
+        assign('metadata_data_list', '{{n_metadata_data_list}}')
+	})
+})
+log('metadata_data_list = {{metadata_data_list}}')
+
+
+// Generate MQL 
+tpl_gen_mql_by_metadata, psr_all, n_reportData, act_api.doExecuteDynamic?name=ReportDataSearch&dynamicParamData={{fn.json("searchMQL, tpl_gen_mql_by_metadata, size, '1', filterNull, 'true'", true)}}
+
+assign('mql', '{{tpl_gen_mql_by_metadata}}')
+
+define('tpl_gen_mql_by_metadata', '''
+/*{
+  "enableThinking":"false"
+}*/
+<nothink>
+你是一个 MongoDB 查询生成器。根据以下输入，严格输出一条聚合语句。
+
+# 输入包括：
+- 用户需求（自然语言）
+- 元数据列表：每个元素含 fileName、title、convertFields（JSON 字符串）
+- 文件夹路径列表
+
+# 规则：
+1. 只能使用元数据中某一个 title 对应的 convertFields 的 key 作为字段名。
+2. 所有字段必须通过 data.xxx 访问。
+3. 必须先 $unwind "$data"。
+4. fileName 必须用 $regex 前缀匹配文件夹路径中的任一路径（如 "^test_k_b_argus/test_gen_mql"）。
+5. 任何用于 $match、$project、$sort 的字段，必须加非空校验：{ "data.xxx": { $exists: true, $ne: null, $ne: "" } }。
+6. 若字段类型为 date，但实际可能是 string，必须用 $switch + $dateFromString 转换，onError: null, onNull: null。
+7. 排序若基于日期，必须用转换后的字段，不能用原始 string。
+8. 禁止使用未在 convertFields 中声明的字段。
+9. 禁止假设任何值（如导演名字、电影名等），除非用户需求明确给出且有字段可过滤。
+10. 如果无法找到同时包含所有必需字段的表，或缺少必要字段，输出 db.report_data.aggregate([])。
+
+# 输出格式：
+db.report_data.aggregate([...])
+禁止输出任何其他内容，包括解释、空行、注释或多条语句。
+
+# 输入信息:
+
+用户需求：
+{{indicatorDesc}}
+
+可选元数据（禁止输出元数据本身）：
+{{n_mongo_metadatas_response}}
+
+文件夹路径：
+{{kbSpacePaths}}
+
+文档路径：
+{{kbSpaceFilePaths}}
+</nothink>
+''')

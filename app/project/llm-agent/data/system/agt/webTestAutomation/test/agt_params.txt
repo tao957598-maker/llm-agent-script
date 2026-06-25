@@ -1,0 +1,269 @@
+
+/*
+{
+	"title":"Enhanced Input Processor v3",
+	"parameter":[
+		{
+			"name":"文本域",
+			"label":"User Input",
+			"required":true,
+			"maxLength":5000,
+			"type":"textarea"
+		},
+		{
+			"name":"文件",
+			"label":"Upload File",
+			"required":false,
+			"type":"file"
+		},
+		{
+			"name":"知识库",
+			"label":"Knowledge Space",
+			"required":false,
+			"maxLength":50,
+			"type":"knowledge_space"
+		}
+	],
+	"displayOrder":0,
+	"version":3
+}
+*/
+
+// Main agent execution starts here
+log('Enhanced agent v3 started with input: {{文本域}}')
+
+// Enhanced input validation with more detailed analysis
+assign('input_length', '{{fn.length(文本域)}}')
+assign('input_trimmed', '{{fn.trim(文本域)}}')
+assign('trimmed_length', '{{fn.length(input_trimmed)}}')
+
+log('Raw input length: {{input_length}} characters')
+log('Trimmed input length: {{trimmed_length}} characters')
+
+// Check input quality with multiple criteria
+when('{{trimmed_length < 3}}', {
+    assign('input_status', 'too_short')
+    assign('input_quality', 'low')
+    log('Input is too short after trimming')
+    
+    // Check if input contains only whitespace
+    when('{{input_length > 0 and trimmed_length == 0}}', {
+        assign('input_issue', 'only_whitespace')
+        assign('processed_text', '[Empty or whitespace only]')
+        log('Input contains only whitespace')
+    }, {
+        assign('input_issue', 'insufficient_content')
+        assign('processed_text', '{{文本域}}')
+        log('Input has insufficient content')
+    })
+}, {
+    // Check for meaningful content (not just repeated characters)
+    assign('unique_chars', '{{fn.uniqueChars(文本域)}}')
+    assign('unique_count', '{{fn.length(unique_chars)}}')
+    
+    when('{{unique_count < 2 and trimmed_length >= 3}}', {
+        assign('input_status', 'repetitive')
+        assign('input_quality', 'low')
+        assign('input_issue', 'repetitive_characters')
+        assign('processed_text', '{{文本域}}')
+        log('Input contains repetitive characters')
+    }, {
+        assign('input_status', 'valid')
+        assign('input_quality', '{{fn.when(trimmed_length < 10, "medium", "high")}}')
+        assign('processed_text', '{{文本域}}')
+        log('Input is valid, quality: {{input_quality}}')
+    })
+})
+
+// Enhanced file processing with better error handling
+when('{{文件 != null and 文件 != ""}}', {
+    log('File uploaded: {{文件}}')
+    
+    // Get file extension for context
+    assign('file_extension', '{{fn.fileExtension(文件)}}')
+    log('File extension: {{file_extension}}')
+    
+    // Try to read file content with error handling
+    on_failure({
+        assign('file_status', 'read_error')
+        assign('file_content', 'Unable to read file content. The file might be corrupted or in an unsupported format.')
+        assign('file_error_detail', '{{sys_last_result}}')
+        log('File read failed: {{sys_last_result}}')
+    })
+    
+    n_file_content, act_func.read?filename='{{文件}}'
+    
+    // Enhanced validation
+    when('{{n_file_content == "NaN" or n_file_content == null or n_file_content == ""}}', {
+        assign('file_status', 'empty_or_invalid')
+        assign('file_content', 'The uploaded file appears to be empty or contains invalid content.')
+        log('File content is empty or invalid')
+    }, {
+        assign('file_content_length', '{{fn.length(n_file_content)}}')
+        
+        when('{{file_content_length < 10}}', {
+            assign('file_status', 'very_small')
+            assign('file_content', 'File content ({{file_content_length}} chars): {{n_file_content}}')
+            log('File is very small: {{file_content_length}} characters')
+        }, {
+            assign('file_status', 'valid')
+            assign('file_content', '{{fn.substring(n_file_content, 0, 500)}}')
+            when('{{file_content_length > 500}}', {
+                append('file_content', '... [truncated, total {{file_content_length}} characters]')
+            })
+            log('Valid file content, length: {{file_content_length}} characters')
+        })
+    })
+}, {
+    assign('file_status', 'not_provided')
+    assign('file_content', 'No file was uploaded.')
+    log('No file uploaded')
+})
+
+// Enhanced knowledge space processing
+when('{{知识库 != null and 知识库 != ""}}', {
+    log('Knowledge space provided: {{知识库}}')
+    
+    // Determine if we should search based on input quality
+    when('{{input_quality == "low"}}', {
+        assign('kb_status', 'skipped_low_quality')
+        assign('kb_search_result', 'Knowledge search skipped due to low-quality input.')
+        log('Knowledge search skipped - input quality too low')
+    }, {
+        // Try knowledge search
+        on_failure({
+            assign('kb_status', 'search_error')
+            assign('kb_search_result', 'Error searching knowledge space: {{sys_last_result}}')
+            log('Knowledge search error: {{sys_last_result}}')
+        })
+        
+        n_kb_result, act_kbs.searchQuestion?paramData={{fn.json('question,文本域,folderPath,知识库')}}&similarity='0.5'
+        
+        when('{{n_kb_result != null and n_kb_result != ""}}', {
+            assign('kb_result_length', '{{fn.length(n_kb_result)}}')
+            
+            when('{{kb_result_length < 50}}', {
+                assign('kb_status', 'minimal_match')
+                assign('kb_search_result', 'Found limited information: {{n_kb_result}}')
+                log('Minimal matches found in knowledge space')
+            }, {
+                assign('kb_status', 'found')
+                assign('kb_search_result', '{{fn.substring(n_kb_result, 0, 300)}}')
+                when('{{kb_result_length > 300}}', {
+                    append('kb_search_result', '... [truncated]')
+                })
+                log('Knowledge search found relevant information')
+            })
+        }, {
+            assign('kb_status', 'no_match')
+            assign('kb_search_result', 'No relevant information found in the knowledge space for your query.')
+            log('No matches found in knowledge space')
+        })
+    })
+}, {
+    assign('kb_status', 'not_provided')
+    assign('kb_search_result', 'No knowledge space was specified.')
+    log('No knowledge space provided')
+})
+
+// Define enhanced LLM prompt template
+define('tpl_enhanced_processor_v3', '''
+# Enhanced Input Processing - Version 3
+
+## User Input Analysis
+**Raw Input**: "{{文本域}}"
+**Processed Input**: "{{processed_text}}"
+**Input Length**: {{input_length}} characters ({{trimmed_length}} after trimming)
+**Input Status**: {{input_status}}
+**Input Quality**: {{input_quality}}
+{{fn.when(input_issue != null, "**Input Issue**: " + input_issue, "")}}
+
+## File Information
+**File Status**: {{file_status}}
+{{fn.when(file_extension != null, "**File Type**: " + file_extension, "")}}
+{{fn.when(file_content_length != null, "**File Size**: " + file_content_length + " characters", "")}}
+**File Content Preview**:
+{{file_content}}
+
+## Knowledge Space Results
+**Knowledge Status**: {{kb_status}}
+**Search Results**:
+{{kb_search_result}}
+
+## Processing Instructions
+1. **Acknowledge receipt**: Thank the user for their input
+2. **Address issues**: 
+   - If input_quality is "low", politely explain what kind of information would be helpful
+   - If file_status indicates problems, explain the issue clearly
+   - If kb_status shows limitations, mention this
+3. **Provide guidance**: Offer specific, actionable suggestions for improvement
+4. **Be encouraging**: Maintain a positive, helpful tone
+5. **Ask clarifying questions**: If appropriate, ask questions to get better information
+
+## Response Structure
+- Start with a friendly greeting
+- Summarize what was received
+- Address any issues or limitations
+- Provide clear next steps
+- End with an encouraging note
+
+**Important**: Keep the response concise, practical, and focused on helping the user get better results.
+''')
+
+// Call LLM with enhanced prompt
+tpl_enhanced_processor_v3, psr_text
+
+// Store and enhance the final response
+assign('final_response', '{{tpl_enhanced_processor_v3}}')
+
+// Add specific guidance based on input analysis
+when('{{input_quality == "low"}}', {
+    append('final_response', '\n\n---\n')
+    append('final_response', '\n**To help you better, please consider providing:**')
+    
+    when('{{input_issue == "only_whitespace"}}', {
+        append('final_response', '\n- Actual text describing what you need help with')
+    })
+    
+    when('{{input_issue == "insufficient_content" or input_status == "too_short"}}', {
+        append('final_response', '\n- More details about your request')
+        append('final_response', '\n- Context or background information')
+        append('final_response', '\n- Specific questions or problems you want to solve')
+    })
+    
+    when('{{input_issue == "repetitive_characters"}}', {
+        append('final_response', '\n- Meaningful text instead of repeated characters')
+        append('final_response', '\n- Clear description of what you need')
+    })
+    
+    append('final_response', '\n\n**Examples of helpful inputs:**')
+    append('final_response', '\n- "I need help writing a report about climate change"')
+    append('final_response', '\n- "Can you analyze this data and provide insights?"')
+    append('final_response', '\n- "Please help me understand how to use AgentFlow for automation"')
+})
+
+// Add file-specific guidance
+when('{{file_status == "empty_or_invalid" or file_status == "read_error"}}', {
+    append('final_response', '\n\n---\n')
+    append('final_response', '\n**File Upload Tips:**')
+    append('final_response', '\n- Ensure the file is not empty')
+    append('final_response', '\n- Check that the file format is supported (.txt, .pdf, .docx, etc.)')
+    append('final_response', '\n- Try re-uploading the file')
+    append('final_response', '\n- If the file is large, consider breaking it into smaller parts')
+})
+
+// Add knowledge space guidance
+when('{{kb_status == "not_provided"}}', {
+    append('final_response', '\n\n---\n')
+    append('final_response', '\n**Tip**: You can specify a knowledge space to help me provide more accurate and relevant information based on your organization\'s documentation.')
+})
+
+// Log completion with comprehensive summary
+log('Agent execution completed successfully')
+log('=== EXECUTION SUMMARY ===')
+log('Input: {{input_status}} (quality: {{input_quality}})')
+log('File: {{file_status}}')
+log('Knowledge: {{kb_status}}')
+log('Response length: {{fn.length(final_response)}} characters')
+
+// The final_response will be automatically returned

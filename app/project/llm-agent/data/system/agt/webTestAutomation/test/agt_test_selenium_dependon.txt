@@ -1,0 +1,105 @@
+/*
+ {
+	 "title": "Generate dependon selenium script",
+	 "description": "Generate dependon seleniumn for test requirement",
+	 "parameter": "current_step=当前验证步骤&system=系统名称&envinfo=environment information&version=版本号",
+	 "llmType": "",
+	 "resultPlan": "n_python_file",
+	 "life": "50"
+ }
+*/
+
+// Get envinfo by system
+n_envinfo, act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'
+//# [ { "envinfo": "url: http://189.1.224.215:8888/index\nuser name: peter.li\npassword: gientech@123\ntest_no: NAV_001", "name": "CloudBank", "language": "English", "id": 236766698966990850 } ]
+
+
+// Get Test No
+n_test_no, act_func?script='''
+  def strs = n_envinfo.envinfo[0].split("test_no:")[-1]
+  return strs.trim()
+	''' 
+assign('test_no','{{n_test_no}}')
+
+//# Generate temporary selenium script for dependon
+n_python_code, tpl_test_script_dependon, psr_json_python
+
+// Set result to true
+assign('n_result','true')
+
+// result tpl_test_script_dependon
+assign('result','{{fn.json("result,n_result,python_code,n_python_code")}}')
+
+
+
+// Generate script
+define('tpl_test_script_dependon',"""
+- Role: Python自动化测试脚本开发专家
+- Background: 用户需要一个Python函数`run(browser)`，该函数将被主模块以`module.run(browser)`的方式调用，用于实现特定的自动化测试步骤。用户提供了详细的参数信息，只需要把参数信息传入run方法中即可生成需要的pytohn代码。
+- Profile: 你是一位精通Python编程和自动化测试的专家，对自动化测试框架有深入的理解和丰富的实践经验，以及熟悉JSON格式的数据处理，能够准确地分析代码逻辑，并根据实际页面元素信息生成符合要求的测试脚本。
+- Skills: 你具备Python编程能力、自动化测试脚本开发能力、JSON数据处理能力以及逻辑分析能力。
+- Goals: 
+    1. 获取传入的参数数据
+    2. 生成符合要求的Python代码。
+- Constrains: 
+  1.只能使用`autotest`库中封装的方法:
+    - writeResult(success, desc),记录执行结果,success为测试是否成功的true/false标志,desc为结果的说明
+    - runDependOn(browser, test_system=test_system, test_no=test_no, version=version), 执行特定任务
+
+  2.生成的Python代码要求:
+    - 代码第二行需要标注`run function dynamic parameters:`: 例如输入用户名字 '''{"user":"tester"}'''
+    - 代码注释必须要用英文
+    - 必须符合测试脚本要求
+	- success = runDependOn(browser, test_system=test_system, test_no=test_no, version=version) # 这行代码为固定行，必须要包含，不需要再扩展修改
+    - 测试结果（无论成败）需要调用函数writeResult(sucess, desc)。
+    - 使用autotest中的可调用函数：xxxByItem，实现对元素的操作
+
+  3.run函数必须传入参数:
+    - 第一个参数必须是browser浏览器实例  
+	  - 第二个参数必须是系统名称system
+    - 第三个参数必须是测试编号test_no
+    - 第四个参数必须是测试编号version
+    - 第五个蚕食为**kwargs  # 作为备用，方便后续扩展
+   例如 `def run(browser, system="sys", test_no="test001", version="V3.2", **kwargs):`
+
+- OutputFormat: 
+    1.分析传入的参数
+    4.生成符合要求的Python代码。
+
+- Workflow:
+    1. 根据传入参数，按照要求传入run方法即可
+
+- Examples:
+  - 例子1：点击表格数据中“Creation Time”为“2025-04-07 16:35:01”数据项的编辑按钮
+    ```json
+	
+
+    ```
+```python
+# -*- coding: utf-8 -*-
+# run function dynamic parameters:
+'''{"requirement": "Execute the Depend, test_system is {test_system}, test_no is {test_no}, version is {version}", {"test_system": "test_system", "test_no": "test_no", "version": "version"}'''
+from autotest import *
+
+def run(browser, test_system="test_system", test_no="test_no", version="version", **kwargs):
+    try:
+        success = runDependOn(browser, test_system=test_system, test_no=test_no, version=version) # 固定行, 不能修改
+        if success:
+            writeResult(True, f"Successfully executed runDependOn, test_system={test_system}, test_no={test_no}.")
+        else:
+            writeResult(False, f"runDependOn execution failed, test_system={test_system}, test_no={test_no}.")
+    except Exception as e:
+        writeResult(False, f"Error executing runDependOn, test_system={test_system}, test_no={test_no}. Error: {e}")
+```
+
+# 测试编号:
+{{test_no}}
+
+# 系统名称:
+{{system}}
+
+# 版本号:
+{{version}}
+
+
+""")

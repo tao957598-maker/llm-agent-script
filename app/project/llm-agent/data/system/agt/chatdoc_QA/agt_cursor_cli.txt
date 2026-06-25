@@ -1,0 +1,387 @@
+/*
+{
+	"title":"CursorCLI",
+	"description":"Cursor IDE 命令行助手，能够将用户的自然语言需求转换为 Cursor CLI 命令完成任务。",
+	"parameter":[
+    {
+      "name":"userInput",
+      "label":"用户问题",
+      "type":"textarea"
+    }
+  ],
+	"tag":"chatdoc_QA",
+	"resultPlan":"n_final_answer",
+	"life":100,
+	"displayOrder":2,
+	"version":1
+}
+*/
+assign('OS_type', 'CMD')
+
+assign('n_collect_data',"None")
+assign('n_command',"None")
+//# Plan
+|n_command,tpl_gen_command,psr_json
+
+assign('stepsArray', "{{n_command.steps}}")
+
+foreach('step', 'stepsArray', {
+    //# Run command
+    log('{{step.item.command}}')
+    when('fn.hasValue(step.item.command)', {
+        // RunShell   RunTerminalCommand
+        n_collect_data, act_rpa.send?command=RunTerminalCommand&parameters='{"command":"{{step.item.command}}","timeout": 200}'
+
+        // act_ac.exec?acName='{{n_ac_name}}'&type='python'&timeout={{n_ac_timeout_seconds}}&workingDir='{{n_working_dir}}'&async=true&code=''
+    })
+})
+//$ Executed
+assign('n_final_answer', '{{n_collect_data}}')
+
+
+
+// Agent代码模板
+define('tpl_gen_command', '''
+/*{
+  "enable_thinking":"false",
+  "temperature": 0
+}*/
+根据Cursor CLI命令行工具资料，生成对应的命令。仅返回标准 JSON 格式，包含执行顺序、命令行类型（如：cursor、powershell、cmd）和具体命令，严禁包含任何解释或额外文本。
+
+# Cursor CLI 命令行工具
+
+Cursor 是基于 AI 的代码编辑器，支持通过命令行进行操作。
+
+## Cursor 安装与启动
+
+### macOS
+```bash
+# 使用 Homebrew 安装
+brew install cursor
+
+# 或下载 DMG 文件从 https://cursor.sh
+```
+
+### Windows
+```bash
+# 使用 winget 安装
+winget install Cursor.Cursor
+
+# 或下载 .exe 安装程序从 https://cursor.sh
+```
+
+### Linux
+```bash
+# 使用 npm 安装
+npm install -g cursor-ai
+
+# 或下载 AppImage
+```
+
+## Cursor CLI 基础命令
+
+### 启动 Cursor
+```bash
+# 启动 Cursor（默认）
+cursor .
+
+# 启动并打开特定文件
+cursor filename.txt
+
+# 启动并打开多个文件
+cursor file1.js file2.py
+
+# 启动指定目录
+cursor /path/to/project
+
+# 使用特定窗口打开
+cursor --new-window /path
+
+# 等待窗口关闭后退出
+cursor --wait
+```
+
+### 高级启动选项
+```bash
+# 以安全模式启动（禁用扩展）
+cursor --safe-mode
+
+# 以扩展开发模式启动
+cursor --extension-development-host
+
+# 禁用 GPU 加速
+cursor --disable-gpu
+
+# 使用远程服务器
+cursor --remote ssh://user@host
+
+# 指定用户数据目录
+cursor --user-data-dir ~/.cursor-test
+```
+
+## Cursor AI 命令
+
+### @cursor/sdk 集成
+```bash
+# 安装 Cursor SDK
+npm install @cursor/sdk
+
+# 或使用 Cursor CLI 初始化
+cursor init
+```
+
+### AI 助手调用
+```bash
+# 触发 AI 补全
+cursor "请解释这段代码"
+
+# AI 代码审查
+cursor --review "path/to/file"
+
+# AI 重构建议
+cursor --refactor "path/to/file"
+```
+
+## 常用快捷键
+
+| 快捷键 | 功能 |
+|:-------|:-----|
+| Ctrl+Shift+P | 打开命令面板 |
+| Ctrl+P | 快速打开文件 |
+| Ctrl+Shift+F | 全局搜索 |
+| Ctrl+` | 打开终端 |
+| Ctrl+B | 切换侧边栏 |
+| Ctrl+Shift+E | 资源管理器 |
+| Ctrl+Shift+G | Git 视图 |
+| Ctrl+Shift+M | 问题面板 |
+
+## Git 集成
+
+### 在 Cursor 中使用 Git
+```bash
+# Cursor 内置 Git 支持
+cursor
+
+# 在编辑器中：
+# 1. 点击左侧 Source Control 面板
+# 2. 查看变更、提交、推送
+# 3. 使用 GitLens 查看历史
+```
+
+### 常用 Git 操作
+```bash
+# 克隆仓库
+git clone <repository-url>
+
+# 在 Cursor 中打开
+cursor <repository-path>
+```
+
+## 扩展管理
+
+### 安装扩展
+```bash
+# 从命令行安装 VSIX
+cursor --install-extension extension.vsix
+
+# 或在 Cursor 内：
+# Ctrl+Shift+X 打开扩展市场
+```
+
+### 扩展命令
+```bash
+# 列出已安装扩展
+cursor --list-extensions
+
+# 安装特定扩展
+cursor --install-extension ms-python.python
+```
+
+## 调试配置
+
+### 启动调试
+```bash
+# 使用 launch.json 配置调试
+# 在 Cursor 中：Run > Start Debugging (F5)
+```
+
+### 常用调试快捷键
+| 快捷键 | 功能 |
+|:-------|:-----|
+| F5 | 开始/继续调试 |
+| F9 | 切换断点 |
+| F10 | 单步跳过 |
+| F11 | 单步进入 |
+| Shift+F5 | 停止调试 |
+
+## 设置与配置
+
+### 工作区设置
+```bash
+# Cursor 设置位置
+# macOS: ~/Library/Application Support/Cursor/
+# Windows: %APPDATA%/Cursor/
+# Linux: ~/.config/Cursor/
+```
+
+### 配置文件
+```json
+// settings.json 示例
+{
+  "editor.fontSize": 14,
+  "editor.fontFamily": "JetBrains Mono",
+  "workbench.colorTheme": "One Dark Pro",
+  "cursor.aiEnabled": true
+}
+```
+
+## 文件操作命令
+
+### 创建文件
+```bash
+# 创建新文件
+touch filename.js
+
+# 使用 Cursor 打开并编辑
+cursor newfile.py
+```
+
+### 编辑器操作
+```bash
+# Cursor 内置命令：
+# Ctrl+N - 新建文件
+# Ctrl+O - 打开文件
+# Ctrl+S - 保存
+# Ctrl+Shift+S - 另存为
+```
+
+## 终端集成
+
+### 内置终端
+```bash
+# 打开终端
+cursor --new-terminal
+
+# 或 Ctrl+` 打开集成终端
+```
+
+### 终端快捷键
+| 快捷键 | 功能 |
+|:-------|:-----|
+| Ctrl+` | 显示/隐藏终端 |
+| Ctrl+Shift+` | 新建终端 |
+| Ctrl+C | 终止当前命令 |
+| Ctrl+L | 清除终端 |
+
+## 代码片段 (Snippets)
+
+### 使用代码片段
+```bash
+# 在 Cursor 中：
+# 1. Ctrl+Shift+P 输入 "Insert Snippet"
+# 2. 选择语言和片段
+# 3. Tab 切换占位符
+```
+
+### 自定义片段
+```json
+// .cursor/snippets 文件示例
+{
+  "console.log": {
+    "prefix": "clog",
+    "body": ["console.log('$1:', $1);"],
+    "description": "Console log with label"
+  }
+}
+```
+
+## Cursor 特定功能
+
+### Composer 视图
+```bash
+# 打开 Composer（多文件编辑）
+# Ctrl+Shift+A 打开 Composer
+```
+
+### Agents 功能
+```bash
+# Cursor Agents 可以：
+# 1. 自动重构代码
+# 2. 生成测试用例
+# 3. 解释代码逻辑
+# 4. 修复 Bug
+
+# 快捷键：
+# Ctrl+Shift+I - 打开 AI 面板
+# Ctrl+Shift+L - 使用 AI 解释选中代码
+```
+
+### Tab 智能管理
+```bash
+# Cursor 智能 Tab 功能：
+# 1. Tab 自动补全
+# 2. Tab 多行补全
+# 3. Ghost Text 预测
+```
+
+## 多光标编辑
+
+### 多光标快捷键
+| 快捷键 | 功能 |
+|:-------|:-----|
+| Ctrl+D | 选择下一个相同词 |
+| Ctrl+Shift+L | 选择所有相同词 |
+| Alt+Click | 添加光标 |
+| Ctrl+Alt+Down | 向下添加光标 |
+| Ctrl+Alt+Up | 向上添加光标 |
+
+## 工作区管理
+
+### 多工作区
+```bash
+# 打开新窗口
+cursor --new-window
+
+# 打开窗口配置
+cursor --restore-window
+
+# 最近工作区
+cursor --open-in-new-window
+```
+
+## 搜索与替换
+
+### 高级搜索
+```bash
+# 全局搜索
+# Ctrl+Shift+F 输入关键词
+
+# 正则搜索
+# 勾选 "Use Regular Expression"
+
+# 排除文件
+# 输入框中输入：*.js !node_modules
+```
+
+## Cursor 与其他工具对比
+
+| 功能 | Cursor | VS Code | GitHub Copilot |
+|:-----|:-------|:--------|:---------------|
+| AI 补全 | 内置 | 需安装 | 需安装 |
+| Composer | 是 | 否 | 否 |
+| 价格 | 免费/Pro | 免费 | 订阅制 |
+
+# 示例格式
+{
+  "steps": [
+    {
+      "order": 从1开始,
+      "type": "cursor 或 powershell，能借助cursor，优先使用cursor解决",
+      "command": "cursor或powershell中执行的完整命令"
+    }
+  ]
+}
+
+# 用户需求
+|{{userInput}}
+''')

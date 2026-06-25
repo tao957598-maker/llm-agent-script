@@ -1,0 +1,141 @@
+/*
+{
+	"title": "OpsClaw 工具执行器",
+	"description": "OpsClaw 工具执行器 - 封装受控工具执行（含高风险确认、失败兜底与反馈沉淀），供 opsclaw_assistant 调用。",
+	"parameter": [
+		{"name":"userInput", "label":"用户输入", "required":true},
+		{"name":"opsclaw_root", "label":"opsclaw 根目录"},
+		{"name":"allowHighRiskAction", "label":"是否允许高风险动作"},
+		{"name":"action", "label":"执行动作", "required":true},
+		{"name":"toolType", "label":"工具类型"},
+		{"name":"toolCode", "label":"工具编码"},
+		{"name":"parameters", "label":"工具参数(JSON对象)"},
+		{"name":"riskLevel", "label":"风险等级(LOW/MEDIUM/HIGH)"},
+		{"name":"stepNo", "label":"步骤编号(可选)"}
+	],
+	"resultPlan": "",
+	"discoverable": false,
+	"tag": "opsclaw"
+}
+*/
+assign(
+	'n_tool_result', '{}',
+	'n_tool_observation', '',
+	'n_tool_memory_feedback', '',
+	'n_tool_done', 'false',
+	'n_tool_success', 'true',
+	'n_tool_final_result', '',
+	'n_tool_exit_reason', '',
+	'allow_high_risk_action_safe', 'false')
+
+when('fn.hasValue(allowHighRiskAction)', {
+	assign('allow_high_risk_action_safe', '{{allowHighRiskAction}}')
+})
+assign('toolParameters', '{{parameters}}')
+// 兼容：外部传参可能没给 parameters
+when('!fn.hasValue(parameters)', {
+	assign('parameters', '{}')
+})
+
+// 动态工具集 agent：自动补齐 userInput，并排除 API 类型的工具发现（平台 API 稳定能力已在 act_api.search 优先发现）
+when('toolType == "AGENT" && toolCode == "agt_all_scenario_dynamic_toolset.toolset" ', {
+	when ('!fn.hasValue(parameters.userInput)', {
+		assign('parameters', 'userInput={{userInput!}}')
+		assign('toolParameters.userInput', "{{userInput!}}")
+	})
+	when ('!fn.hasValue(parameters.excludeToolType)', {
+		assign('parameters', "userInput={{userInput!}}&excludeToolType='API,SCRIPT'")
+		assign('toolParameters.userInput', "{{userInput!}}")
+		assign('toolParameters.excludeToolType', "API,SCRIPT")
+	})
+
+})
+// 写入记忆由 write_memory 内 LLM 决定追加或替换；此处仅补齐 opsclaw_root。
+when('toolType == "AGENT" && toolCode == "agt_opsclaw_write_memory.opsclaw" && !fn.hasValue(parameters.opsclaw_root)', {
+	assign('parameters.opsclaw_root', '{{opsclaw_root}}')
+})
+
+// FINISH 不执行工具，仅返回 done=true，让调用方自行收口回答。
+when('action == "FINISH"', {
+	assign('n_tool_done', 'true',
+		'n_tool_success', 'true',
+		'n_tool_exit_reason', 'finish_requested')
+}, {
+	// 高风险、模型主动要求确认、或特殊 Agent 时，统一走确认分支；否则按普通工具直接执行。
+	when('action == "ASK_CONFIRM" || riskLevel == "HIGH"', {
+	   // Automatically determine whether manual confirmation is required based on risk level
+		when('allow_high_risk_action_safe == "true"', {
+			// Allow high risk action and Exec tool {{toolCode}}
+			n_tool_exec, act_plan.run?toolType={{toolType}}&code={{toolCode}}&parameters={{parameters}}
+			assign("n_tool_exec_map","{{fn.map(n_tool_exec)}}")
+			when('n_tool_exec_map.status == "SUCCESS"', {
+				assign('n_tool_observation', '{{n_tool_exec}}',
+					'n_tool_memory_feedback', 'step={{stepNo!}}, tool={{toolCode}}, risk={{fn.optional(riskLevel, "HIGH")}}, success=true',
+					'n_tool_success', 'true',
+					'n_tool_exit_reason', 'tool_exec_success',
+					'n_tool_done', 'true')
+			}, {
+				assign('n_tool_observation', '{{n_tool_exec}}',
+					'n_tool_memory_feedback', 'step={{stepNo!}}, tool={{toolCode}}, risk={{fn.optional(riskLevel, "HIGH")}}, success=false, reason=tool_exec_failed',
+					'n_tool_success', 'false',
+					'n_tool_exit_reason', 'tool_exec_failed',
+					'n_tool_done', 'true')
+			})
+		}, {
+		    //## Manual confirm tool when high risk action
+			n_action_confirm, act_flow.pageConfirm?confirmTool=true&toolType={{toolType}}&toolCode={{toolCode}}&params={{toolParameters}}
+			// Exec confirm tool
+			when('fn.hasValue(n_action_confirm.confirmed)', {
+				// Confirmed exec tool {{toolCode}}
+				n_tool_exec, act_plan.run?toolType={{toolType}}&code={{toolCode}}&parameters={{n_action_confirm.confirmed}}
+				assign("n_tool_exec_map","{{fn.map(n_tool_exec)}}")
+				when('n_tool_exec_map.status == "SUCCESS"', {
+					assign('n_tool_observation', '{{n_tool_exec}}',
+						'n_tool_memory_feedback', 'step={{stepNo!}}, tool={{toolCode}}, risk={{fn.optional(riskLevel, "HIGH")}}, success=true',
+						'n_tool_success', 'true',
+						'n_tool_exit_reason', 'tool_exec_success',
+						'n_tool_done', 'true')
+				}, {
+					assign('n_tool_observation', '{{n_tool_exec}}',
+						'n_tool_memory_feedback', 'step={{stepNo!}}, tool={{toolCode}}, risk={{fn.optional(riskLevel, "HIGH")}}, success=false, reason=tool_exec_failed',
+						'n_tool_success', 'false',
+						'n_tool_exit_reason', 'tool_exec_failed',
+						'n_tool_done', 'true')
+				})
+			}, {
+				assign('n_tool_observation', '高风险动作未确认，已停止自动执行。',
+					'n_tool_final_result', '已暂停执行：存在高风险动作，需人工确认后继续。',
+					'n_tool_memory_feedback', 'step={{stepNo!}}, tool={{toolCode}}, risk=HIGH, success=false, reason=manual_confirm_required',
+					'n_tool_done', 'true',
+					'n_tool_success', 'false',
+					'n_tool_exit_reason', 'manual_confirm_required')
+			})
+		})
+	}, {
+		// Exec tool {{toolCode}}
+		n_tool_exec, act_plan.run?toolType={{toolType}}&code={{toolCode}}&parameters={{parameters}}
+        assign("n_tool_exec_map","{{fn.map(n_tool_exec)}}")
+		when('n_tool_exec_map.status == "SUCCESS"', {
+			assign('n_tool_observation', '{{n_tool_exec}}',
+				'n_tool_memory_feedback', 'step={{stepNo!}}, tool={{toolCode}}, risk={{fn.optional(riskLevel, "LOW")}}, success=true',
+				'n_tool_success', 'true',
+				'n_tool_exit_reason', 'tool_exec_success',
+				'n_tool_done', 'true')
+		}, {
+			assign('n_tool_observation', '{{n_tool_exec}}',
+				'n_tool_memory_feedback', 'step={{stepNo!}}, tool={{toolCode}}, risk={{fn.optional(riskLevel, "LOW")}}, success=false, reason=tool_exec_failed',
+				'n_tool_success', 'false',
+				'n_tool_exit_reason', 'tool_exec_failed',
+				'n_tool_done', 'true')
+		})
+	})
+})
+
+on_failure({
+    assign('n_tool_observation', '{{sys_failure_task.result}}',
+        'n_tool_memory_feedback', 'step={{stepNo!}}, tool={{fn.optional(toolCode, "unknown")}}, success=false, reason=tool_failure',
+        'n_tool_success', 'false',
+        'n_tool_exit_reason', 'tool_failure')
+})
+
+assign('n_tool_result', '{{fn.json("observation, n_tool_observation, memoryFeedback, n_tool_memory_feedback, done, n_tool_done, finalResult, n_tool_final_result, success, n_tool_success, exitReason, n_tool_exit_reason")}}')

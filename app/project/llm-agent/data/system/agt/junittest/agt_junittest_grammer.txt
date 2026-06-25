@@ -1,0 +1,40 @@
+/*
+{
+	"title":"单元测试：AGT语法测试",
+	"parameter":"requirement=用户需求",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_sleep_2sec, test_product",
+	"version":1
+}
+*/
+
+//# 初始化产品信息
+assign("test_product", "金融领域保险")
+
+// 测试写代码
+n_write_python, act_python.write?path='FAAP/selenium/xxmodule/steps'&requirement='1. 测试需求'&method=open_xxx&sourceCode='print("Hello!")'&parameters={}
+
+// 测试读代码
+n_read_python, act_python.read?path='FAAP/selenium/xxmodule/steps/'&requirement='1. 测试需求'
+
+//## 延迟2秒执行
+n_sleep_2sec, act_flow.wait?second=2
+
+//## 圆周率
+n_do_llm, tpl_get_pi, psr_all
+
+//## 测试二级文件链接
+assign('filepath', '<a href="path/to/your/testdocument.pdf" target="_blank">testdocument111.pdf</a>')
+
+//# 测试一级文件链接
+assign('filepath', '<a href="path/to/your/testdocument.pdf" target="_blank">testdocument222.pdf</a>')
+
+define('tpl_get_pi', '''
+	请帮我计算值：8*12
+
+''')
+
+define('tpl_ask_pai', '''
+	请返回圆周率的值
+
+''')

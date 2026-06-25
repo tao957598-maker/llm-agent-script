@@ -1,0 +1,81 @@
+/*
+{
+	"title":"业务需求覆盖率统计",
+	"description":"统计业务需求覆盖率：(已覆盖的独立业务需求数 / 总业务需求数) * 100%",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"version":1
+}
+*/
+assign('documentId', '{{kbSpaceFileId}}')
+// 读取kb_gen_test_module表中的main_module_name
+n_modules, act_kb.selectBy?sql='SELECT distinct main_module_name,main_module_source FROM kb_gen_test_module WHERE documentId = "{{documentId}}" and version = "{{version}}"'
+
+// 初始化统计变量
+assign("total_count", "0")
+assign("covered_count", "0")
+assign("modules", '{{n_modules}}')
+assign("modules_coverage_report", '[]')
+// 循环处理每个main_module_name
+foreach('n_module', 'modules', {
+    // 获取当前模块名称
+    assign('current_module', '{{n_module.item}}')
+    // 定义main_module_name
+    assign('main_module_name', '{{current_module.main_module_name}}')
+    // 定义current_module_source
+    assign('current_module_source', '{{current_module.main_module_source}}')
+    // 页面数据
+    n_pages_data,agt_get_page_data?page={{current_module_source}}&documentId="{{documentId}}"
+    // 查询出所有的测试案例数据
+    n_test_cases, act_kb.selectBy?sql='SELECT title,application,steps,test_no,expected_result,source_value,test_type FROM kb_gen_test_case WHERE main_module_name = "{{current_module.main_module_name}}" and document_id = "{{documentId}}" and version = "{{version}}"'
+    // 计算数据
+    n_report_data,tpl_coverage_report,psr_json
+    
+    act_func?script="modules_coverage_report.add(n_report_data)"
+
+})
+
+// 定义agent运行结果
+assign("result", "{{modules_coverage_report}}")
+define('tpl_coverage_report', '''
+ # 根据以下数据计算业务需求覆盖率指标，返回JSON格式结果：
+ ## 页面数据
+ {{n_pages_data}}
+ ## 测试模块名称
+ {{main_module_name}}
+ ## 所有的测试案例数据
+{{n_test_cases}}
+
+
+# Answer only if you are confident
+1. 再严格按照以下要求统计结果：
+KPI Data Source Calculation Formula Pass/Good Threhold
+业务需求覆盖率 系统业务需求文档 vs 测试用例中的User Story NO关联   （已覆盖的独立业务需求数 / 总业务需求数）* 100%    ≥95%/≥98%
+用例重复率   步骤与预期结果完全一致且覆盖相同需求的用例。  （重复/冗余用例数 / 总用例数）* 100% ≤5%/≤2%
+
+边界/异常覆盖率    输入框的极值/格式校验、权限越权场景、分配规则冲突。  （包含边界值、异常流程的用例数 / 总用例数）* 100%   ≥30%/≥50%
+风险覆盖充分性（优先级匹配）  测试用例清单中的"优先级"字段 vs 业务需求文档中的关键场景。    （高优先级用例覆盖的核心功能数 / 总核心功能数）* 100% ≥95%/≥98%
+缺陷检出率（DDR）  可分级统计（如P0缺陷检出率），需排除非用例发现的缺陷（如探索性测试） （测试用例发现的缺陷数 / 系统总缺陷数）* 100% ≥85%/≥95%
+2.返回json结构:
+{  "{{main_module_name}}": [
+    {
+      "name": "KPI name",
+      "value": "kpi value",
+      "status": "Pass", // "Pass", "Good", 或 "Fail"
+     
+      "details": {
+        "coveredRequirements": 193,
+        "totalRequirements": 200
+      }
+    },...]}
+ ''')

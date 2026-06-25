@@ -1,0 +1,34 @@
+/*
+{
+	"title":"test demo tmp",
+	"description":"test demo tmp",
+	"resultPlan":"s",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"knowledge_space"
+		}
+	],
+	"displayOrder":0,
+	"version":3
+}
+*/
+// userInputuserInput
+assign('userInputuserInput',"{{userInput}}")
+
+ 
+// n_collect_data
+n_collect_data, act_rpa.send?command=PowershellCommand&parameters='{"command":"{{userInput}}"}'
+assign('n_collect_datan_collect_data',"{{n_collect_data}}")

@@ -1,0 +1,435 @@
+/*
+{
+	"title":"Triple Generation",
+	"description":"Convert test steps into triplet instructions",
+	"parameter":"test_no=Test Case No&current_step=当前验证步骤&steps=完整验证步骤&system=系统名称&envinfo=environment information&collect_page=page information&StepTestInfo=StepTestInfo ",
+	"resultPlan":"n_python_file",
+	"life":10000,
+	"version":1
+}
+*/
+// Use selenium
+assign('pythonType', 'selenium', 'subfolder', '{{test_no}}')
+n_global_variable, act_memory.retrieve?var=global_variable&global=true
+
+// 获取测试步骤
+assign('current_step', '{{current_step}}')
+when('!fn.hasValue(collect_page)', {
+  // 不存在页面信息赋值为空
+  assign("collect_page", '[]')
+},{
+// 页面信息
+assign('collect_page', '{{collect_page}}')
+})
+
+n_data,act_kb.select?name='llm_tool_code'&column='tool_uri,requirement,parameters'&maxSize=1000&where='{"generate_type":"1"}'
+
+
+assign('triple_cms', '{{n_data}}')
+
+// 根据步骤生成三元组指令
+n_similar_file,tpl_format_triple
+
+assign('n_current_step', '{{current_step}}')
+
+// 赋值步骤描述
+n_similar_file, act_func?script="""
+    def data = [:] + n_similar_file
+    data.parameter.put('current_step', '''{{n_current_step}}''')
+    return data
+    """
+// python_codepython_code
+assign('python_code', '{{fn.readFile(n_similar_file.filename)}}')
+
+//## Run selenium code similar_file
+agt_run?python_file={{n_similar_file.filename}}&parameters={{n_similar_file.parameter}}
+
+// time sleep 3 seconds
+act_flow.wait?second=3
+
+//# Collect page information again
+n_collect_page_again, act_rpa.send?command=CollectPageInfo
+
+//# Check and compare the execution result
+n_cmp1, tpl_cmp_pageresult, vrf_flag?value='fn.str(sys_last_result.thought.re_reasoning)=="false" || sys_last_result.hasDialog',\
+  agt_save_explorer?columns='page_change,tpl_cmp_pageresult.thought.change,reasoning,tpl_cmp_pageresult.thought.reasoning'
+assign('python_code', '{{fn.readFile(n_similar_file.filename)}}')
+// Check if page doesnot change
+when('fn.not(n_cmp1.run_success)', {
+  // 基于现有代码生成失败，直接返回，让后续步骤生成新代码
+  // Anounce no valid code
+  act_flow.fail?result='No valid code'&message=true
+}, {
+  // When the page changes and no dialog appears
+  when('fn.hasValue(n_cmp1.change_element) && n_cmp1.change_behavior=="add" && !fn.bool(n_cmp1.hasDialog)', {
+    // save tmp
+    n_python_file_2, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{python_code}}&parameters={{n_similar_file.parameter}}
+    assign('python_file', '{{n_python_file_2.kbspath}}')
+    assign('python_code', '{{n_python_file_2.sourceCode}}')
+    // Add page verify element
+    n_python_code,tpl_self_add_wait, psr_python, act_memory.assign?var=python_code
+    // return code
+    assign('python_code', '{{n_python_code}}')
+  })
+})
+
+//# Write selenium script to the artifact repository
+// n_python_file, act_python.write?requirement={{current_step}}&sourceCode={{python_code}}&parameters={{n_similar_file.parameter}}&application={{system}}
+
+// Write python script to new path
+agt_test_save_file?current_step={{current_step}}&test_no={{test_no}}&sourceCode={{python_code}}&parameters={{n_similar_file.parameter}}
+
+// Result
+assign('result', '{{n_python_file.fullFilename}}')
+
+
+// Parameters: 1.python_file; 2.parameter, 3. current_step
+// Agent for run script
+agent('agt_run', {
+
+  // run_python_code
+  assign('run_python_code', '{{fn.readFile(python_file)}}')
+
+  n_python_file_2, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{run_python_code}}&parameters={{parameters}}
+
+
+  // Get python code of tmp 
+  n_python_code, act_func.read?filename='{{n_python_file_2.kbspath}}'
+
+  assign('python_code', '{{sys_last_result}}')
+
+  // Add code for hypothetical steps
+  n_python_modify,tpl_self_check_if_exist,psr_json
+
+  when('n_python_modify.result=="false"', {
+      // No need to add code
+      assign('python_code', '{{python_code}}')
+  },
+  {
+    // Assign the modified code back to pythonCode
+    assign('python_code', '{{n_python_modify.code}}')
+  })
+
+  n_python_file_2, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{python_code}}
+
+  // run_python_code tmp
+  assign('python_file_tmp', '{{n_python_file_2.kbspath}}')
+
+
+	//## Run test step
+	n_python_result, act_rpa.send?name={{python_file_tmp}}&command=RunScript
+	
+	// Save execution result to KB
+	n_kb_data,act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,n_python_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+	
+	// Result
+	assign('result', '{{pythonType}}/{{python_file}}')
+	
+	// 2表示顺序执行，直到一个可成功执行的任务
+	// Try to run test step again
+	on_failure({
+		// Waiting 5 seconds
+		expression(true, 'act_flow.wait?second=5')
+    n_execute_result,tpl_execute_result
+    when('n_execute_result.success=="true"', {
+      // Test step success
+      act_flow.go?plan=n_kb_data
+    })
+		// Try to Run test step again
+		n_python_result2, act_rpa.send?name={{python_file}}&command=RunScript
+	}, 2)
+})
+
+// Save explorer
+agent('agt_save_explorer', {
+	// Save to kb_testcase_step_explorer
+	act_kb.merge?name=kb_testcase_step_explorer&columnValues='''
+			{{fn.json(columns)}}
+		'''&where='''
+			{{fn.json("test_no, test_no, step, StepTestInfo.current_step")}}
+		'''
+})
+
+
+define('tpl_execute_result', '''
+根据执行记录判断是否执行成功,返回JSON格式数据
+成功返回{"success":"true"},
+失败返回{"success":"false"}
+# 执行记录
+{{n_python_result}}
+''')
+define('tpl_format_triple', '''
+- Role: 一个自动化测试指令转换助手。您的任务是将用户提供的中文自然语言描述的测试步骤，准确地转化为对应的英文格式化操作指令。
+- Background: 将自然语言的测试步骤转换成对应英文格式的操作指令
+- Profile: 你是一位在软件测试领域拥有丰富经验的专家，对测试流程和测试步骤描述有着深入的理解，能够精准地把握用户需求，严格按照既定规则进行操作。
+- Skills: 你具备出色的逻辑思维能力、自然语言分析能力，以及资深的软件测试和自动化测试经验。
+- Goals: 将用户提供的中文自然语言描述的测试步骤，准确地转化为对应的英文格式化操作指令。
+- Constrains:
+  1.当出现保存历史数据、金额等跟数字、金额相关的步骤操作时，优先选择包含具体数值的元素
+	2.指令集中大括号包裹的部分为要替换的参数。
+	3.生成的指令需要带上原有自然语言中的数字序号
+	4.必须先解释步骤目的,然后输出转化后的英文指令，不添加任何解释、注释或额外内容。
+	5.严格按照支持的API指令集格式进行匹配和转换。
+	6.转换后的指令用单引号包裹具体参数
+	7.保持指令简洁，无需包含操作细节(如"在浏览器地址栏中输入")
+
+  补充信息：
+  1.如果自然语言描述较为抽象，没有具体操作细节，则直接返回"false"
+  2.如果没有匹配到指令集，则直接返回"false"
+
+- Workflow:
+  1. 分析自然语言描述的测试步骤, 提取关键参数。
+  2. 必须先解释步骤目的, 确认需要选择的是标签本身还是对应的数据值
+  3. 根据分析结果,从API指令集中匹配到相应的指令. 其中指令格式为如下: 
+    {
+       "tool_uri": "system/ac_script/triplet_scripts/click_target.py" ,  
+       "requirement": "Click {target}"
+    }
+  3. 根据OutputFormat,使用JSON格式返回结果:
+     {
+        "requirement": "Click 'Ongoing CDD Single Create' [id_3568954121]", 将指令中大括号包裹的target替换成自然语言中的对应的关键参数，并且在页面信息中匹配相应的id,如果id不存在则使用关键参数本身
+        "filename": "API指令集中的tool_uri",
+        "parameter": {"target": "id_3568954121"}, key值为原本指令中大括号包裹的名称, value值为匹配到的id或者关键参数本身
+     }
+
+- OutputFormat: 
+   根据指令的说明不同,需要的参数不同,返回的JSON内容也不同,具体JSON输出内容分如下4种情况:
+    必须先解释步骤目的，应该选取哪个元素
+
+  1. 指令没有参数:
+      返回的JSON格式为: {"requirement": Quit Browser", "filename":"'system/ac_script/triplet_scripts/screenshot.py", "parameter":"None"}
+
+  2. 指令含有一个参数, 'http://47.115.38.250:51504'在页面元素匹配不到id,在中括号内使用参数本身,无需替换
+      返回的JSON格式为: {"requirement": "Open url 'http://47.115.38.250:51504' [http://47.115.38.250:51504]", "parameter":{"url": "http://47.115.38.250:51504"}, "filename":"/system/open_url.py"}
+  
+  3. 指令含有一个参数, 其中'Ongoing CDD Single Create'在页面元素匹配到的id为id_3568954121
+      返回JSON格式为: {"requirement": "Click 'Ongoing CDD Single Create' [id_3568954121]", "parameter":{"target": "id_3568954121"}, "filename":"system/ac_script/triplet_scripts/click_target.py"}
+  
+  4. 指令含有两个参数, 由于'OKPT026'在页面信息中匹配不到相应的id,则使用OKPT026作为参数，'account'在页面元素匹配到的id为id_35689985214
+      返回JSON格式为:{"requirement": "Input 'OKPT026' into 'account' [OKPT026, id_35689985214]", "parameter":{"para":"OKPT026", "target": "id_35689985214"}, filename":"system/ac_script/triplet_scripts/insert_para_to_target.py" }
+  5. 注意:如果没匹配到API指令集,返回数据为```json{"result":"false"}```
+- Examples:
+  - 例子1：6.获取屏幕截图。
+    返回:
+    {
+      "requirement": "6.screenshot"
+      "filename":"'system/ac_script/triplet_scripts/screenshot.py", 
+      "parameter":"None" 
+    }
+
+  - 例子2：1.在浏览器地址栏中输入url: http://47.115.38.250:51504。
+    返回:
+    {
+      "requirement": "1.Open url 'http://47.115.38.250:51504' [http://47.115.38.250:51504]", 
+      "parameter":{"url": "http://47.115.38.250:51504"}
+      "filename":"'system/ac_script/triplet_scripts/open_url.py"
+    }
+
+  - 例子3：3.在展开的子菜单中定位并点击“Ongoing CDD Single Create”选项。
+    返回:
+    {
+      "requirement": "3.Click 'Ongoing CDD Single Create' [id_35689985214]", 
+      "parameter":{"target": "id_3568954121"},
+      "filename":"system/ac_script/triplet_scripts/click_target.py" 
+    }
+
+
+  - 例子4：18.在“Allocated Checker's Dept. / Branch”下拉框中选择GAOD。
+    返回:
+    {
+      "requirement": "18.Select 'GAOD' option from 'Allocated Checker's Dept. / Branch' [GAOD, id_id_35689985214]",
+      "parameter":{"option":"GAOD", "target": "id_id_35689985214"},
+      "filename":"system/ac_script/triplet_scripts/select_option_from_target.py" 
+    }
+
+
+# 支持的API指令集
+{{triple_cms}}
+
+# 待转换的测试步骤：
+{{current_step}}
+
+# 页面信息
+{{collect_page}}
+
+
+# 系统名称
+{{system}}
+
+# 补充解释：
+{{envinfo}}
+
+''')
+
+
+
+// 结果比较
+define('tpl_cmp_pageresult','''
+	/*{
+		 "llmType":"alias.highquality"
+	 }*/
+	你是Web测试专家，请分析进行了局部测试前后的页面元素的数据及结构，（json格式：[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, value: 表单元素的值, children:[子元素信息]}...]），请分析前后变化情况，判断局部测试步骤是否执行成功，用JSON给出结果。
+	{
+		"thought": {
+			"change": "前后页面元素的变化情况总结",
+			"reasoning":["结合局部测试步骤在主流程中的位置,结合下一步验证的界面需要,判断是否执行成功.进行3步以上的推理"],
+			"criticism":"推理结果是否符合change的总结",
+			"re_reasoning":"true/false"		// true表示: 推理过程有错误，需要重新推理.  false表示：无需重新推理
+		},
+		"change_element": {"name":xxx, "id":xxx}, // 如果有chang发生, 给出一个变化的元素用于识别标记。否则为{}。
+		"change_behavior": "add/remove/update/other",		// 如果有chang发生, 该变化的元素是发生了什么类型的变化. add表示新出现，remove表示消失，update表示属性或状态有变化，other表示其他类型的变化
+		"run_success":"true/false", 	// 根据推理的结果，判断局部测试步骤是否执行成功.
+										// 如果页面出现新弹窗，可由下一步继续处理. 可认为当前步骤执行成功
+										// 初始数据已经满足局部测试步骤的目标状态，无需change，可认为当前步骤执行成功
+		"vote": "1或者2",					// run_success为true时为1, run_success为false时为2
+		"hasDialog": "true/false",		// 是否存在弹窗
+		"elements"：'[{"name":xxx, "id":xxx}...]		// hasDialog为true时，需要给出弹窗按钮信息。否则为[]
+	}
+	
+	{{sys_hint}}
+	
+	# 局部测试步骤为：
+	{{StepTestInfo.current_step}}
+	
+	# 主流程涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+
+	# 初始页面元素结构为：
+	{{StepTestInfo.simplepageinfo}}
+	
+	# 局部测试执行之后的元素结构为：
+	{{fn.str(fn.func('', 'StepTestInfo', true), 'simplepageinfo')}}
+''')
+
+// 修改代码添加检测
+define('tpl_self_add_wait', '''
+	/*{
+		 "llmType":"alias.code"
+	 }*/
+	你是熟悉selenium 4的从事银行业务的高级测试，请基于下面的python代码需求，完成run函数。
+    # python函数：run(browser)
+	它将被主模块用run(browser)的方式调用。
+	{{python_code}}
+	
+	# python代码需求
+	在run的结尾，添加：waitElement(browser, item, '{{n_cmp1.change_behavior}}') 等待页面的加载完成，item为下面的待检测元素
+
+	# 待检测的元素：
+	{{n_cmp1.change_element}}
+	
+	# 其中来自autotest的可调用函数（通过from autotest import waitElement 补充导入函数）：
+	参数item是来自弹窗的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	参数browser是已经构建好的webdriver.Chrome实例
+	1. waitElement(browser, item, type),等待item所指向的元素出现/消失/改变,取决于type类型(add/remove/update)
+''')
+
+
+// 针对"如果出现某个元素按钮，就点击xxx"的特殊步骤步骤增加代码
+define('tpl_self_check_if_exist', '''
+	/*{
+		 "llmType":"alias.code"
+	 }*/
+- Role: 熟悉selenium 4的从事银行业务的高级测试和软件测试流程优化专家
+- Background: 用户将web测试所涉及的操作动作分,用户需要根据"当前测试步骤"执行的操作,获取相应的操作类型
+- Profile: 你是一位精通Python编程和自动化测试的专家，对Selenium库和自动化测试框架有深入的理解和丰富的实践经验。
+- Skills: 你具备资深web测试能力、自然语言的理解能力和逻辑分析能力。你能够熟练使用Selenium库进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。
+- Workflow:
+  1. 分析'当前测试步骤'，判断该步骤是否存在假设条件
+  2. 如果存在假设条件，则在输入的python代码的点击方法前增加代码
+	- 增加的代码为：getElementByItem(browser, item)， 其中参数browser是已经构建好的webdriver.Chrome实例，参数item是输入的python代码中的传参
+	- 增加代码的逻辑：判断元素是否存在，如果不存在则直接返回True; 如果元素存在则执行后续的点击操作
+  3. 如果不存在假设条件，result为false, code为空
+  4. 最后返回json格式数据{"result":"true" 或者 "false", "code": python代码或者为空}
+  
+- Examples:
+  - 例子1：
+    ```当前测试步骤
+	假如存在更新弹框界面，点击界面关闭按钮
+	```
+
+	```python
+	"""{"requirement": "Click {target}",  "target": "target"}"""
+	from autotest_triple import *
+
+	def run(browser, target="Me", **kwargs):
+		try:
+			success = clickTripleMain(browser, target)
+			if not success:
+				writeResult(False, f"Failed to click the {target}")
+				return False
+				
+			writeResult(True, f"Successfully clicked the {target}.")
+			return True
+			
+		except Exception as e:
+			logging.error(f"Failed to process the {target}. Error: {e}")
+			writeResult(False, f"Failed to process the {target}. Error: {e}")
+			return False
+	```
+
+   ```输出结果
+  {"result":"true","code":按照要求生成的python代码}
+
+   """{"requirement": "Click {target}",  "target": "target"}"""
+from autotest_triple import *
+def run(browser, target="Me", **kwargs):
+    try:
+        # 首先检查元素是否存在
+        element_exists = getElementByItem(browser, item)
+        if not element_exists:
+            writeResult(True, f"Element '{target}' does not exist, no click operation performed.")
+            return True
+            
+        # 如果元素存在，则执行点击操作
+        success = clickTripleMain(browser, target)
+        if not success:
+            writeResult(False, f"Failed to click the {target}")
+            return False
+              
+        writeResult(True, f"Successfully clicked the {target}.")
+        return True
+        
+    except Exception as e:
+        logging.error(f"Failed to process the {target}. Error: {e}")
+        writeResult(False, f"Failed to process the {target}. Error: {e}")
+        return False
+   ```
+
+ - 例子2：
+    ```当前测试步骤
+	点击登录按钮
+	```
+
+	```python
+	"""{"requirement": "Click {target}",  "target": "target"}"""
+	from autotest_triple import *
+
+	def run(browser, target="Me", **kwargs):
+		try:
+			success = clickTripleMain(browser, target)
+			if not success:
+				writeResult(False, f"Failed to click the {target}")
+				return False
+				
+			writeResult(True, f"Successfully clicked the {target}.")
+			return True
+			
+		except Exception as e:
+			logging.error(f"Failed to process the {target}. Error: {e}")
+			writeResult(False, f"Failed to process the {target}. Error: {e}")
+			return False
+	```   
+
+	```输出结果
+	{"result":"false","code":""}
+	```
+
+# 当前测试步骤
+{{current_step}}
+
+
+# 输入的python代码
+{{python_code}}
+
+''')
+

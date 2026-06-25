@@ -1,0 +1,126 @@
+
+/*{
+	"title":"Document Noun Extractor",
+	"parameter":[
+    {
+			"name":"content",
+			"label":"Document Content"
+		}],
+	"version":1
+}*/
+
+assign('doc_content', '{{content}}')
+	
+// Extract nouns from document using LLM
+tpl_noun_list, psr_json
+define('tpl_noun_list', '''
+- Role: 文档分析专家和信息提取工程师
+- Background: 用户需要对文档中的新概念或术语进行识别和理解，特别是那些超出用户固有知识范围的名词。用户希望通过系统化的方法，判断文档是否对这些术语提供了明确的解释，并以表格形式呈现结果。
+- Profile: 你是一位资深的文档分析专家，擅长从复杂文本中提取关键信息，尤其是识别和处理新概念或术语。你具备强大的逻辑分析能力和信息筛选能力，能够高效地处理文本内容，并以清晰的结构呈现结果。
+- Skills: 你拥有文本分析、信息提取、术语识别和逻辑推理的能力，能够精准地判断文档中术语的定义是否明确，并以表格形式呈现分析结果。
+- Goals: 通过系统化的流程，识别文档中的未知名词，判断其是否在文档中得到解释，并以清晰的表格形式呈现结果。
+- Constrains: 严格按照用户指定的流程操作，确保分析结果的准确性和完整性。仅处理文档中的名词，忽略其他类型的词汇。
+- OutputFormat: 以三列表格形式输出分析结果，表格包含“未知名词”、“是否后续解释”和“解释所在位置/说明”三列。
+- Workflow:
+  1. 通读文档，识别并提取超出固有知识范围的未知名词。
+  2. 对每个未知名词，判断其在文档后续部分是否得到直接解释或定义。
+  3. Do not include any explanations or additional text.
+  4. 将结果汇总并以markdown json list形式输出。
+  
+- Examples:
+  - 例子1：
+    文档内容：
+    ```
+    本文介绍了量子计算的基本原理。量子比特是量子计算的核心概念，它与传统比特不同，可以同时处于多个状态。在后续段落中，详细描述了量子比特的工作原理。
+    ```
+    输出 ：[{
+		"term": "量子比特",
+		"explained_later": true,
+		"explanation_location": "后续段落详细描述了其工作原理"
+		}]
+     
+  - 例子2：
+    文档内容：
+    ```
+    本文探讨了人工智能在医疗领域的应用。深度学习是其中的关键技术，但文档未对深度学习进行详细解释。
+    ```
+    输出：[{
+      "term": "深度学习",
+      "explained_later": false,
+      "explanation_location": "文档未在后续内容中提供明确解释"
+    }]
+
+# Document Content:
+{{doc_content}}
+ 
+
+
+''')
+	
+	// Check if nouns are explained later in the document
+	foreach('n_noun_data', '{{tpl_noun_list}}', {
+		assign('current_noun', '{{n_noun_data.item}}')
+		assign('current_index', '{{n_noun_data.index}}')
+		
+		// Create search pattern for the noun
+		tpl_search_pattern, psr_text
+		define('tpl_search_pattern', '''
+Given the noun "{{current_noun}}", create a search pattern to find explanations of this term in the document.
+
+Return ONLY the search pattern as text.
+''')
+		
+		// Search for explanations after the first occurrence
+		tpl_explanation_check, psr_json
+		define('tpl_explanation_check', '''
+Document Content:
+{{n_doc_content}}
+
+Target Noun: {{current_noun}}
+Search Pattern: {{tpl_search_pattern}}
+
+Analyze if the noun "{{current_noun}}" is explained anywhere in the document after its first mention. 
+Consider explanations like definitions, descriptions, examples, or contextual clarifications.
+
+Return JSON in this exact format:
+{
+	"noun": "{{current_noun}}",
+	"is_explained": true/false,
+	"explanation_location": "section_name_or_context",
+	"confidence_score": 0.0-1.0
+}
+''')
+		
+		// Store results for each noun
+		append('noun_analysis_results', '{{tpl_explanation_check}}')
+	})
+	
+	// Generate final analysis report
+	tpl_final_report, psr_md
+	define('tpl_final_report', '''
+# Document Noun Analysis Report
+
+## Summary
+Analyzed {{tpl_noun_list?size}} nouns from the document.
+
+## Detailed Results
+{{noun_analysis_results}}
+
+## Statistics
+- Total nouns extracted: {{tpl_noun_list?size}}
+- Nouns with explanations: {{fn.filter(noun_analysis_results, 'item.is_explained == true')?size}}
+- Explanation rate: {{fn.round(fn.filter(noun_analysis_results, 'item.is_explained == true')?size / tpl_noun_list?size * 100, 2)}}%
+
+## Recommendations
+Based on the analysis, provide suggestions for improving document clarity.
+''')
+	
+	// Assign final result
+	assign('final_result', '{{tpl_final_report}}')
+	
+	// Handle any failures
+	on_failure({
+		assign('error_message', 'Analysis failed: {{sys_last_error}}')
+		log('Error in noun extraction: {{sys_last_error}}')
+		act_flow.go?plan=end
+	})

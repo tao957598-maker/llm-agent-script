@@ -1,0 +1,35 @@
+/*
+{
+	"title":"ChatDoc Gen test case",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceId",
+			"label":"目录ID（支持多个）",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"type":"knowledge_space"
+		}
+	],
+	"tag":"chatdoc_QA",
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"n_query_answer",
+	"life":100,
+	"displayOrder":0,
+	"version":1
+}
+*/
+// Execute Query
+n_query_answer,agt_test_query_demo_v1?userInput={{userInput}}&kbSpaceId={{kbSpaceId}}&kbSpaceFileId={{kbSpaceFileId}}
+log('==============================================================={{n_query_answer}}')
+
+//# Finally Answer
+assign('system_prompt', ''' Query answer:
+{{n_query_answer}}''')

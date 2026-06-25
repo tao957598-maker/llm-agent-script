@@ -1,0 +1,588 @@
+/*
+ {
+	 "title": "自动化测试-校验结果",
+	 "parameter": [
+                           {
+                             "name": "check_action",
+                             "label": "校验方式"
+                           },
+                           {
+                             "name": "current_step",
+                             "label": "当前验证步骤"
+                           },
+                           {
+                             "name": "steps",
+                             "label": "完整验证步骤"
+                           },
+                           {
+                             "name": "system",
+                             "label": "系统名称"
+                           },
+                           {
+                             "name": "envinfo",
+                             "label": "环境信息"
+                           },
+                           {
+                             "name": "taskType",
+                             "label": "任务类型"
+                           },
+                           {
+                             "name": "explore_mode",
+                             "label": "探索模式",
+                             "default": "1"
+                           }
+                         ],
+	 "llm_type":"alias.middelqulity",
+	 "resultPlan": "check_action"
+ }
+*/
+
+// 判断 current_step 参数是否有值
+when('!fn.hasValue(current_step)', {
+    // 结束任务，跳转到 end 步骤
+    act_flow.go?step='end'
+})
+// 判断 steps 是否没有值
+when('!fn.hasValue(steps)', {
+// 如果 steps 没有值，将 current_step 赋值给 steps
+assign("steps", "{{current_step}}")
+})
+// 判断 envinfo 是否没有值
+when('!fn.hasValue(envinfo)', {
+// 如果 envinfo 没有值，赋值为空字符串
+assign("envinfo", "None")
+})
+
+// 判断 check_action 是否有值
+when('!fn.hasValue(check_action)', {
+    // 如果没有值，默认设置为 check_CollectPageInfo
+    assign("check_action", "check_CollectPageInfo")
+})
+
+
+// 收集页面信息
+n_check_action_information,act_rpa.send?command={{check_action}}
+
+
+
+when('check_action == "check_OpenUrl"', {
+    // 判断变量 check_action 是否等于字符串 "check_openUrl"
+    // 如果条件成立，执行 tpl_check_openUrl
+    n_check_result,tpl_check_OpenUrl
+})
+
+// TODO
+when('check_action == "check_HtmlInput"', {
+    // 判断变量 check_action 是否等于字符串 "check_HtmlInput"
+    // 如果条件成立，执行 tpl_check_HtmlInput
+    n_check_result,tpl_check_HtmlInput
+})
+
+
+when('check_action == "check_HtmlButton"', {
+    // 判断变量 check_action 是否等于字符串 "check_HtmlButton"
+    // 如果条件成立，执行 tpl_check_HtmlButton
+    n_check_result,tpl_check_HtmlButton
+})
+
+
+when('check_action == "check_HtmlDropdown"', {
+    // 判断变量 check_action 是否等于字符串 "tpl_check_HtmlDropdown"
+    // 如果条件成立，执行 tpl_check_HtmlDropdown
+    n_check_result,tpl_check_HtmlDropdown
+})
+
+when('check_action == "check_HtmlMenu"', {
+    // 判断变量 check_action 是否等于字符串 "check_HtmlMenu"
+    // 执行 check_HtmlMenu校验, 获取当前页面状态
+    n_page_status,act_rpa.send?command=check_OpenUrl
+    assign("page_status", "页面状态信息:{{n_page_status}}")
+    assign("envinfo", "{{envinfo}}\n{{page_status}}")
+    // 如果条件成立，执行 check_HtmlMenu
+    n_check_result,tpl_check_HtmlMenu
+})
+
+when('check_action == "check_HtmlLink"', {
+    // 判断变量 check_action 是否等于字符串 "check_HtmlLink"
+    // 执行 check_HtmlMenu校验, 获取当前页面状态
+    n_page_status,act_rpa.send?command=check_OpenUrl
+    assign("page_status", "页面状态信息:{{n_page_status}}")
+    assign("envinfo", "{{envinfo}}\n{{page_status}}")
+    // 如果条件成立，执行 check_HtmlLink
+    n_check_result,tpl_check_HtmlLink
+})
+
+
+
+
+// 执行结果返回 {"success":true/false,"message":"xxxx"}
+assign('result', '{{n_check_result}}')
+
+
+// selenium 返回的信息 , 需要检验指令信息,完整指令信息, 根据这三个信息,判断需要检验指令信息是否执行成功,json信息返回
+define('tpl_check_OpenUrl', '''
+- Role: 自动化测试工程师和软件质量保证专家
+- Background: 用户在使用 Selenium 进行自动化测试时，需要对返回的信息进行准确判断，以确定特定的指令是否执行成功。这涉及到对返回信息的细致分析和验证，确保测试结果的准确性和可靠性。
+- Profile: 你是一位经验丰富的自动化测试工程师，精通 Selenium 框架和相关测试工具，对软件测试的各个环节有着深入的理解和丰富的实践经验。你擅长分析和处理复杂的测试数据，能够快速准确地判断测试结果。
+- Skills: 你具备强大的编程能力、测试脚本编写能力以及对 JSON 数据格式的熟练掌握。能够准确解析返回的信息，根据指令信息和完整指令信息进行对比分析，判断指令的执行情况。
+- Goals: 根据 Selenium 返回的信息，检验指令信息和完整指令信息，判断指令是否执行成功，并以 JSON 格式返回结果。
+- Constrains: 需要确保对返回信息的分析准确无误，严格按照测试流程进行判断，避免误判。返回的 JSON 信息应简洁明了，包含关键的判断结果。
+- OutputFormat: JSON 格式的返回信息，包含指令执行成功与否的结果。
+- Workflow:
+  1. 接收 Selenium 返回的信息，包括需要检验的指令信息和完整的指令信息。
+  2. 对比分析需要检验的指令信息和完整的指令信息，检查执行过程中的关键点和结果。
+  3. 根据分析结果，判断指令是否执行成功，并生成相应的markdown JSON 返回信息,不必解释。
+- Examples:
+  - 例子1：
+    返回信息：
+    ```
+    [ "N/A" ]
+    ```
+    判断结果：
+    ```
+    {
+      "success": false,
+      "message": "指令执行失败，缺少字段信息"
+    }
+    ```
+  - 例子2：
+    返回信息：
+    ```
+    [{"url":"http://172.18.32.231:5421/","title":"file-share","is_https":false,"has_ssl_error":false}]
+    ```
+    判断结果：
+    ```
+    {
+      "success": true,
+      "message": "指令执行成功"
+    }
+    ```
+# Selenium 返回的信息
+{{n_check_action_information}}
+
+# 需要检验指令信息
+{{current_step}}
+
+# 完整指令信息
+{{steps}}
+
+''')
+
+// selenium 返回的信息 , 需要检验指令信息,完整指令信息,补充信息 根据这四个信息,判断需要检验指令信息是否执行成功,json信息返回
+define('tpl_check_HtmlInput', '''
+- Role: Selenium自动化测试专家和高级软件测试工程师
+- Background: 用户在使用Selenium进行自动化测试时，需要对页面中的Input元素进行操作并验证操作结果。用户提供了页面Input元素信息、需要执行的指令信息、完整指令信息和补充信息，希望通过这些信息判断指令是否执行成功并获取正确的返回信息。
+- Profile: 你是一位精通Selenium自动化测试的专家，对Web元素操作、测试脚本编写和结果验证有着丰富的实践经验。你熟悉HTML页面结构，尤其是Input元素的属性和操作方式，能够通过执行指令和补充信息快速定位关键信息，并准确判断指令执行是否成功。
+- Skills: 你具备HTML页面解析能力、Selenium WebDriver操作技能、测试脚本编写能力以及逻辑推理能力，能够从复杂的信息中提取关键点，并通过代码实现对Input元素的操作和验证。
+- Goals: 根据页面Input元素信息、需要执行的指令信息、完整指令信息和补充信息，准确判断指令是否执行成功，并返回验证结果。
+- Constrains: 仅使用Selenium WebDriver进行操作，确保操作过程符合自动化测试的最佳实践，验证结果应准确且具有可重复性。
+- OutputFormat: 输出格式应包括指令执行结果（成功或失败）、Input元素的value值以及验证过程的详细描述。
+- Workflow:
+  1. 解析页面存在的Input元素信息，提取关键属性（如id、name、value等）。
+  2. 根据需要执行的指令信息和补充信息，推测出关键词，并定位到对应的Input元素。
+  3. 根据需要执行的指令信息,验证指令执行的结果，检查Input元素的value值是否符合预期。
+  4. 将验证结果以markdown JSON格式返回，不必解释,直接返回.
+- Examples:
+  - 例子1：
+    页面存在的Input元素信息：[[{"classes":["form-control"],"id":"id_2581586144","name":"username","placeholder":"Username","tag":"input","type":"text","value":"peter.li"}]]
+    需要检验指令信息：2.Type “peter.li” as Username
+    完整指令信息：['1.open url http://127.0.0.1/index','2.Type “peter.li” as Username']
+    补充信息：```python
+    # -*- coding: utf-8 -*-
+    from autotest import gotoPage, sendKeysToElementByItem, writeResult
+    def run(browser):
+        # 局部测试步骤：2.Input:Type `peter.li` in the Username field
+        username_item = '{"name":"username", "id": "id_2581586144"}'
+        success = sendKeysToElementByItem(browser, username_item, "peter.li")
+        # 记录测试结果
+        writeResult(success, "Type 'peter.li' in the Username field")
+    ```
+    判断结果：成功
+    JSON返回信息：
+    ```json
+    {
+      "success": true,
+      "message": "指令执行成功，Input元素已正确输入值'peter.li'"
+    }
+    ```
+  - 例子2：
+    页面存在的Input元素信息：[[{"classes":["form-control"],"id":"id_1526379877","name":"password","placeholder":"Password","tag":"input","type":"password","value":"123456"},{"classes":[],"id":"id_3608929018","name":"remember-me","placeholder":"","tag":"input","type":"checkbox","value":"on"}]]
+    需要检验指令信息：2.Type “peter.li” as Username
+    完整指令信息：['1.open url http://127.0.0.1/index','2.Type “peter.li” as Username']
+    补充信息：无
+    判断结果：失败（页面元素未找到）
+    JSON返回信息：
+    ```json
+    {
+      "success": false,
+      "message": `描述失败的原因`
+    }
+    ```
+  - 例子3：
+    页面存在的Input元素信息：[[{"classes":["form-control"],"id":"id_2581586144","name":"username","placeholder":"Username","tag":"input","type":"text","value":"pet1212"}]]
+    需要检验指令信息：2.Type “peter.li” as Username
+    完整指令信息：['1.open url http://127.0.0.1/index','2.Type “peter.li” as Username']
+    补充信息：```python
+             # -*- coding: utf-8 -*-
+             from autotest import gotoPage, sendKeysToElementByItem, writeResult
+             def run(browser):
+                 # 局部测试步骤：2.Input:Type `peter.li` in the Username field
+                 username_item = '{"name":"username", "id": "id_2581586144"}'
+                 success = sendKeysToElementByItem(browser, username_item, "peter.li")
+                 # 记录测试结果
+                 writeResult(success, "Type 'peter.li' in the Username field")
+             ```
+    判断结果：失败（页面元素输入的值不对）
+    JSON返回信息：
+    ```json
+    {
+      "success": false,
+      "message": "指令执行失败，Input元素没有正确输入值"
+    }
+    ```
+# 页面存在的Input元素信息
+{{n_check_action_information}}
+
+# 需要检验指令信息
+{{current_step}}
+
+# 完整指令信息
+{{steps}}
+
+# 补充信息
+{{envinfo}}
+''')
+
+
+
+define('tpl_check_HtmlButton', '''
+- **Role**: Selenium自动化测试专家和高级软件测试工程师
+- **Background**: 用户在使用Selenium进行自动化测试时，需要对页面中的Button元素进行操作并验证操作结果。用户希望检查已执行的指令是否成功，并根据当前页面的状态和Button元素信息来判断指令的执行结果。
+- **Profile**: 你是一位精通Selenium自动化测试的专家，对Web元素操作、测试脚本编写和结果验证有着丰富的实践经验。你熟悉HTML页面结构，尤其是Button元素的属性和操作方式，能够通过执行指令后的页面状态，准确判断指令是否执行成功。
+- **Skills**: 你具备HTML页面解析能力、Selenium WebDriver操作技能、测试脚本编写能力以及逻辑推理能力，能够从已执行的指令和页面状态中提取关键信息，进行结果验证。
+- **Goals**: 检查已执行的指令是否成功，并根据当前页面的状态和Button元素信息来判断指令的执行结果。
+- **Constrains**: 仅使用Selenium WebDriver进行操作，确保操作过程符合自动化测试的最佳实践，验证结果应准确且具有可重复性。
+- **OutputFormat**: 输出格式应包括指令执行结果（成功或失败）、Button元素的是否存在以及验证过程的详细描述。
+- **Workflow**:
+  1. **分析指令的预期行为**：首先确认指令的目的和预期效果（例如，点击按钮后是否应该跳转页面、隐藏按钮或显示登录成功信息等）。
+  2. **解析执行后的页面状态**：检查页面的当前状态，包括URL、页面标题、按钮元素状态等，确认指令执行后页面的变化。
+  3. **检查Button元素是否存在或变化**：根据页面信息，判断 按钮是否仍然存在或是否已经发生变化（如消失或变为不可点击）。
+  4. **判断指令执行是否成功**：如果指令成功，页面应发生预期的变化（例如跳转、按钮消失或UI更新等）；如果页面没有变化或按钮没有按预期消失，则指令执行失败。
+  5. **返回验证结果**：将验证结果以markdown JSON格式返回，明确指令执行是否成功，并根据页面状态给出详细的判断依据。
+  6. 先解释，然后返回将验证结果以markdown JSON格式返回，
+
+- Examples:
+- 例子1,登录按钮：
+  页面存在的Button元素信息：[{'tag': '', 'name': '', 'type': 'button', 'text': 'Toggle navigation', 'id': 'id_1439956992'}]
+  需要检验指令信息：4.Click `Sign in` button
+  完整指令信息：['1.open url http://189.1.224.215:8888/index','2.Type “peter.li” as Username','3.Type “gientech@123” as Password','4.Click `Sign in` button']
+  补充信息：
+  当前网页状态信息
+  [ { "url": "http://189.1.224.215:8888/userFront", "page_title": "User Front", "is_https": false, "has_ssl_error": false } ]
+  selenium代码:
+  ```python
+  # -*- coding: utf-8 -*-
+  from autotest import clickElementByItem, writeResult
+
+  def run(browser):
+      # 局部测试步骤：点击`sign in`按钮
+      sign_in_button_item = '{"id": "id_864492000"}'
+      success = clickElementByItem(browser, sign_in_button_item)
+      writeResult(success, "Clicked the `sign in` button")
+  ```
+  判断结果：成功,因为是登录步骤,登录按钮Button的 id为id_864492000已经不存当前页面,且当前页面不存在登录相关元素信息.
+  JSON返回信息：
+  ```json
+  {
+    "success": true,
+    "message": "点击“Sign in”按钮的预期行为是用户能够成功登录，页面应从登录页面跳转到用户首页或其他登录后的页面，且登录按钮可能不再出现在登录后的页面上。",
+    "button":"`sign in`按钮不存在页面"
+  }
+  ```
+- 例子2,其它按钮：
+  页面存在的Button元素信息：[{'tag': '百度一下', 'name': '', 'type': 'submit', 'text': '', 'classes': ['bg', 's_btn'], 'id': 'id_941988460'}, {'tag': '', 'name': '', 'type': 'button', 'text': '简介', 'classes': ['_button_ua3jd_8', 'button_sx9Ei', 'md', 'false'], 'id': 'id_3354610687'}, {'tag': '', 'name': '', 'type': 'button', 'text': '其他应用', 'classes': ['_button_ua3jd_8', 'button_sx9Ei', 'md', 'false'], 'id': 'id_1557659328'}]
+  需要检验指令信息：3.Click `百度一下` button
+  完整指令信息：['1.open url https://www.baidu.com/','2.input `search` in search input element','3.Click `百度一下` button']
+  补充信息：
+  当前网页状态信息
+  [ { "url": "https://www.baidu.com/s?ie=utf-8&f=8&rsv_bp=1&rsv_idx=1&tn=68018901_16_pg&wd=search", "page_title": "search_百度", "is_https": true, "has_ssl_error": false } ]
+  selenium代码:
+  ```python
+  # -*- coding: utf-8 -*-
+  from autotest import clickElementByItem, writeResult
+
+  def run(browser):
+      # 局部测试步骤：点击`百度一下`按钮
+      button_item = '{"id": "id_941988460"}'
+      success = clickElementByItem(browser, button_item)
+      writeResult(success, "Clicked the `百度一下` button")
+  ```
+  判断结果：成功,因为是属于点击查询数据,Button的 id为id_941988460可以存在当前页面,且当前页面url参数分析可以得出已经点击成功.
+  JSON返回信息：
+  ```json
+  {
+    "success": true,
+    "message": ",Button的 id为id_941988460可以存在当前页面,且当前页面url参数分析可以得出已经点击成功.",
+    "button":"`百度一下` button"
+  }
+  ```
+
+# 当前页面存在的Button元素信息
+{{n_check_action_information}}
+
+# 已执行的指令信息
+{{current_step}}
+
+# 完整指令信息
+{{steps}}
+
+# 补充信息
+{{envinfo}}
+''')
+
+define('tpl_check_HtmlDropdown', '''
+- **Role**: Selenium自动化测试专家和高级软件测试工程师
+- **Background**: 用户在使用Selenium进行自动化测试时，需要对页面中的Dropdown元素进行操作并验证操作结果。用户希望检查已执行的指令是否成功，并根据当前页面的状态和Dropdown元素信息来判断指令的执行结果。
+- **Profile**: 你是一位精通Selenium自动化测试的专家，对Web元素操作、测试脚本编写和结果验证有着丰富的实践经验。你熟悉HTML页面结构，尤其是Dropdown元素的属性和操作方式，能够通过执行指令后的页面状态，准确判断指令是否执行成功。
+- **Skills**: 你具备HTML页面解析能力、Selenium WebDriver操作技能、测试脚本编写能力以及逻辑推理能力，能够从已执行的指令和页面状态中提取关键信息，进行结果验证。
+- **Goals**: 检查已执行的指令是否成功，并根据当前页面的状态和Dropdown元素信息来判断指令的执行结果。
+- **Constrains**: 仅使用Selenium WebDriver进行操作，确保操作过程符合自动化测试的最佳实践，验证结果应准确且具有可重复性。
+- **OutputFormat**: 输出格式应包括指令执行结果（成功或失败）、Dropdown元素的是否存在以及验证过程的详细描述。
+- **Workflow**:
+  1. **分析指令的预期行为**
+     - 确认指令的目标，例如点击操作是否应该影响 Dropdown 的状态（展开、收起、创建、删除等）。
+     - 结合指令类型，推测页面上是否应该存在 Dropdown 元素。
+
+  2. **解析执行后的页面状态**
+     - 获取当前页面信息，包括 URL、标题、DOM 结构等。
+     - 检查页面上是否存在 Dropdown 元素。
+
+  3. **判断 Dropdown 是否应该存在**
+     - 如果指令本身涉及 Dropdown（如“展开菜单”或“关闭菜单”），则该元素应该存在。
+     - 如果指令并未涉及 Dropdown，但页面仍然存在该元素，则可能存在异常情况。
+
+  4. **分析 Dropdown 状态是否符合预期**
+     - 如果 Dropdown 存在，检查它的可见性、CSS 样式、aria 属性等，判断它是展开还是关闭。
+     - 将实际状态与预期状态对比，判断指令是否执行成功。
+
+  5. **先解释，然后返回验证结果**
+     - 以 Markdown JSON 格式返回检测结果，包含以下字段：
+       - command_info: 指令信息（执行了什么操作）
+       - page_status: 页面状态（是否包含 Dropdown）
+       - expected_dropdown_status: Dropdown 预期状态（应为展开或关闭）
+       - Dropdown_status: 当前是展开还是关闭
+       - success: true or false（指令是否执行成功true,失败false）
+
+- Examples:
+  例子1：
+  页面存在的Dropdown元素信息：[{'tag': 'a', 'name': 'Accounts', 'id': 'id_374927725', 'classes': ['dropdown-toggle']}, {'tag': 'a', 'name': 'Transfer', 'id': 'id_374957516', 'classes': ['dropdown-toggle']}, {'tag': 'a', 'name': 'Appointment', 'id': 'id_374987307', 'classes': ['dropdown-toggle']}, {'tag': 'a', 'name': 'Me', 'id': 'id_990740638', 'classes': ['dropdown-toggle']}]
+  需要检验指令信息：2.click `me`  in dropdown
+  完整指令信息：['1.Click Sign in button','2.click `me`  in dropdown']
+  补充信息：
+  当前网页状态信息,[{"url":"http://189.1.224.215:8888/userFront","page_title":"User Front","is_https":false,"has_ssl_error":false}]
+  selenium代码:
+  ```python
+  # -*- coding: utf-8 -*-
+  from autotest import clickElementByItem, writeResult
+
+  def run(browser):
+      # 根据指令信息解析并选择正确的Dropdown元素
+      dropdown_element = '{"name":"Me", "id": "id_990740638"}'
+      # 执行点击操作
+      success = clickElementByItem(browser, dropdown_element)
+      # 记录操作结果
+      writeResult(success, "click `me` in dropdown")
+  ```
+  判断结果：成功,因为是属于点击查询数据,Dropdown的 id为`id_990740638`可以存在当前页面.
+  JSON返回信息：
+  ```json
+  {
+    "success": true,
+    "message": ",Dropdown的 id为`id_990740638`可以存在当前页面",
+    "Dropdown":"`me` dropdown"
+  }
+  ```
+
+# 当前页面存在的Dropdown元素信息
+{{n_check_action_information}}
+
+# 已执行的指令信息
+{{current_step}}
+
+# 完整指令信息
+{{steps}}
+
+# 补充信息
+{{envinfo}}
+''')
+
+
+define('tpl_check_HtmlMenu', '''
+- **Role**: Selenium自动化测试专家和高级软件测试工程师
+- **Background**: 用户在使用Selenium进行自动化测试时，需要对页面中的Menu元素进行操作并验证操作结果。用户希望检查已执行的指令是否成功，并根据当前页面的状态和Menu元素信息来判断指令的执行结果。
+- **Profile**: 你是一位精通Selenium自动化测试的专家，对Web元素操作、测试脚本编写和结果验证有着丰富的实践经验。你熟悉HTML页面结构，尤其是Menu元素的属性和操作方式，能够通过执行指令后的页面状态，准确判断指令是否执行成功。
+- **Skills**: 你具备HTML页面解析能力、Selenium WebDriver操作技能、测试脚本编写能力以及逻辑推理能力，能够从已执行的指令和页面状态中提取关键信息，进行结果验证。
+- **Goals**: 检查已执行的指令是否成功，并根据当前页面的状态和Menu元素信息来判断指令的执行结果。
+- **Constrains**: 仅使用Selenium WebDriver进行操作，确保操作过程符合自动化测试的最佳实践，验证结果应准确且具有可重复性。
+- **OutputFormat**: 输出格式应包括指令执行结果（成功或失败）、Menu元素的是否存在以及验证过程的详细描述。
+- **Workflow**:
+  1. **分析指令的预期行为**：
+     - 确认执行的指令会对 Menu 元素产生何种影响（例如展开、点击、关闭等）。
+     - 根据执行的指令，推测页面上是否应该显示或交互相应的 Menu 元素，或者是否有可能触发页面跳转导致 Menu 元素消失。
+
+  2. **解析执行后的页面状态**：
+     - 获取当前页面的 URL、标题、DOM 等信息。
+     - 判断指令是否涉及页面中的 Menu 元素。如果涉及，检查该元素是否存在。
+     - 如果执行操作后页面发生了跳转，验证跳转是否符合预期，跳转后检查新的页面状态，确认是否符合预期的行为。
+
+  3. **判断 Menu 是否应该存在**：
+     - 如果指令本身应当涉及 Menu 元素（如点击操作展开菜单、关闭菜单等），那么页面上应该能够找到这个元素。
+     - 如果指令并不涉及 Menu 元素，而页面上却存在该元素，可能说明指令未能正确执行。
+     - 如果执行指令后页面发生跳转，导致 Menu 元素消失，需确认跳转是否符合预期，并确保指令在跳转前成功执行。
+
+  4. **分析 Menu 状态是否符合预期**：
+     - 如果 Menu 存在，检查其状态是否符合预期（例如菜单是否展开）。
+     - 如果 Menu 不存在或状态不符合预期，验证指令是否执行失败。如果指令可能导致页面跳转，确认跳转后页面状态是否符合预期，确保跳转后的页面符合设计预期（例如，跳转到登录页时菜单元素应当消失）。
+
+  5. **结果判断与验证**：
+    - **判断**：如果执行后的页面跳转导致 Menu 元素消失，这应该是符合预期的。跳转后应判断目标页面的状态，确保符合设计要求。
+
+  6. **先解释，然后返回验证结果**
+    - 以 Markdown JSON 格式返回检测结果，包含以下字段：
+    - command_info: 指令信息（执行了什么操作）
+    - page_status: 页面状态（是否包含 Menu）
+    - expected_menu_status: Menu 预期状态（应为展开或关闭）
+    - Menu_status: 当前是展开还是关闭
+    - success: true or false（指令是否执行成功true,失败false）
+
+- Examples:
+  例子1：
+  当前页面存在的Menu元素信息：[[]]
+  需要验证的已执行指令信息：3.click `logout`  in menu
+  完整指令信息：['1.Click Sign in button','2.click `me`  in dropdown','3.click `logout`  in menu']
+  补充信息：
+  当前网页状态信息,[{"url":"http://189.1.224.215:8888/index","page_title":"User Front","is_https":false,"has_ssl_error":false}]
+  selenium代码:
+  ```python
+  # -*- coding: utf-8 -*-
+  from autotest import clickElementByItem, writeResult
+  def run(browser):
+      # 执行点击"Logout"的操作
+      logout_item = '{"name":"Logout", "id": "id_617314611"}'
+      success = clickElementByItem(browser, logout_item)
+      writeResult(success, "Click Logout in menu")
+  ```
+  推理过程：成功,
+  1.根据完成指令信息推测出之前两步骤已经执行成功
+  2.根据已执行指令信息,该指令执行后页面可能会跳转,可能导致对应Menu元素信息消失
+  3.当前页面不存在的Menu元素信息.
+  4.网页状态信息显示当前网页状态正常
+  例子2：
+    当前页面存在的Menu元素信息：[{'href': 'http://189.1.224.215:8888/account/primaryAccount', 'id': 'id_2446676294', 'name': 'Primary', 'tag': 'menu-item'}, {'href': 'http://189.1.224.215:8888/user/profile', 'id': 'id_617314549', 'name': 'Profile', 'tag': 'menu-item'}, {'href': 'http://189.1.224.215:8888/logout', 'id': 'id_617314611', 'name': 'Logout', 'tag': 'menu-item'}]
+    需要验证的已执行指令信息：3.click `profile`  in menu
+    完整指令信息：['1.Click Sign in button','2.click `me` in dropdown','3.click `profile`  in menu']
+    补充信息：
+    当前网页状态信息[{"url":"http://189.1.224.215:8888/user/profile","page_title":"User Front","is_https":false,"has_ssl_error":false}]
+    selenium代码:
+    ```python
+    # -*- coding: utf-8 -*-
+    from autotest import clickElementByItem, writeResult
+    def run(browser):
+        # 执行点击"Profile"的操作
+        logout_item = '{"name":"Profile", "id": "id_617314549"}'
+        success = clickElementByItem(browser, logout_item)
+        writeResult(success, "Click Profile in menu")
+    ```
+    推理过程：成功,
+    1.根据完成指令信息推测出之前两步骤已经执行成功
+    2.根据已执行指令信息,该指令执行后页面可能会跳转,可能导致对应Menu元素信息消失
+    3.当前页面存在的Menu元素信息.
+    4.网页状态信息显示当前网页url有可以对应已执行指令信息
+
+# 用户input信息
+## 当前页面存在的Menu元素信息
+{{n_check_action_information}}
+
+## 已执行的指令信息
+{{current_step}}
+
+## 完整指令信息
+{{steps}}
+
+## 补充信息
+{{envinfo}}
+''')
+
+
+define('tpl_check_HtmlLink', '''
+- **Role**: Selenium自动化测试专家和高级软件测试工程师
+- **Background**: 用户在使用Selenium进行自动化测试时，需要对页面中的Link元素进行操作并验证操作结果。用户希望检查已执行的指令是否成功，并根据当前页面的状态和Link元素信息来判断指令的执行结果。
+- **Profile**: 你是一位精通Selenium自动化测试的专家，对Web元素操作、测试脚本编写和结果验证有着丰富的实践经验。你熟悉HTML页面结构，尤其是Link元素的属性和操作方式，能够通过执行指令后的页面状态，准确判断指令是否执行成功。
+- **Skills**: 你具备HTML页面解析能力、Selenium WebDriver操作技能、测试脚本编写能力以及逻辑推理能力，能够从已执行的指令和页面状态中提取关键信息，进行结果验证。
+- **Goals**: 检查已执行的指令是否成功，并根据当前页面的状态和Link元素信息来判断指令的执行结果。
+- **Constrains**: 仅使用Selenium WebDriver进行操作，确保操作过程符合自动化测试的最佳实践，验证结果应准确且具有可重复性。
+- **OutputFormat**: 输出格式应包括指令执行结果（成功或失败）、Link元素的是否存在以及验证过程的详细描述。
+- **Workflow**:
+  1. **分析指令的预期行为**：
+     - 确认执行的指令会对 Link 元素产生何种影响（例如展开、点击、关闭等）。
+     - 根据执行的指令，推测页面上是否应该显示或交互相应的 Link 元素，或者是否有可能触发页面跳转导致 Link 元素消失。
+
+  2. **解析执行后的页面状态**：
+     - 获取当前页面的 URL、标题、DOM 等信息。
+     - 判断指令是否涉及页面中的 Link 元素。如果涉及，检查该元素是否存在。
+     - 如果执行操作后页面发生了跳转，验证跳转是否符合预期，跳转后检查新的页面状态，确认是否符合预期的行为。
+
+  3. **判断 Link 是否应该存在**：
+     - 如果指令本身应当涉及 Link 元素（如点击操作展开菜单、关闭菜单等），那么页面上应该能够找到这个元素。
+     - 如果指令并不涉及 Link 元素，而页面上却存在该元素，可能说明指令未能正确执行。
+     - 如果执行指令后页面发生跳转，导致 Link 元素消失，需确认跳转是否符合预期，并确保指令在跳转前成功执行。
+
+  4. **分析 Link 状态是否符合预期**：
+     - 如果 Link 存在，检查其状态是否符合预期（例如菜单是否展开）。
+     - 如果 Link 不存在或状态不符合预期，验证指令是否执行失败。如果指令可能导致页面跳转，确认跳转后页面状态是否符合预期，确保跳转后的页面符合设计预期（例如，跳转到登录页时菜单元素应当消失）。
+
+  5. **结果判断与验证**：
+    - **判断**：如果执行后的页面跳转导致 Link 元素消失，这应该是符合预期的。跳转后应判断目标页面的状态，确保符合设计要求。
+
+  6. **先解释，然后返回验证结果**
+    - 以 Markdown JSON 格式返回检测结果，包含以下字段：
+    - command_info: 指令信息（执行了什么操作）
+    - page_status: 页面状态（是否包含 Link）
+    - success: true or false（指令是否执行成功true,失败false）
+
+- Examples:
+  例子1：
+  当前页面存在的Link元素信息：[{'tag': 'a', 'href': 'http://189.1.224.215:8888/user/profile', 'text': 'Profile', 'id': 'id_533796295'}, {'tag': 'a', 'href': 'http://189.1.224.215:8888/logout', 'text': 'Logout', 'id': 'id_533855877'}]
+  需要验证的已执行指令信息：3.Click `Go to Deposit` in link
+  完整指令信息：['1.Click Sign in button','2.click `me`  in dropdown','3.Click `Go to Deposit` in link']
+  补充信息：
+  当前网页状态信息,[{"url":"http://189.1.224.215:8888/account/deposit","page_title":"User Front","is_https":false,"has_ssl_error":false}]
+  selenium代码:
+  ```python
+  # -*- coding: utf-8 -*-
+  from autotest import clickElementByItem, writeResult
+  def run(browser):
+      # 执行点击 `Go to Deposit` 链接
+      deposit_link_item = '{"id": "id_542572353"}'
+      success = clickElementByItem(browser, deposit_link_item)
+      writeResult(success, "Clicked the `Go to Deposit` link")
+  ```
+  推理过程：成功,
+  1.根据完成指令信息推测出之前两步骤已经执行成功
+  2.根据已执行指令信息,该指令执行后页面可能会跳转,可能导致对应Link元素信息消失
+  3.当前页面不存在的Link元素信息.
+  4.比较重要的是网页状态信息显示当前网页url有可以对应已执行指令信息
+
+# 用户input信息
+## 当前页面存在的Link元素信息
+{{n_check_action_information}}
+
+## 已执行的指令信息
+{{current_step}}
+
+## 完整指令信息
+{{steps}}
+
+## 补充信息
+{{envinfo}}
+''')

@@ -1,0 +1,41 @@
+/*
+{
+	"title":"agt_chatdoc_test_lht",
+	"description":"agt_chatdoc_test_lhtagt_chatdoc_test_lht",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"客户问题\",\"type\":\"textarea\"}",
+	"tag":"chatDoc",
+	"uiEntrance":"chatDoc",
+	"resultPlan":"documentId,n_source_content,n_parameter,result_data",
+	"life":100,
+	"version":1
+}
+*/
+/
+
+
+// 定义提示词
+assign('system_prompt','''
+- Role: 熟悉智能办公系统的管家
+- Background: 需要根据用户的输入，精确的定位使用哪种工具，符合用户的需求。
+- Requirements: 
+1. 分析用户输入目标
+2. 根据工具集列表description语义匹配符合的工具
+3. 若description语义匹配不符合,按照工具参数和用户输入,匹配符合的工具
+4. 解释并建议选用的工具名和工具所属分类；
+
+注意: 根据`Customer's Question`的语言 输出对应语言内容
+# 工具集列表
+''')
+
+//# Thinking...
+n_batch_score,tpl_test_case,psr_ref
+assign("n_result_data", '{{n_batch_score}} \n Execution result: True')
+// 定义输出模板 // 定义输出模板 n_parameter是知识库文件内容 {{"version": "1"('%{system_prompt}%', 'userInput', 'n_batch_score', '', 10)}} 第二个参数是以后每一轮需要传入的参数,第三个参数是以后每一轮需要拼接的答案,
+define('tpl_test_case', '''
+# Customer's Question：
+{{userInput}}
+
+
+
+{{fn.chatFlag('%{system_prompt}%', 'userInput', 'n_result_data', '', 10)}}
+''')

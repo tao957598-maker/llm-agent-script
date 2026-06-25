@@ -1,0 +1,52 @@
+/*
+{
+	"title": "SQL数据检查器",
+	"parameter": [
+		{
+			"name": "system_name",
+			"label": "系统名称",
+			"required": true,
+			"default": "Cloud Bank"
+		},
+		{
+			"name": "current_uri",
+			"label": "当前URI",
+			"required": true,
+			"default": "/account/deposit"
+		}
+	],
+	"version": 1
+}
+*/
+
+
+// Set parameter
+assign('params','{"question":"{{userInput}}","folderIds":"{{folderIds!}}","knowledgeIds":"{{knowledgeIds!}}"}')
+
+// initialize variables for result
+assign('result_datas', '[]')
+
+
+// 定义变量current_uri
+assign("current_uri", "{{current_uri}}")
+assign("sql", "SELECT t.* FROM llm_agent.kb_spiderdeep_directory t WHERE system_name = '{{system_name}}' AND current_uri = '{{current_uri}}'  LIMIT 1")
+// 执行SQL查询
+n_data,act_kb.selectBy?sql={{sql}}
+
+// 检查查询结果
+when('{{fn.hasValue(n_data)}}', {
+	// 有数据的情况
+	when('n_data.current_uri==n_data.guest_redirect_uri', {
+
+		// 这里可以添加有数据时的具体操作
+		assign("operation_result", "无权限控制即可访问")
+		assign("result_datas", "{'status':true,'start_url':current_uri,'end_url':current_uri}")
+	}, {
+		// 这里可以添加无数据时的具体操作
+		assign("operation_result", "权限控制访问")
+		assign("result_datas", "{'status':true,'start_url':current_uri,'end_url':n_data.guest_redirect_uri}")
+	})
+}, {
+	assign("operation_result", "无数据")
+	assign("result_datas", "{'status':false,'message':'无数据'}")
+})

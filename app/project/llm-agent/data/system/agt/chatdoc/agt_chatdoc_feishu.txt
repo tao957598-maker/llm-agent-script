@@ -1,0 +1,34 @@
+/*
+ {
+	 "title": "飞书助手",
+	 "description": "飞书助手agent",
+	 "parameter": [
+	 	{
+	 		"name":"userInput",
+	 		"label":"用户输入"
+	 	},
+	 	{
+	 		"name":"chatId",
+	 		"label":"需要发送的ID"
+	 	}
+	 ],
+	 "uiEntrance": "chatdoc",
+	 "tag": "chatdoc",
+	 "life": "100"
+ }
+*/
+assign('system_prompt', '''
+	你是一个与飞书用户单独聊天或者群聊的助手，负责解答用户的问题
+''')
+
+//$ 简单对话聊天
+n_result, tpl_simple_chat, psr_all
+
+define('tpl_simple_chat', '''
+#用户输入
+{{userInput}}
+
+{{fn.chatFlag('system_prompt', '', '', '', 10)}}
+''')
+
+agt_feishu_simple?userInput='向 {{chatId}} 发送消息： {{n_result}}'

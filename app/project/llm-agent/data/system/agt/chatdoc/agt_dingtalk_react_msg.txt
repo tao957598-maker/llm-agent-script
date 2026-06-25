@@ -1,0 +1,118 @@
+/*{ 
+	"title":"钉钉消息发送助手",
+	"description":"向钉钉用户或群发送消息，支持通过用户名或群名自动查询ID",
+	"parameter":[
+		{"name":"userInput", "label":"用户需求", "required":true, "description":"用户输入的消息内容及发送对象，如：给张三发送你好"}
+	],
+	"uiEntrance": "chatdoc",
+	"tag":"chatdoc",
+	"version":13,
+	"resultPlan":"n_result"
+}*/
+
+// ==================== 第一部分：初始化变量 ====================
+assign('n_max_iterations', '{{fn.raw(6)}}')
+assign('n_message', '""')
+assign('n_receiver_type', '""')
+assign('n_receiver_name', '""')
+assign('n_user_id', '""')
+assign('n_conversation_id', '""')
+assign('n_robot_code', '""')
+assign('n_send_result', '""')
+assign('n_finish', 'false')
+
+// ==================== 第二部分：解析用户输入 ====================
+define('tpl_parse', '''
+解析用户输入，提取消息发送任务的关键信息。
+
+用户输入：{{userInput}}
+
+输出JSON：
+```json
+{
+  "message": "消息内容",
+  "receiverType": "user或group", 
+  "receiverName": "接收者名称"
+}
+```
+''')
+
+n_parse_result, tpl_parse, psr_json, vrf_flag?value='fn.hasValue(sys_last_result,"message")'
+
+assign('n_message', '{{n_parse_result.message!""}}')
+assign('n_receiver_type', '{{n_parse_result.receiverType!""}}')
+assign('n_receiver_name', '{{n_parse_result.receiverName!""}}')
+
+n_robot_code, act_kb.readCfg?type='dingtalk'&key='robot_code'
+// ==================== 第三部分：ReAct循环 ====================
+define('tpl_react', '''
+你是钉钉消息发送助手。任务：向{{n_receiver_name}}发送消息"{{n_message}}"
+
+当前状态：
+- 消息: {{n_message}}
+- 接收者类型: {{n_receiver_type}}
+- 接收者名称: {{n_receiver_name}}
+- 用户ID: {{n_user_id!""}}
+- 群会话ID: {{n_conversation_id!""}}
+- 机器人Code: {{n_robot_code!""}}
+
+可用MCP工具：
+{{fn.toolset('mcp_dingtalk')}}
+
+重要决策逻辑：
+1. 如果是发用户消息且 n_user_id 已有值(不为空)，直接使用 batch_send_robot_msg_to_users 发送
+2. 如果是发群消息且 n_conversation_id 已有值，直接使用 send_robot_group_message 发送
+3. 搜索工具执行后，系统会自动更新对应状态变量，下一轮请使用更新后的值
+4. 发送成功后必须设置 finish=true 结束任务
+
+任务流程：
+- 发用户消息：userId已有 → batch_send_robot_msg_to_users；userId为空 → search_user_by_key_word（搜索后系统自动更新userId，下一轮直接发送）
+- 发群消息：conversationId已有 → send_robot_group_message（isAtAll=true，markdown为"{{n_message}}"）；conversationId为空 → search_groups_by_keyword（搜索关键词用 {{n_receiver_name}} 去掉末尾的"群"字，如"中电Test群"则搜索"中电Test"，搜索后系统自动更新conversationId，下一轮直接发送）
+
+注意：搜索群时，关键词要去掉末尾的"群"字！如"测试群"→"测试"、"中电Test群"→"中电Test"
+
+输出JSON：
+```json
+{"action":"工具名","parameters":{},"finish":true或false}
+```
+''')
+
+// ReAct循环
+foreach('n_steps', 'n_finish != "true" && n_steps.index < n_max_iterations', {
+
+	// 思考下一步
+	tpl_react, psr_json, vrf_flag?value='fn.hasValue(sys_last_result,"action") || fn.hasValue(sys_last_result,"code")'
+
+	// 获取动作 - 优先action，否则用code
+	assign('n_action', '{{tpl_react.action!tpl_react.code!""}}')
+	assign('n_params', '{{fn.str(tpl_react.parameters)}}')
+	assign('n_finish', '{{tpl_react.finish!"false"}}')
+
+	// 执行MCP工具
+	when('{{n_action != "finish" && n_action != "" && n_action != null && n_finish != "true"}}', {
+		n_result, act_plan.run?toolType=MCP&code={{n_action}}&parameters={{n_params}}
+		
+		// 更新状态 - search_user_by_key_word 返回 userId 数组
+		when('{{n_action == "search_user_by_key_word"}}', {
+			assign('n_user_id', '{{(n_result["userId"]![])[0]!""}}')
+		})
+		
+		// 更新状态 - search_groups_by_keyword 返回 {"result": {"value": [{"openConversationId": "...", "title": "..."}]}}
+		when('{{n_action == "search_groups_by_keyword"}}', {
+			assign('n_conversation_id', '{{(n_result["result"]["value"]![])[0]["openConversationId"]!""}}')
+		})
+		
+		when('{{n_action == "search_my_robots"}}', {
+			assign('n_robot_code', '{{(n_result["robotCode"]![])[0]!""}}')
+		})
+		
+		// 发送消息成功，设置finish=true
+		when('{{n_action == "send_robot_group_message" || n_action == "batch_send_robot_msg_to_users"}}', {
+			assign('n_send_result', '{{fn.str(n_result)}}')
+			assign('n_finish', 'true')
+		})
+	})
+})
+
+// ==================== 第四部分：输出结果 ====================
+assign('n_result', '消息"{{n_message}}"已发送给{{n_receiver_name}}。结果: {{n_send_result}}')

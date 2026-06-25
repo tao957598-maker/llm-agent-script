@@ -1,0 +1,452 @@
+/*
+{
+	"title":"Testing Workflow Agent",
+	"description":"chatdoc Testing Workflow Agent",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"Testing Requirements",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"Knowledge Space File ID",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"uiEntrance":"components.AutoTestConfirmCard",
+	"tag":"auto_test_web",
+	"displayOrder":0,
+	"version":1
+}
+*/
+// Main agent logic starts here
+log('Starting testing workflow agent with requirements: {{userInput}}')
+assign('n_drive_data', '[]')
+assign('n_userInput', '{{fn.map(userInput)}}')
+n_userInput,act_func?script='''
+	import com.llm.agent.common.util.DateUtil
+	def n_map = n_userInput
+	if(!n_map.containsKey("version")){
+		n_map.put("version", "V1.0");
+	}
+	if(null != kbSpaceFileId){
+		n_map.put("kbSpaceFileId", kbSpaceFileId);
+	}
+	if(!n_map.containsKey("system_name")){
+		n_map.put("application","FAAP");
+	}
+	if(n_map.containsKey("system_name")){
+		n_map.put("application",n_map.get("system_name"));
+	}
+
+	if(!n_map.containsKey("test_no")){
+		String nowStr = DateUtil.getNowStr(DateUtil.Y_M_D_H_M_S);
+		n_map.put("test_no", nowStr);
+	}
+	return n_map;
+'''
+
+// 测试范围
+n_test_scope,act_func?script='''
+	if(n_userInput.test_scope.contains("FULL_TEST")){
+		return '1';
+	}
+
+	if(n_userInput.test_scope.contains("CORE_PATH_TEST") && n_userInput.test_scope.contains("SMOKE_TEST")){
+		return '1';
+	}
+	return n_userInput.test_scope[0];
+'''
+
+// 查询出测试环境
+n_test_case_biz,act_kb.selectBy?sql='select * from kb_testcase_biz where name = ?'&parameters='{{n_userInput.application}}'
+log("----------n_test_case_biz-->>{{n_test_case_biz}}")
+when("fn.hasValue(n_test_case_biz)",{
+	assign('n_envinfo', '{{n_test_case_biz[0].envinfo}}')
+},{
+	n_test_case_biz,act_kb.selectBy?sql='select * from kb_testcase_biz where name = ?'&parameters='api_base_url'
+	assign('n_envinfo', '{{n_test_case_biz[0].envinfo}}')
+})
+
+when("!fn.hasValue(n_envinfo)",{
+	assign('n_envinfo', 'http://172.18.2.14:5171')
+})
+
+// 手动选择数据
+agt_select_data
+
+// 调用深度思考
+n_plan_tasks,agt_auto_test_deep_thinking?userInput='{{userInput}}'
+
+// Step 2: Execute the workflow tasks
+agt_internal_loop_plan_tasks_details
+
+// Step 3: show test report
+when("fn.hasValue(n_test_plan_id)",{
+	agt_auto_test_execution_report_detail?n_userInput='{{n_userInput}}'&n_scenario_success_size='{{n_scenario_success_size}}'&n_scenario_fail_size='{{n_scenario_fail_size}}'&n_test_data_scenario_data='{{n_drive_data}}'&n_report_path='{{n_report_path}}'&n_failure_analysis='{{n_failure_analysis}}'
+})
+
+agent('agt_internal_loop_plan_tasks_details', {
+	// 进入任务执行阶段，共 {{n_plan_tasks.size}} 步
+	foreach('n_plan_task', 'n_plan_tasks.items', {
+		
+		// 当前步骤：{{n_plan_task.index + 1}} / {{n_plan_tasks.size}}
+		assign('current_task', '{{n_plan_task.item.task}}')
+		assign('current_plan_step', '{{n_plan_task.item.step}}')
+		log('Executing step {{current_plan_step}}: {{current_task}}')
+		
+		// Route to appropriate agent based on task type
+		when('current_task == "agt_internal_gen_plan_tasks"', {
+			log("execute->agt_internal_gen_plan_tasks")
+			agt_internal_gen_plan_tasks
+			log("end->agt_internal_gen_plan_tasks")
+		})
+		when('current_task == "agt_internal_gen_test_case"', {
+			log("execute->agt_internal_gen_test_case")
+			agt_internal_gen_test_case
+			log("end->agt_internal_gen_test_case")
+		})
+		when('current_task == "agt_internal_gen_test_data"', {
+			log("execute->agt_internal_gen_test_data")
+			agt_internal_gen_test_data
+			log("end->agt_internal_gen_test_data")
+		})
+		when('current_task == "agt_internal_gen_plan_and_run"', {
+			log("execute->agt_internal_gen_plan_and_run")
+			agt_internal_gen_plan_and_run
+			log("end->agt_internal_gen_plan_and_run")
+		})
+		when('current_task == "agt_internal_gen_test_report"', {
+			log("execute->agt_internal_gen_test_report")
+			agt_internal_gen_test_report
+			log("end->agt_internal_gen_test_report")
+		})
+	})
+})
+
+// 生成测试规划
+agent('agt_internal_gen_plan_tasks', {
+	assign('n_plan_summary','已完成需求解析与测试任务拆解:{{n_plan_tasks.size}}个阶段 ');
+	//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 测试规划
+	act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+	assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
+    log('Step {{current_plan_step}} completed with result: {{fn.get("step_result_" + current_plan_step)}}')
+})
+
+// 生成测试case
+agent('agt_internal_gen_test_case', {
+	assign('n_plan_summary','已自动生成：0条测试用例');
+	//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test case
+	act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+	when("n_userInput.case_execution_method == 'AUTO_GENERATE_FULL_DATA'",{
+		// 1.查询当前文件是否已经生成case
+		n_gen_case,act_kb.selectBy?sql='select * from kb_api_testcase where document_Id = ? and application = ?'&parameters='{{kbSpaceFileId}},{{n_userInput.application}}'
+		when("!fn.hasValue(n_gen_case)", {
+			agt_test_api_parse.test_api?kbSpaceFileId={{kbSpaceFileId}}&application={{n_userInput.application}}&test_no={{n_userInput.test_no}}
+			n_gen_case,act_kb.selectBy?sql='select * from kb_api_testcase where document_Id = ? and application = ?'&parameters='{{kbSpaceFileId}},{{n_userInput.application}}'
+		})
+
+		assign('n_select_case_data_size','{{n_gen_case?size}}');
+		assign('n_test_steps_userInput', '{{n_userInput}}');
+		assign('n_plan_summary','已自动生成：{{n_select_case_data_size}}条测试用例');
+		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 生成 Test case
+		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+	})
+	assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
+    log('Step {{current_plan_step}} completed with result: {{fn.get("step_result_" + current_plan_step)}}')	
+})
+
+// 生成测试数据
+agent('agt_internal_gen_test_data', {
+	when("n_userInput.data_execution_method == 'MANUAL_SELECTION'",{
+		// 1.手动选择test_case_data数据
+		assign('n_plan_summary','已选择：{{n_drive_data?size}} 条测试数据');
+		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test Data
+		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+	},{
+		when('n_userInput.data_execution_method == "AUTO_GENERATE_FULL_DATA"', {
+			assign('n_plan_summary','已自动生成：0 条测试数据');
+			//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test Data
+			act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+
+			// 1.查询未生成测试数据的case数据
+			n_not_gen_case_data,act_kb.selectBy?sql='''
+					select * from kb_api_testcase where document_Id = ? and application = ? and test_no not in (select test_no from kb_api_test_data where document_Id = ? and application = ?)
+				'''&parameters='{{kbSpaceFileId}},{{n_userInput.application}},{{kbSpaceFileId}},{{n_userInput.application}}'
+			when("!fn.hasValue(n_not_gen_case_data)", {
+				// 1.1.已生成测试脚本
+				log("Test script has been generated")
+				n_drive_data,act_kb.selectBy?sql='''
+						select * from kb_api_test_data where document_Id = ? and application = ?
+					'''&parameters='{{kbSpaceFileId}},{{n_userInput.application}}'
+				assign('n_plan_summary','已自动生成：{{n_drive_data?size}}条测试数据');
+				//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test Data
+				act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+			},{
+				// 1.2.1.将未生成的case，生成对应的Data数据
+				when("fn.hasValue(n_not_gen_case_data)", {
+					// 1.2.2.生成测试数据
+					// 1.2.2.1.通过已经生成的case生成测试数据
+					agt_test_api_to_kb_single_task.test_api?kbList={{n_not_gen_case_data}}&application='{{n_userInput.application}}'&argMapping='[]'&version='{{n_userInput.version}}'
+
+					// 1.2.2.2.统计生成的测试数据（即时推送）
+					when("fn.hasValue(n_test_scope) && n_test_scope == '1'", {
+						n_drive_data,act_kb.selectBy?sql='''
+							select * from kb_api_test_data where document_Id = ? and application = ?
+						'''&parameters='{{kbSpaceFileId}},{{n_userInput.application}}'
+					},{
+						n_drive_data,act_kb.selectBy?sql='''
+							select * from kb_api_test_data where document_Id = ? and application = ? and tag like ?
+						'''&parameters='{{kbSpaceFileId}},{{n_userInput.application}}, "%{{n_test_scope}}%"'
+					})
+					
+					assign('n_plan_summary','已自动生成：{{n_drive_data?size}}条测试数据');
+					//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test Data
+					act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+				})
+			})
+		},{
+			assign('n_plan_summary','未选择测试数据');
+			//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test Data
+			act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+		})
+	})
+	assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
+    log('Step {{current_plan_step}} completed with result: {{fn.get("step_result_" + current_plan_step)}}')
+})
+
+// 创建test_plan，并执行plan
+agent('agt_internal_gen_plan_and_run',{
+	// 1.调用test plan的创建并执行接口
+	when("fn.hasValue(n_drive_data)", {
+		assign('n_api_case_data', '[]')
+		assign('n_plan_summary','执行完成:通过 0/失败 0');
+		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
+		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+		foreach('n_test_data_scenario', 'n_drive_data', {
+			n_api_case_data,act_func?script='''
+				def caseData = new ArrayList();
+				caseData.addAll(n_api_case_data);
+				def caseMap = new HashMap();
+				caseMap.put("application", n_test_data_scenario.item.application);
+				caseMap.put("caseName", n_test_data_scenario.item.description);
+				caseMap.put("expectedResult", "");
+				caseMap.put("id", n_test_data_scenario.item.id);
+				caseMap.put("kbData", null);
+				caseMap.put("moduleName", n_test_data_scenario.item.method);
+				caseMap.put("platform", n_test_data_scenario.item.application);
+				caseMap.put("steps", n_test_data_scenario.item.name);
+				caseMap.put("testData", "");
+				caseMap.put("testNo", n_test_data_scenario.item.test_no);
+				caseMap.put("version", n_test_data_scenario.item.version);
+				caseData.add(caseMap);
+				return caseData;
+			'''
+		})
+
+		n_api_params,act_func?script='''					
+							def n_tmp_map = new HashMap()
+							n_tmp_map.put("enable", true);
+							n_tmp_map.put("name", n_userInput.test_name);
+							n_tmp_map.put("testType", "2");
+							n_tmp_map.put("testEnv", n_envinfo);
+							n_tmp_map.put("testMode", "3");
+							n_tmp_map.put("description", "Automated Test Plan from chatdoc");
+							n_tmp_map.put("cases", n_api_case_data);
+
+							def executionMode = 1;
+							if(n_userInput.execution_method.equals("PARALLEL_EXECUTION")){
+								executionMode = 2;
+							}
+
+							def failureStrategy= 1;
+							if(n_userInput.failure_strategy.equals("IGNORE_FAILURE_CONTINUE")){
+								failureStrategy = 2;
+							}
+
+							def retryPolicy = 0;
+							if(n_userInput.retry_strategy.equals("RETRY_ONCE")){
+								retryPolicy = 1;
+							} else if(n_userInput.retry_strategy.equals("RETRY_TWICE")){
+								retryPolicy = 2;
+							}
+
+							def n_executionStrategy = new HashMap();
+							n_executionStrategy.put("executionMode", executionMode);
+							n_executionStrategy.put("failureStrategy", failureStrategy);
+							n_executionStrategy.put("retryPolicy", retryPolicy);
+
+							n_tmp_map.put("executionStrategy", n_executionStrategy);
+							n_tmp_map.put("dataSource", 2);
+							n_tmp_map.put("reportType", n_userInput.report_granularity);
+							return n_tmp_map;
+						'''
+		// 2.创建并执行plan
+		n_api_result_data,act_api.doExecuteDynamic?name="fats_create_plan_and_run"&dynamicParamData='{{n_api_params}}'
+		log("aaaaaaaaaaaaaaaaaa------>>>>>>{{n_api_result_data}}")
+		when("fn.hasValue(n_api_result_data) && n_api_result_data.code == 200", {
+			// 3.更新执行情况
+			assign('n_scenario_flag', 'true')
+			assign('n_test_plan_id', '{{n_api_result_data.data.id}}')
+			loop('n_scenario_index', 'n_scenario_flag', {
+				// 3.1.获取当前plan执行情况
+				n_test_data_scenario_result,act_kb.selectBy?sql='''
+					SELECT
+						SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) AS success,
+						SUM(CASE WHEN status = 3 THEN 1 ELSE 0 END) AS fail
+					FROM kb_test_plan_case
+					WHERE test_plan_id = ?
+				'''&parameters='{{n_api_result_data.data.id}}'
+				// 3.2.获取已经出结果的plan数量
+				when("fn.hasValue(n_test_data_scenario_result) && (n_test_data_scenario_result[0].success + n_test_data_scenario_result[0].fail) == n_drive_data?size", {
+					assign('n_scenario_flag', 'false')
+				})
+				assign('n_scenario_success_size', '{{n_test_data_scenario_result[0].success}}')
+				assign('n_scenario_fail_size', '{{n_test_data_scenario_result[0].fail}}')
+				
+				on_failure({
+					act_flow.fail?result='{{sys_last_result}}'
+				})
+				when("n_scenario_index.index == 1000",{
+					// 将planId设置为空，避免再次生成报表
+					assign('n_test_plan_id', '')
+					assign('n_scenario_flag', 'false')
+					assign('n_plan_summary','执行失败:测试plan执行失败');
+					//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
+					act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+				},{
+					assign('n_plan_summary','执行完成:通过 {{n_scenario_success_size}}/失败 {{n_scenario_fail_size}}');
+					//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
+					act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+					act_flow.wait?second=5
+				})
+			})
+			//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
+			act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+			assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
+		},{
+			assign('n_plan_summary','执行plan失败');
+			//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
+			act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+			act_flow.fail?result='{{n_api_result_data.message}}'
+		})
+	},{
+		assign('n_plan_summary','执行完成:创建Test Plan失败');
+		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
+		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+	})
+	assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
+})
+
+// 生成报表
+agent('agt_internal_gen_test_report', {
+	when("!fn.hasValue(n_test_plan_id)",{
+		assign('n_plan_summary','未生成执行计划,无法生成报表');
+		assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
+		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 测试结果与报表生成
+		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+	},{
+		assign('n_plan_summary','正在生成报表...');
+		assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
+		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 测试结果与报表生成
+		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+		// 获取报表所在的位置
+		assign('n_report_flag', 'true')
+		loop('n_report_index', 'n_report_flag', {
+			n_test_plan_report_data,act_kb.selectBy?sql='''
+					select store_uri from kb_spaces_folder_knowledge where id in (select report_id from kb_test_plan_report where plan_id = ?)
+				'''&parameters='{{n_test_plan_id}}'
+			when("fn.hasValue(n_test_plan_report_data)",{
+				assign('n_report_flag', 'false')
+				assign('n_report_path', '{{n_test_plan_report_data[0].store_uri}}')
+
+				n_test_plan_report_detail,act_kb.selectBy?sql='''
+					select * from kb_test_plan_report where plan_id = ?
+				'''&parameters='{{n_test_plan_id}}'
+
+				assign('n_failure_analysis', '{{n_test_plan_report_detail[0].report_params}}')
+				assign('step_result_{{current_plan_step}}', '已生成报表')
+
+				assign('n_final_report', '''
+					Testing Workflow Execution Report
+					=================================
+					Requirements: {{userInput}}
+
+					Execution Results:
+					- Step 1 (Generate Test Task): {{step_result_1}}
+					- Step 2 (Generate Test Cases): {{step_result_2}}
+					- Step 3 (Generate test data for the test cases): {{step_result_3}}
+					- Step 4 (Generate test drive data): {{step_result_4}}
+					- Step 5 (Generate execution task and execute): {{step_result_5}}
+					- Step 6 (Generate test execution report): {{step_result_6}}
+
+					Workflow completed successfully!
+				''')
+			})
+
+			when("n_report_index.index == 30",{
+				assign('step_result_{{current_plan_step}}', '生成报表失败')
+				assign('n_report_flag', 'false')
+				assign('n_final_report','执行失败:生成报表失败');
+			},{
+				act_flow.wait?second=5
+			})
+		})
+
+		assign('n_plan_summary','{{n_final_report}}');
+		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 测试结果与报表生成
+		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+	})
+})
+
+// 手动选择数据
+agent('agt_select_data', {
+	when("n_userInput.data_execution_method == 'MANUAL_SELECTION'",{
+		n_select_case_data_params,act_func?script='''
+			def n_tmp_case_params = new HashMap();
+			if(null != kbSpaceFileId && !"".equals(kbSpaceFileId)){
+				data_map.put("documentId", kbSpaceFileId)
+			}
+
+			if(null != n_userInput.application && !"".equals(n_userInput.application)){
+				n_tmp_case_params.put("platform", n_userInput.application);
+			}
+
+			if(null != n_test_scope && !"".equals(n_test_scope) && !"1".equals(n_test_scope)){
+				n_tmp_case_params.put("tag", n_test_scope);
+			}
+			return n_tmp_case_params;
+		'''
+		//# 请选择API测试数据
+		n_test_data_scenario_data, act_flow.page?pageCode='component.select_api_data'&isNative=true&params={{n_select_case_data_params}}
+		when("fn.hasValue(n_test_data_scenario_data)", {
+			n_scenario_data_sql,act_func?script='''
+				def formModels = n_test_data_scenario_data.formData.formModel;
+				def caseItems = new ArrayList();
+				for(int a = 0; a < formModels.size(); a++){
+					def formModel = formModels[a];
+					def modelName = formModel.name;
+					if("selectedRows".equals(modelName)){
+						def dataMap = formModel.value;
+						List<Long> idList = new ArrayList();
+						for(j = 0; j < dataMap.size(); j++){
+							idList.add(dataMap[j].id);
+						}
+
+						String ids = String.join(",", idList);
+						String sql = "select * from kb_api_test_data where id in (" + ids + ");";
+						return sql;
+					}
+				}
+				return null;
+			'''
+		})
+		n_drive_data,act_kb.selectBy?sql={{n_scenario_data_sql}}
+	})
+})

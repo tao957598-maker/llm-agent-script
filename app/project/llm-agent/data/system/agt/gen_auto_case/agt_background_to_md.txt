@@ -1,0 +1,52 @@
+/*
+{
+  "title": "Background列表数据转Markdown格式",
+  "description": "使用GPT将Background列表数据转化为Markdown格式",
+  "parameter": [
+    {
+      "name": "background_list",
+      "label": "Background列表数据"
+    }
+  ],
+  "llm_type": "deepseek-chat",
+  "life": "100",
+  "modified_by": "",
+  "modified_time": "",
+  "version": "1"
+}
+*/
+n_dbg_bg_md_in,act_func?script='''
+try {
+  def bl = background_list
+  println("[agt_background_to_md] background_list_size=" + (bl instanceof List ? bl.size() : (bl == null ? "null" : bl.getClass().getSimpleName())))
+} catch (Throwable t) { println("[agt_background_to_md] param_error=" + t.message) }
+return ""
+'''
+// 调用GPT进行转换
+n_md_output, tpl_background_to_md
+
+// 保存转换结果
+assign('markdown_output', '{{n_md_output.data}}')
+
+
+// 定义GPT模板
+define('tpl_background_to_md', '''
+# 要求
+**任务目标**：
+1.请将内容信息提取成总结性的Markdown内容,
+2.Markdown内容没有一级标题
+3.Markdown只有一个2级标题,标题定义: 根据`内容信息`和requirement_type提取
+4.Markdown内容从3级标题开始
+5.使用json格式返回,data字段对应Markdown文本内容:
+```json
+{"data":"提取的Markdown文本内容"
+}
+```
+### ✅ 拆解原则
+1. **使用连字符“-”连接上下文与具体页面**，体现模块所在路径或导航关系，保留模块层级语义。
+2. 标记来源哪些页码例如: Pagexx,Pagexxx
+3. 语言风格: 遵从文档原始术语（如标题中是英文的）保持一致更好
+# 内容信息
+{{background_list}}
+''')
+

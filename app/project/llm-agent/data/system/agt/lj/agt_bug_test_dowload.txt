@@ -1,0 +1,15 @@
+/*
+{
+	"title":"agt_bug_test_dowload",
+	"description":"下载测试 地址404-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_result_data",
+	"version":1
+}
+*/
+
+assign('test_no','agt_test_steps0826')
+//# Generate test report
+n_report, act_func.word?template='test report.docx'&output='selenium/result/{{test_no}}/report_{{test_no}}.docx'

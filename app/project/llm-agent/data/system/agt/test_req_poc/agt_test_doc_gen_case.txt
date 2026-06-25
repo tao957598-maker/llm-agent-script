@@ -1,0 +1,196 @@
+/*
+{
+	"title":"Gen testcase by KB",
+	"description":"Read requirement document to generate test cases",
+	"parameter":[
+		{
+			"name":"input_data",
+			"label":"json"
+		},
+		{
+			"name":"documentId",
+			"label":"documentId"
+		}
+	],
+	"llmType":"alias.highquality",
+	"resultPlan":"final_test_case_result",
+	"life":10000,
+	"version":1
+}
+*/
+assign('test_case_input_data', '{{input_data}}')
+when('fn.hasValue(input_data)', {
+  n_pages,agt_get_page_data?page={{input_data.submodule_source}}&documentId="{{documentId}}"
+  // 查询kb_okp_page_data表，按page字段升序排序，筛选system_name='OKP'且page等于提取的数字的数据
+  n_pages_data, act_kb.selectBy?sql='''
+    select 
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS content
+    from kbs_doc_page_parse
+    where documentId="{{documentId}}" and page in {{n_pages.pages}} order by page asc'''
+
+  tpl_gen_test_case
+  // 获取test case
+  assign('processed_data', '{{tpl_gen_test_case.data}}')
+  // 将结果存入test_case_input_data
+  act_func?script="test_case_input_data.put('data', processed_data)"
+ })
+// final_test_case_result
+assign("final_test_case_result",'{{test_case_input_data}}')
+
+ 
+
+// 定义 LLM 模板
+define('tpl_gen_test_case', '''
+Answer only if you are confident
+
+# 需求文档的内容
+<requirement>
+{{n_pages_data}}
+</requirement>
+## 需求文档的页码
+{{input_data.submodule_source}}
+
+# 已拆分功能模块
+{{input_data.submodule_name}}
+
+## 需要生成详细测试点的功能模块
+design_element: {{input_data.sub_category}}
+
+
+
+## 测试用例生成规则和要求
+	###测试策略
+      "TestCoverage": "Ensure the test cases cover all functional requirements, boundary conditions, edge cases, and error scenarios. Use Equivalence Partitioning (EP), Boundary Value Analysis (BVA), and Cause-Effect Graphing methods where applicable.",
+      "TestObjectives": "Each test case should verify a specific behavior or feature as described in the requirements. Ensure that you are testing both positive and negative scenarios to validate system functionality.",
+      "RiskBasedTesting": "Focus on high-risk areas such as business-critical workflows, third-party integrations, and security-sensitive functionalities.",
+      "AutomationFeasibility": "Identify test cases that can be automated for regression testing, considering tools like Selenium, JUnit, or Postman for API testing."
+        ###测试设计技术
+      "EquivalencePartitioning": "Identify input classes and generate test cases based on valid, invalid, and boundary values. Ensure each class is represented in your test cases.",
+      "BoundaryValueAnalysis": "Focus on boundary values for input fields (e.g., minimum, maximum, just inside, just outside the valid range). Generate test cases for edge cases to ensure system stability.",
+      "CauseEffectGraphing": "For complex requirements, use cause-effect graphing to identify combinations of conditions that lead to different system behaviors. Ensure to cover all paths.",
+      "DecisionTableTesting": "Use decision tables for scenarios where multiple conditions and actions must be considered to generate comprehensive test cases.",
+      "StateTransitionTesting": "Design test cases for functionalities that depend on system states, ensuring transitions between valid states are covered, and invalid transitions are handled."
+        ###测试用例结构
+      "TestCaseTitle": "A clear, concise title for the test case based on the functionality being tested.",
+      "Preconditions": "List any system setup or configurations required before running the test case (e.g., user logged in, specific data available).",
+      "TestSteps": "Detail each action required to execute the test case, ensuring each step is simple and unambiguous. Avoid combining multiple actions in one step.",
+      "ExpectedResults": "Define the expected behavior or outcome after performing the steps. Ensure the system responds correctly based on input or user actions.",
+      "Postconditions": "Outline the system state after test execution (e.g., user is logged out, data is saved).",
+      "TestData": "Specify the exact data to be used for the test, including any valid/invalid inputs, edge cases, and combinations to test.",
+      "Dependencies": "List any external systems, APIs, or integrations required for the test to execute successfully."
+      	###测试用例设计最佳实践
+      "Clarity": "Test cases should be easy to read and understand. Avoid complex jargon or unnecessary details.",
+      "Reusability": "Design test cases so they can be reused for different scenarios or similar functionalities to minimize duplication.",
+      "Traceability": "Ensure each test case maps directly to a specific requirement or business rule for traceability. Utilize requirement IDs where applicable.",
+      "Maintainability": "Test cases should be written in a way that they can be easily maintained and updated when requirements change or defects are discovered.",
+      "Consistency": "Use consistent terminology and format across all test cases to ensure clarity and uniformity."
+      	###测试数据考虑点
+      "ValidData": "Generate test data based on the business logic and functional requirements. Ensure data reflects realistic scenarios.",
+      "InvalidData": "Create test cases with invalid data inputs to ensure the system handles them gracefully (e.g., invalid characters, out-of-range values).",
+      "EdgeCases": "Design test cases that focus on the boundaries of input fields (e.g., maximum and minimum values, empty inputs, or null values).",
+      "LargeDataSets": "For performance testing, design test cases that simulate large datasets or transactions to verify system scalability."
+	
+
+	## 任务流程:
+	1. 分析提供的requirement内容，确定测试范围和重点。
+	2. 根据测试范围和重点，上述提到的测试策略，测试设计技术，测试用例结构，最佳实践和测试数据考虑点，为需要生成测试用例的功能点，生成符合要求的测试用例。
+	3. 如果测试点很多,需要划分为同一组,目的是同组测试点流程可以连通,减少相同的前提操作.同组流程可以放在一个list中
+	4. 若页面输入输出要素同时存在一个流程中,需要划分为同一组
+	5. 输出格式： markdown 文本,以json 格式列表的形式输出详细测试点的名称,例如```json{"data":[{其它测试点1},{其它测试点2}]}```
+  6. 输出语言格式保持和需求文档的内容一致,输出内容为英文
+
+	- Examples:
+    ```json
+    {"data":[{
+    "title": "测试用例标题，描述测试场景，必填",
+    "application": "被测系统名称",
+    "steps": "测试步骤描述，按顺序列出操作",
+    "test_no": "测试用例编号，唯一标识符,`-`分隔",
+    "expected_result": "预期结果描述，明确验证点",
+    "source_value": "需求文档的页码",
+    "test_type": "正向/反向测试类型标识: 正向1,反向-1"
+    }]}
+    ```
+
+''')
+
+
+
+
+
+// 定义 LLM 模板
+define('tpl_gen_test_case_one', '''
+Answer only if you are confident
+
+# 需求文档的内容
+<requirement>
+{{n_pages_data}}
+</requirement>
+## 需求文档的页码
+{{source_value}}
+
+# 已拆分功能模块
+{{submodule_name}}
+
+## 需要生成详细测试点的功能模块
+design_element: {{test_content_1}}
+
+
+## 测试用例生成规则和要求
+	###测试策略
+      "TestCoverage": "Ensure the test cases cover all functional requirements, boundary conditions, edge cases, and error scenarios. Use Equivalence Partitioning (EP), Boundary Value Analysis (BVA), and Cause-Effect Graphing methods where applicable.",
+      "TestObjectives": "Each test case should verify a specific behavior or feature as described in the requirements. Ensure that you are testing both positive and negative scenarios to validate system functionality.",
+      "RiskBasedTesting": "Focus on high-risk areas such as business-critical workflows, third-party integrations, and security-sensitive functionalities.",
+      "AutomationFeasibility": "Identify test cases that can be automated for regression testing, considering tools like Selenium, JUnit, or Postman for API testing."
+        ###测试设计技术
+      "EquivalencePartitioning": "Identify input classes and generate test cases based on valid, invalid, and boundary values. Ensure each class is represented in your test cases.",
+      "BoundaryValueAnalysis": "Focus on boundary values for input fields (e.g., minimum, maximum, just inside, just outside the valid range). Generate test cases for edge cases to ensure system stability.",
+      "CauseEffectGraphing": "For complex requirements, use cause-effect graphing to identify combinations of conditions that lead to different system behaviors. Ensure to cover all paths.",
+      "DecisionTableTesting": "Use decision tables for scenarios where multiple conditions and actions must be considered to generate comprehensive test cases.",
+      "StateTransitionTesting": "Design test cases for functionalities that depend on system states, ensuring transitions between valid states are covered, and invalid transitions are handled."
+        ###测试用例结构
+      "TestCaseTitle": "A clear, concise title for the test case based on the functionality being tested.",
+      "Preconditions": "List any system setup or configurations required before running the test case (e.g., user logged in, specific data available).",
+      "TestSteps": "Detail each action required to execute the test case, ensuring each step is simple and unambiguous. Avoid combining multiple actions in one step.",
+      "ExpectedResults": "Define the expected behavior or outcome after performing the steps. Ensure the system responds correctly based on input or user actions.",
+      "Postconditions": "Outline the system state after test execution (e.g., user is logged out, data is saved).",
+      "TestData": "Specify the exact data to be used for the test, including any valid/invalid inputs, edge cases, and combinations to test.",
+      "Dependencies": "List any external systems, APIs, or integrations required for the test to execute successfully."
+      	###测试用例设计最佳实践
+      "Clarity": "Test cases should be easy to read and understand. Avoid complex jargon or unnecessary details.",
+      "Reusability": "Design test cases so they can be reused for different scenarios or similar functionalities to minimize duplication.",
+      "Traceability": "Ensure each test case maps directly to a specific requirement or business rule for traceability. Utilize requirement IDs where applicable.",
+      "Maintainability": "Test cases should be written in a way that they can be easily maintained and updated when requirements change or defects are discovered.",
+      "Consistency": "Use consistent terminology and format across all test cases to ensure clarity and uniformity."
+      	###测试数据考虑点
+      "ValidData": "Generate test data based on the business logic and functional requirements. Ensure data reflects realistic scenarios.",
+      "InvalidData": "Create test cases with invalid data inputs to ensure the system handles them gracefully (e.g., invalid characters, out-of-range values).",
+      "EdgeCases": "Design test cases that focus on the boundaries of input fields (e.g., maximum and minimum values, empty inputs, or null values).",
+      "LargeDataSets": "For performance testing, design test cases that simulate large datasets or transactions to verify system scalability."
+	
+
+	## 任务流程:
+	1. 分析提供的requirement内容，确定测试范围和重点。
+	2. 根据测试范围和重点，上述提到的测试策略，测试设计技术，测试用例结构，最佳实践和测试数据考虑点，为需要生成测试用例的功能点，生成符合要求的测试用例。
+	3. 如果测试点很多,需要划分为同一组,目的是同组测试点流程可以连通,减少相同的前提操作.同组流程可以放在一个list中
+	4. 若页面输入输出要素同时存在一个流程中,需要划分为同一组
+	5. 输出格式： markdown 文本,以json 格式列表的形式输出详细测试点的名称,例如```json{"data":[{其它测试点1}]}```
+    6. 只需要生成1个测试测试点
+	- Examples:
+    ```json
+    {"data":[{
+    "title": "测试用例标题，描述测试场景，必填",
+    "application": "被测系统名称",
+    "steps": "测试步骤描述，按顺序列出操作",
+    "test_no": "测试用例编号，唯一标识符",
+    "expected_result": "预期结果描述，明确验证点",
+    "source_value": "需求文档的页码",
+    "test_type": "正向/反向测试类型标识: 正向1,反向-1"
+    }]}
+    ```
+
+''')

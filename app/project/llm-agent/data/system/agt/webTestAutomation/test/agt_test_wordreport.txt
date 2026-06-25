@@ -1,0 +1,98 @@
+/*
+{
+	"title":"Generate test report",
+	"description":"Generate and manage automated test reports",
+	"parameter":"test_no=测试用例编号&current_step=可选的测试步骤&application=可选的应用程序名称&system=可选的系统环境名称&version=可选的版本号",
+	"resultPlan":"n_report",
+	"version":2
+}
+*/
+
+// Check requirement
+when('!fn.hasValue(test_no)', {
+	assign('test_no', 'deposit_and_transfer_funds_find')
+
+	assign('current_step', "10. Check if today's transaction of deposit “2580” to primary Account is successful")
+})
+
+when('!fn.hasValue(run_agent_name)', {
+	assign('run_agent_name', 'agt_test_wordreport')
+})
+
+act_flow.wait?second=3
+// Get execution information
+n_req, act_func?name='ReportData.data()'
+
+
+n_end_time, act_func?script='''
+	def currentTime = new Date()
+	def formattedTime = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(currentTime)
+	return formattedTime
+'''
+// Get DurationSeconds
+n_duration, act_func?script='''
+	def Time1 = "{{n_req[0]['start_time']}}"
+	def Time2 = n_end_time
+
+	def sdf = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+	def diff = sdf.parse(Time2).time - sdf.parse(Time1).time
+
+	// 转换为整数类型
+	def totalSeconds = (diff / 1000) as long
+	def hours = (totalSeconds / 3600) as int
+	def minutes = ((totalSeconds % 3600) / 60) as int
+	def seconds = (totalSeconds % 60) as int
+
+	// 格式化为 HH:mm:ss
+	def result = String.format("%02d:%02d:%02d", hours, minutes, seconds)
+	return result
+'''
+
+assign('RequestId', "{{n_req[0]['request_id']}}", 'TaskName', "{{n_req[0]['task_name']}}", 'StartTime', "{{n_req[0]['start_time']}}", 'EndTime', "{{n_end_time}}", 'DurationSeconds', "{{n_duration}}", 'TestResult', "{{n_req[0]['test_result']}}", 'StatusName', "{{n_req[0]['status_name']}}", 'AgentName', "{{n_req[0]['agent_name']}}", 'AgentTitle', "{{n_req[0]['agent_title']}}", 'parameters', "{{n_req[0]['parameters']}}", 'Steps', '{{parameters.steps}}', 'ExpectedResult', '{{parameters.expected_result}}')
+
+//# Query test result from KB
+n_success, act_kb.select?name=kb_testcase&column=test_result&where={{fn.json('test_no, test_no, application, application, version, version')}}
+
+assign('success', '{{n_success}}')
+
+// Query test step result from KB
+n_images, act_kb.select?name=kb_testcase_step&column='result,step'&where={{fn.json('test_no, test_no, application, application, version, version')}}
+
+// Prepare images list
+act_func?script='''
+	def image_list = []
+	def step_list = []
+	
+	def n_images = fn.list(n_images)
+	for (n_image in n_images) {
+		def image = n_image?.result
+		def step = n_image?.step
+		image_list.add(image)
+		step_list.add(step)
+	}
+
+	fn.put('image_list', image_list)
+	fn.put('step_list', step_list)
+
+	def images = fn.list(fn.filepath(image_list))
+	fn.put('images', images)
+	fn.put('result_list', [])
+
+	def result = []
+    def len = images.size()
+	for (i in 0..<len) {
+		def item = [
+			"images": images[i],
+			"step": step_list[i]
+		]
+		result.add(item)
+	}
+	fn.put('result', result)
+'''
+assign('outputpath', 'appdata/ac_script/selenium/result/{{application}}/{{test_no}}/report_{{test_no}}.docx')
+
+//# Generate test report
+n_report, act_func.word?template='kb/template/test report.docx'&output={{outputpath}}&syncKbs=true
+
+//# Download report
+assign('resultTip', 'Download <a href="/api/agent-instance/download-result-file?fileName={{outputpath}}" target="_blank">report_{{test_no}}.docx</a>')

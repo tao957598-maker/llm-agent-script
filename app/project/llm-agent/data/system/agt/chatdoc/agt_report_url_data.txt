@@ -1,0 +1,74 @@
+/*
+{
+	"title":"Data Report Generation",
+	"description":"Automatically collect and analyze data to generate structured reports",
+	"parameter":[
+		{
+			"name":"document_id",
+			"label":"文档ID",
+			"type":"knowledge_space"
+		},
+	],
+	"resultPlan":"file_name,html_content",
+	"life":1000,
+	"version":2
+}
+*/
+
+n_kb_data,act_kb.selectBy?sql='SELECT * FROM kbs_doc_page_parse WHERE documentId = {{documentId}}'
+
+// fileName
+assign("file_name", "{{n_kb_data[0].fileName}}")
+
+// n_report_name
+n_report_name,act_func?script='''
+  def filename = "{{file_name}}"
+  def name = filename.substring(0, filename.lastIndexOf("."))
+  return name
+'''
+
+// html_content
+assign("html_content", "{{n_kb_data[0].content}}")
+
+//# extract
+n_results_list,tpl_weather_extract,psr_json_python
+
+// parameters
+assign('city', "{{n_results_list.city}}", 'collection_date', "{{n_results_list.collection_date}}", 'data_source', "{{n_results_list.data_source}}", 'temperature_celsius', "{{n_results_list.temperature_celsius}}", 'humidity_percent', "{{n_results_list.humidity_percent}}", 'wind_direction', "{{n_results_list.wind_direction}}", 'wind_power_level', "{{n_results_list.wind_power_level}}", 'weather_condition', "{{n_results_list.weather_condition}}")
+
+//# report
+n_report,act_func.word?template='data_report.docx'&output='appdata/ac_script/selenium/0001_url_data/report_{{n_report_name}}.docx'
+
+define('tpl_weather_extract', '''
+  你是一名数据解析与信息提取专家，现在提供给你一段 HTML 代码，HTML 中包含天气数据。
+
+  任务：
+  1. 从 HTML 中解析并提取以下参数：
+    - city
+    - collection_date
+    - data_source
+    - temperature_celsius
+    - humidity_percent
+    - wind_direction
+    - wind_power_level
+    - weather_condition
+
+  2. 以 JSON 格式输出，字段名用英文，下划线分隔，数据类型保持与原数据一致，不要加入额外说明文字。
+
+  输入：
+  {{html_content}}
+
+  输出示例：
+  {
+    "city": "Shenzhen",
+    "collection_date": "2025-08-13",
+    "data_source": "moji",
+    "temperature_celsius": 28,
+    "humidity_percent": 86,
+    "wind_direction": "西南风",
+    "wind_power_level": "1级",
+    "weather_condition": "小雨"
+  }
+
+  请直接输出 JSON，不要包含解释或多余文字。
+''')

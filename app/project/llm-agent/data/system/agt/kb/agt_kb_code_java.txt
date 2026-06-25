@@ -1,0 +1,48 @@
+/*
+{
+	"title": "保存代码到知识库",
+	"parameter": "name=知识库名称&requirement=要保存的代码",
+	"category": "知识库"
+}
+*/
+
+act_kb.hasKB?name=javaCode
+when('!sys_last_result', {
+	tpl_define_code_kb, act_kb.defineKB
+})
+tpl_code_structure, act_kb.importData?name=javaCode&embedding=comment
+
+define('tpl_define_code_kb', '''
+	你是一名高级的Java开发工程师，需要构建基于milvus的知识库，涉及的字段参考下面的Java知识的JSON定义。请返回定义知识库的JSON格式，。
+
+	Java知识的JSON定义：
+	{
+		package: '包名',
+		classname: '类名',
+		name: '方法名',
+		comment: '注释',
+		parameter: '入参信息',
+		return: '返回参数信息'
+	}
+	
+	定义知识库的JSON格式参考：
+	{{fn.example('TableInfo')}}
+''')
+
+define('tpl_code_structure', '''
+	你是一名高级的Java开发工程师，分析下面运行在Spring框架中的代码，列出他的全部公共方法，以JSON格式返回。 返回格式参考：
+	[
+		{
+			package: '包名',
+			classname: '类名',
+			name: '方法名',
+			comment: '注释',
+			parameter: '入参信息',
+			return: '返回参数信息'
+		},
+		...其他的公共方法
+	]
+
+	待分析的代码：
+	{{requirement}}
+''')

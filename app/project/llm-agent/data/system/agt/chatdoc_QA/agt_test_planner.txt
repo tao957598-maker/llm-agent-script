@@ -1,0 +1,536 @@
+/*
+{
+	"title":"Fin Planner",
+	"description":"分析金融问题并生成可执行计划，支持贷款、逾期、罚息、风险分类等业务场景。根据已知条件分解任务，动态生成查询、计算和直接响应步骤。",
+	"parameter":[
+		{
+			"name":"userQuestion",
+			"label":"用户问题",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceId",
+			"label":"目录ID（支持多个）",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"knowledge_space"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"knowledge_space"
+		}
+	],
+	"tag":"chatdoc_QA",
+	"uiEntrance":"chatdoc_QA",
+	"displayOrder":2,
+	"version":1
+}
+*/
+// 检查是否选择了知识空间
+when('kbSpaceId == null || kbSpaceId.length == 0',{
+  //$ Finally Answer
+  assign('n_answer', "未选择知识空间。")
+}) 
+// 定义工具集
+assign("TOOLS_JSON", '''
+[
+  {
+    "name": "dynamic_code_executor",
+    "type": "dynamic",
+    "description": "在安全沙盒中执行金融计算逻辑，仅使用已注入的 input_data",
+    "parameters_schema": {
+      "type": "object",
+      "properties": {
+        "computation_logic": {
+          "type": "string",
+          "description": "计算逻辑标识或自然语言描述（用于生成代码）"
+        },
+        "input_data": {
+          "type": "object",
+          "description": "结构化输入数据（由前序工具提供）"
+        },
+        "allowed_libraries": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["pandas", "numpy", "math"]
+        },
+        "output_format": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "必须返回的字段名（如 ['boll_upper', 'signal']）"
+        }
+      },
+      "required": ["computation_logic", "input_data", "output_format"]
+    },
+    "output_schema": {
+      "type": "object",
+      "description": "动态生成，但必须包含 output_format 中所有字段"
+    },
+    "execution_handler": "sandbox.executor.dynamic_code_executor",
+    "example_usage": {
+      "computation_logic": "计算30日移动平均并标记价格突破信号",
+      "input_data": "${market_data}",
+      "allowed_libraries": ["pandas", "numpy"],
+      "output_format": ["ma30", "signal"]
+    },
+    "requires_secretflow": true,
+    "security_policy": {
+      "max_execution_time_sec": 10,
+      "memory_limit_mb": 256,
+      "network_access": false,
+      "file_system_access": false
+    }
+  }
+]
+''')
+// 定义生成计划的提示词模板
+define("tpl_gen_plan", '''
+/*{
+  "enableThinking":"false"
+}*/
+你是一个金融智能体规划器。请先分析用户问题的以下两点：
+1. **专业领域**：是否属于贷款、逾期、罚息、风险分类等金融业务范畴；
+2. **已知条件**：识别问题中**所有可识别的数值或状态信息**，并判断哪些子任务具备完整输入。
+
+然后，将问题分解为一系列可执行步骤。每一步必须是以下类型之一：
+- dynamic: 执行安全动态代码（仅限简单算术表达式，如 a * b + c）
+- direct: 不涉及计算且无需外部数据，答案可由语言模型直接生成（如定义、判断、解释）
+
+## 核心规则
+1. **部分可算即算原则**：
+   **即使问题整体缺少某些数据，只要其中任意子任务具备全部必要输入（如金额、天数、利率、状态等），就必须为其生成对应的 dynamic 或 direct 步骤**。
+   禁止因"部分信息缺失"而忽略所有可计算内容。
+
+2. **若问题中已包含某计算所需的全部具体数值（如"金额25600元，逾期45天"），则不得使用数据库查询**。直接使用 dynamic 工具。
+3. **任何自定义计算（无论多简单）必须通过 type: "dynamic" 实现**，并调用工具 "dynamic_code_executor"。
+4. **不得发明字段或工具**：所有字段必须来自以下合法字段集，所有工具必须来自上述工具集。
+5. **direct 步骤要求**：
+   - tool_name 必须为 "direct_response"
+   - params 中必须包含 "response_template"：用自然语言描述如何生成答案
+   - output_var 需指定（如 "final_answer"）
+   - 仅用于无需数据查询、无需数值计算的场景（如概念解释、基于已知状态的判断）
+
+## 合法字段集（filter 或计算中仅可使用以下字段）
+- loan_status → ["status"]
+- monetary_amount → ["amount", "principal"]
+- time_duration → ["days_overdue", "application_date", "time_in_years", "periods", "days"]
+- interest_rate → ["annual_rate"]
+
+## dynamic 步骤要求
+- computation_logic: 用自然语言清晰描述计算目的（如"计算罚息：penalty = amount × 日利率 × days_overdue"）
+- input_vars: 定义输入参数名及预期类型（如 {"amount": "float", "days_overdue": "int"}）
+- input_data:
+   - 若数据已在问题中给出，直接写为字面量对象（如 {"amount": 25600, "days_overdue": 45}）
+   - 若来自前序步骤，用 ${var} 引用（如 ${loans[0]}）
+- output_format: 明确输出字段名数组（如 ["penalty"]）
+- 禁止使用函数定义、循环、条件、import、eval、exec 等
+
+## 输出格式
+- 仅输出一个 JSON 对象，包含 "steps" 数组
+- 每个 step 必须包含：type, tool_name, params, output_var
+- params 中除 input_data 外可引用上下文变量（如 ${var}）
+- 禁止任何解释、注释、Markdown 代码块（如 ```json），仅输出纯 JSON
+
+
+## 示例 1：数据已知，使用 dynamic 计算
+用户问题："计算一笔已知贷款的罚息，金额是25600元，逾期45天，日利率0.05%"
+→ 所有数据已提供，使用 dynamic_code_executor
+输出：
+{
+  "steps": [
+    {
+      "type": "dynamic",
+      "tool_name": "dynamic_code_executor",
+      "params": {
+        "computation_logic": "计算罚息：penalty = amount * 0.0005 * days_overdue",
+        "input_data": {"amount": 25600, "days_overdue": 45},
+        "output_format": ["penalty"]
+      },
+      "output_var": "penalty_result"
+    }
+  ]
+}
+
+## 示例 2：直接回答（无计算、无查询）
+用户问题："什么是逾期贷款？"
+输出：
+{
+  "steps": [
+    {
+      "type": "direct",
+      "tool_name": "direct_response",
+      "params": {
+        "response_template": "用简洁专业的语言解释'逾期贷款'的定义，包括其在金融风控中的意义。"
+      },
+      "output_var": "final_answer"
+    }
+  ]
+}
+
+## 示例 3：部分可算（混合场景）
+用户问题："贷款A金额10000元逾期30天，贷款B信息不全，计算A的罚息（日利率0.05%）并说明B无法计算原因。"
+→ A可算，B不可算，但A必须计算
+输出：
+{
+  "steps": [
+    {
+      "type": "dynamic",
+      "tool_name": "dynamic_code_executor",
+      "params": {
+        "computation_logic": "计算贷款A的罚息：penalty = amount * 0.0005 * days_overdue",
+        "input_data": {"amount": 10000, "days_overdue": 30},
+        "output_format": ["penalty_a"]
+      },
+      "output_var": "penalty_a_result"
+    },
+    {
+      "type": "direct",
+      "tool_name": "direct_response",
+      "params": {
+        "response_template": "贷款A的罚息为${penalty_a_result.penalty_a}元。贷款B因缺少金额或逾期天数等必要信息，无法计算罚息。"
+      },
+      "output_var": "final_answer"
+    }
+  ]
+}
+
+## 可用工具集
+{{TOOLS_JSON}}
+
+## 用户问题
+{{userQuestion}}
+
+## 用户可用的规则
+{{n_milvus_rules}}
+
+## 用户可用的数据
+{{n_mongodb_sampling_data}}
+''')
+// 定义生成代码的模板  "llmType":"alias.speed"
+define("tpl_gen_code", '''
+/*{
+  "enableThinking":"false"
+}*/
+你是一个金融安全代码生成器。请根据任务描述，生成一个 Processor 类，其中包含一个 solve 方法，用于在隐私计算环境中执行。
+
+**关键格式规则（必须严格遵守）：**
+- **生成的 Python 代码中禁止使用任何形式的单引号（'）**。
+- 所有字符串字面量（包括字典的键、字符串值、f-string、错误消息等）**必须使用双引号（"）**。
+- 例如：正确写法是 "key"、"result"、f"value: {x}"；禁止写成 'key'、'result' 等。
+- 禁止输出任何 Markdown 语法（如 python ... ），仅输出原始 Python 代码文本。
+
+**安全与语法约束（必须严格遵守！）**
+1. 必须定义类 Processor，并在其中实现方法 solve(self, inputs)。
+2. 数据来源规则：
+   - 如果 input_data 提供了有效示例（非空、结构清晰），则所有数据必须从 inputs 中读取，禁止硬编码业务数值。
+   - 如果 input_data 为空（如 [], {}, null）或无法推断结构，但任务本身不依赖外部运行时数据（例如问题仅涉及固定数值、常量计算或明确给出的数字），则允许在 solve 方法内部直接定义所需数据（如 inputs = [...] 或局部变量），但仅限完成当前任务所必需的字面量。
+3. 仅允许使用以下语法：
+   - 变量赋值、if/else、for 循环（禁止 while）
+   - 基本运算：+ - * / **, min, max, abs
+   - 数据结构：list, dict, tuple（禁止 set）
+4. 允许在 solve 方法内部使用 import 语句，但仅限以下安全的计算相关标准库模块：
+   - math（如需 sqrt、log、exp 等）
+   - 不得导入其他任何模块（如 os、sys、numpy、pandas、json 等）
+5. import 语句必须出现在 solve 方法体开头，且仅当方法实际使用该模块时才引入。
+6. 禁止以下操作：
+   - exec, eval, open, getattr, setattr, builtins, I/O, lambda, global, while
+   - 禁止在类外定义函数或逻辑（除 if __name__ == "__main__": 外）
+7. solve 方法必须返回一个字典，结构严格符合 output_schema。**字典的所有字符串键和字符串值必须使用双引号**。
+8. 代码必须能在配置了安全白名单的 RestrictedPython 或 asteval 中执行。
+9. 禁止输出任何注释、解释、Markdown、或非代码文本 —— 仅输出完整的可运行代码，格式如下：
+
+class Processor:
+    def solve(self, inputs):
+        ...
+        return ...
+
+if __name__ == "__main__":
+    processor = Processor()
+    result = processor.solve(None)  # 或传入任意值，因内部已自包含数据
+    print(result)
+
+**输入上下文说明**  
+你将获得两部分信息：  
+- input_data：inputs 的一个具体示例值（用于观察字段名和嵌套结构）  
+- input_vars：inputs 的类型描述  
+
+**解析规则：**  
+- 若 input_data 是有效非空结构（如 list/dict 含字段），则 inputs 即为此结构，必须从中读取。  
+- 若 input_data 为空（如 [], {}, None, 或布尔 false）且 input_vars 无效，则：  
+  - 若任务可仅用问题中显式给出的常量完成（如“24和26的平均数”），则在 solve 内部直接使用这些常量；  
+  - 若任务依赖未提供的外部数据（如“当前到期收益率”但无市场数据），则仅基于可确定的部分作答，或若完全无法计算则返回合理默认（如 None）——但不得虚构数据。  
+
+**禁止假设 inputs 包含某个特定键，除非 input_data 明确显示。**
+
+**特别规则：何时输出空字符串**  
+- 如果任务明显依赖外部数据（如客户信息、实时价格、交易记录等），且 input_data 为空/无效，且问题中未提供足够常量完成计算，则输出空字符串。  
+- 如果任务可通过问题中明确写出的数值或规则完成（如“24和26的平均数”），即使 input_data 为空，也必须生成合法代码。
+
+**访问原则**  
+以 input_data 的实际值为准。空列表 [], 空对象 {}, false, null 均视为“无有效输入”。
+
+任务
+{{userQuestion}}
+
+输入上下文说明
+input_vars: {{input_vars}}  
+input_data: {{input_data}}
+
+输出要求
+{{output_schema_description}}
+''')
+define('tpl_generate_answer', '''
+/*{
+  "enableThinking":"false"
+}*/
+你是一个专业的金融智能助手，需基于用户的原始问题与系统执行报告，生成准确、简洁、易懂且完整的自然语言回答。
+
+## 执行报告说明
+执行报告是一个列表，可能包含多个执行步骤。关键字段包括：
+- "computation_logic"：描述计算目的（如“计算24和26的平均数”）；
+- "step_result"：字符串，格式如：
+  "代码执行结果为[stdout:{"result": 25.0}\r\n, success:true, ...]"
+- 有时包含可执行的代码逻辑。
+
+## 回答原则
+- 语言自然、专业，不说“您好”“我们”“为您”等客套话；
+- 必须清晰说明结论依据，并按以下方式呈现：
+  - 若基于代码执行：在回答中**用代码块展示核心计算逻辑**（模型应自动使用标准 Markdown 代码块格式）；
+  - 若基于结构化数据：**用表格列出关键字段与值**；
+  - 若基于推导：用连贯自然语言说明逻辑与假设；
+- 禁止输出原始 JSON、字段名或技术黑话；
+- 回答必须自包含。
+
+## 具体规则
+
+### 1. 基于代码执行
+- 提取计算目的和结果；
+- 展示最相关的 1～3 行核心代码；
+- 回答示例风格：
+  计算24和26的平均数，结果为 25.0。
+  相关计算逻辑如下：
+  [在此处插入标准 Markdown 代码块，包含核心 Python 代码]
+
+### 2. 基于文件或结构化数据
+- 将关键信息整理为两列表格（字段 | 值）；
+- 回答示例风格：
+  客户风险等级记录如下：
+  [在此处插入标准 Markdown 表格]
+
+### 3. 基于大模型推导
+- 用自然段落说明逻辑链；
+- 结尾注明“基于典型市场参数推断”。
+
+### 4. 其他情况
+- 无数据不可推导 → “未找到符合条件的记录”；
+- 执行失败 → 解释原因并建议。
+
+## 示例
+
+### 示例1（代码执行）
+用户问题：计算24和26的平均数  
+执行报告：[{"delegate":{"binding":{"variables":{"step_result":"代码执行结果为[stdout:{\"average_result\": 25.0}\r\n, success:true, exitCode:0, stderr:]","computation_logic":"计算24和26的平均数：average = (24 + 26) / 2","average_result":"class Processor:\n    def solve(self, inputs):\n        average_result = (24 + 26) / 2\n        return {\"average_result\": average_result}\n"}}}}]  
+→ 计算24和26的平均数，结果为 25.0。
+相关计算逻辑如下：
+average_result = (24 + 26) / 2
+
+### 示例2（文件数据）
+用户问题：张三的风险等级是什么？  
+执行报告：[]  
+→ 客户张三的风险等级记录如下：
+| 字段 | 值 |
+|------|----|
+| 客户姓名 | 张三 |
+| 风险等级 | 高风险 |
+
+### 示例3（大模型推导）
+用户问题：MSCI世界指数利率上行100 bp，CAPE回均值vs维持7%总回报需要的CAGR。  
+执行报告：[]  
+→ 利率上行100个基点通常会压低股票估值。参考历史数据，MSCI世界指数的公允市盈率从21.9倍降至约18.4倍。假设股息收益率为2%，投资期限5年，总回报由股息、盈利增长和估值变化共同决定。在此情景下，为维持7%的年化总回报，未来五年每股收益（EPS）的复合增长率需达到约 9.8%。若周期调整市盈率（CAPE）进一步回归至长期均值18.6倍，则所需CAGR将升至 12.1%。基于典型市场参数与历史估值关系推断。
+
+请严格按上述规则生成回答。
+
+## 输入信息
+- 用户问题：{{userQuestion}}
+- 执行记录: {{context}}
+- 文件数据：{{n_mongodb_data}}
+- 错误报告：{{execution_report}}
+''')
+// 收集资料
+// 1.Milvus 查询规则
+n_milvus_rules, agt_test_query_vector_1?userInput={{userQuestion}}&folderIds={{kbSpaceId!}}&knowledgeIds={{kbSpaceFileId!}}
+log('查询向量库的结果 {{n_milvus_rules}}')
+// 2.MongoDB 查询数据
+n_mongodb_data, agt_test_query_mongo_3?userInput={{userQuestion}}&kbSpaceId={{kbSpaceId}}
+log('查询Mongo库的结果 {{n_mongodb_data}}')
+// 3.获得MongoDB采样数据
+assign('n_mongodb_sampling_data',"[]")
+n_mongodb_sampling_data,act_func?script=''' 
+def processDataCompact(n_mongodb_data) {
+    if (!n_mongodb_data) {
+        return []
+    }
+    def dataArray = (n_mongodb_data instanceof List) ? n_mongodb_data : [n_mongodb_data]
+    if (dataArray.isEmpty()) {
+        return []
+    }
+    
+    if (dataArray.size() > 3) {
+        dataArray = dataArray[0..2]
+    }
+    
+    return dataArray
+}
+
+return processDataCompact(n_mongodb_data)
+'''
+log('分解采样数据的结果 {{n_mongodb_sampling_data}}')
+
+//# 生成计划
+n_plan_response,tpl_gen_plan,psr_all
+
+// 计划
+assign('result_planner', '{{n_plan_response.steps}}')
+assign('max_retries', '2')
+assign('execution_report', "{}")
+assign('context', "[]")
+assign('step_no', '0')
+
+// 执行计划
+when('max_retries > 0 && result_planner?size > step_no',{
+  assign('step', "{}")
+  foreach('step_value', 'result_planner', {
+    assign('step', '{{step_value.item}}')
+
+    assign('step_type', '{{step.type}}')
+    assign('step_tool_name', '{{step.tool_name}}')
+
+    when('step_type == "dynamic" && step_tool_name == "dynamic_code_executor"',{
+      n_computation_logic,act_func?script='''
+        def json_data = step
+        def key = 'params'
+        def key_inner = 'computation_logic'
+        return json_data?."$key"?."$key_inner" ?: false
+      '''
+      n_input_vars,act_func?script='''
+        def json_data = step
+        def key = 'params'
+        def key_inner = 'input_vars'
+        return json_data?."$key"?."$key_inner" ?: false
+      '''
+      n_input_data,act_func?script='''
+        def json_data = step
+        def key = 'params'
+        def key_inner = 'input_data'
+        return json_data?."$key"?."$key_inner" ?: '{}'
+      '''
+      assign('input_data', '{{n_input_data}}')
+      assign('input_vars', '{{n_input_vars}}')
+      assign('output_schema_description', '必须返回以下字段: {{step.output_var}}')
+      assign('computation_logic', '{{n_computation_logic}}')
+	    when('!fn.hasValue(input_data)',{
+        assign('input_data', '[]')
+      })
+      when('!fn.hasValue(input_vars)',{
+        assign('input_vars', '[]')
+      })
+      //# 代码生成逻辑 -> {{computation_logic}}
+      n_code_response,tpl_gen_code,psr_all
+      assign('tmp_value', '{{n_code_response}}')
+      // 沙盒参数
+      assign('param_e2b','''
+{
+    "code": '{{n_code_response}}',
+    "image": "python:3.10-slim",
+    "env": null,
+    "cpu": 1,
+    "memory": 100,
+    "timeout": 60
+}
+      ''')
+      //# 安全执行代码
+      n_e2b_response, act_plan.run?toolType=API&code='run_code_api'&parameters='{{fn.str(param_e2b)}}'
+      assign('n_e2b_response', '{{fn.str(n_e2b_response)}}')
+      assign('context_key', '{{step.output_var}}')
+      // 修改状态为已执行
+      n_tmp_step,act_func?script='''
+        def tmp = step
+        tmp['status'] = "done"
+        return tmp
+      '''
+      assign('step', '{{n_tmp_step}}')
+      // 上下文
+      n_tmp_res,act_func?script='''
+        def data_arr = context
+        def data_json = {}
+        data_json['step_no'] = step_no
+        data_json[context_key] = tmp_value
+        data_json['input_data'] = input_data
+        data_json['input_vars'] = input_vars
+        data_json['output_schema_description'] = output_schema_description
+        data_json['computation_logic'] = computation_logic
+        data_json['step_result'] = '代码执行结果为' + n_e2b_response
+        data_arr.add(data_json)
+        return data_arr
+      '''
+      assign('context', '{{n_tmp_res}}')
+    })
+    when('step_type == "direct" && step_tool_name == "direct_response"',{
+      // step.params.response_template 有可能为空
+      n_template,act_func?script='''
+        def json_data = step
+        def key = 'params'
+        def key_inner = 'response_template'
+        return json_data?."$key"?."$key_inner" ?: false
+      '''
+      n_direct_response,act_func?script='''
+        def data_json = {}
+        data_json['response_template'] = n_template
+        data_json['user_question'] = userQuestion
+        data_json['type'] = "direct_response"
+      	return data_json
+      '''
+      // 修改状态为已执行
+      n_tmp_step,act_func?script='''
+        def tmp = step
+        tmp['status'] = "done"
+        return tmp
+      '''
+      assign('step', '{{n_tmp_step}}')
+      // 上下文
+      n_tmp_res,act_func?script='''
+        def data_arr = context
+        def data_json = {}
+        data_json['step_no'] = step_no
+        data_json['solution'] = n_template
+        data_arr.add(data_json)
+        return data_arr
+      '''
+      assign('context', '{{n_tmp_res}}')
+    })
+    n_step_no,act_func?script='''
+        def tmp = step_no
+        tmp = step_no.toInteger() + 1
+        return tmp
+      '''
+    assign('step_no', '{{n_step_no}}')
+  })
+  on_failure({
+    assign('max_retries', '{{max_retries - 1}}')
+    assign('execution_report', "{{step.tool_name}}执行失败")
+  })
+})
+
+//# 执行完毕
+log('')
+
+//$ Finally Answer
+n_final_answer, tpl_generate_answer, psr_all

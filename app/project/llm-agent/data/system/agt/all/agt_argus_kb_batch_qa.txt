@@ -1,0 +1,85 @@
+/*
+{
+	"title":"Argus KB Batch QA Agent",
+	"description":"Loop through 14 predefined KB questions, call agt_test_kb_argus.chatdoc_QA for each query, and append every result into an array",
+	"parameter":[],
+	"tag":"all",
+	"displayOrder":0,
+	"version":13,
+	"life":200
+}
+*/
+// =====================================================
+// Argus KB Batch QA Agent
+// Purpose:
+// 1. Build 14 predefined KB questions
+// 2. Loop through each question
+// 3. Call agt_test_kb_argus.chatdoc_QA
+// 4. Append each response into an array
+// 5. Return final aggregated result
+// =====================================================
+
+assign('n_agent_name','agt_argus_kb_batch_qa')
+assign('n_question_list','[]')
+assign('n_result_list','[]')
+assign('n_combined_result','[]')
+
+log('Start {{n_agent_name}}')
+
+// ---------- Step 1: build predefined question list ----------
+n_question_list,act_func?script='''
+def result = []
+
+result.add([sortOrder:1,  question:'AML CFT systems institutional risk assessment ML TF risk assessment trigger events compliance framework'])
+result.add([sortOrder:2,  question:'natural person customer identification verification KYC individual identity documents HKID passport national ID driving licence iAM Smart onboarding'])
+result.add([sortOrder:3,  question:'legal entity customer identification verification corporate KYC company identification documents incorporation registration business information'])
+result.add([sortOrder:4,  question:'beneficial owner identification UBO ultimate beneficial owner ownership control natural person who controls entity'])
+result.add([sortOrder:5,  question:'ownership and control structure corporate structure shareholding ownership chart intermediate layers control relationship'])
+result.add([sortOrder:6,  question:'trust legal arrangement trustee beneficiary settlor trust structure identification verification trust customer'])
+result.add([sortOrder:7,  question:'person purporting to act on behalf of customer PPTA authorised person account operator representative acting for customer'])
+result.add([sortOrder:8,  question:'connected parties related parties senior management executive authority sanction screening related persons'])
+result.add([sortOrder:9,  question:'reliability of documents data information current documents expired documents electronic documents certification verification reliability'])
+result.add([sortOrder:10, question:'simplified due diligence SDD low risk customer reduced CDD requirements simplified KYC measures'])
+result.add([sortOrder:11, question:'enhanced due diligence EDD high risk customer additional checks source of wealth source of funds risk based approach'])
+result.add([sortOrder:12, question:'politically exposed persons PEP international organisation PEP senior management approval high risk individuals'])
+result.add([sortOrder:13, question:'intermediary reliance third party CDD use of intermediary KYC reliance ongoing monitoring responsibility'])
+result.add([sortOrder:14, question:'correspondent banking non customer relationship SWIFT RMA banking relationship cross border banking'])
+
+return result
+'''
+log('n_question_list12356={{n_question_list}}----{{n_okp_kbs_result}}')
+
+when('fn.hasValue(n_okp_kbs_result)',{
+  assign('return','{{n_okp_kbs_result}}')
+},{
+  // ---------- Step 2: loop questions and call KB QA agent ----------
+  foreach('questionItem','n_question_list',{
+      assign('n_current_question','{{questionItem.item.question}}')
+      assign('n_current_sort_order','{{questionItem.item.sortOrder}}')
+
+      log('Processing question {{n_current_sort_order}}: {{n_current_question}}')
+
+      //##qa result
+      n_qa_result,agt_okp_kb_argus_qa.chatdoc_QA?userInput='{{n_current_question}}'&kbSpaceId="273100032240091136"&kbSpaceFileId="273100032245334016,273100120520753152,273100121353322496,273100121980370944"
+
+      log('n_qa_result_{{n_current_sort_order}}={{n_qa_result}}')
+      when('fn.hasValue(n_qa_result)', {
+        append('n_result_list',"{{n_qa_result}}")
+      },{
+        append('n_result_list',"{}")
+      })
+
+  })
+
+  log('n_final_result={{n_result_list}}')
+  assign('n_okp_kbs_result','{{n_result_list}}')
+log('n_okp_kbs_result==={{n_okp_kbs_result}}')
+
+})
+
+// ---------- Failure Handling ----------
+on_failure({
+    assign('n_result_list','{"totalQuestions":0,"results":[],"status":"fail","message":"batch QA execution failed"}')
+    log('agt_argus_kb_batch_qa execution failed')
+    act_flow.go?plan=end
+})

@@ -1,0 +1,45 @@
+/*
+{
+	"title":"Filter KB Data - Batch",
+	"description":"Filter data from the database based on the customer question and save the results to the draft repository",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+		{
+			"name":"newTableName",
+			"label":"保存结果的新表名（可选）",
+			"type":"input"
+		}
+	],
+	"life":100,
+	"version":1
+}
+*/
+/
+
+// 第一步：接收用户输入
+assign("target_table_name", "{{newTableName}}")
+
+// 第二步：调用自动生成sql的agent 读取已处理数据 act_kb.selectBy?sql='select * from kb_test_data_draft'
+agt_auto_sql1?userInput='{{userInput}}'
+n_kb_data, act_kb.selectBy?sql='{{sys_last_result}}'
+assign("n_result_data", "{{n_kb_data}}")
+
+// 第三步：处理数据（去除或重命名 id 字段）
+n_processed_data, act_func?script='''
+return n_result_data.collect { item ->
+  if (item.containsKey("id")) {
+    item["item_id"] = item.remove("id")
+  }
+  return item
+}
+'''
+
+// 第四步：如果newTableName非空，保存结果
+act_kb.defineAndImportData?tableName='{{target_table_name}}'&data='{{n_processed_data}}'
+
+// 第五步：输出查询结果
+assign("generated_data", "数据已保存到表：{{target_table_name}}")

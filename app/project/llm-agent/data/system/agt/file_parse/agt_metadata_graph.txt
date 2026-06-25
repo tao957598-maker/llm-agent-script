@@ -1,0 +1,82 @@
+/*
+{
+	"title":"Metadata Generation Graph",
+	"description":"Automatically generate metadata information and build relationship graphs from input data",
+	"parameter":[
+		{
+			"name":"document_id",
+			"label":"文档ID",
+			"type":"knowledge_space"
+		}
+	],
+  "uiEntrance":"graph",
+	"resultPlan":"document_id,n_graph_data",
+	"life":1000,
+	"version":2
+}
+*/
+
+// get metadata
+n_meta_data,act_kb.selectBy?sql='SELECT * FROM kb_test_req_metadata WHERE documentId = {{document_id}}'
+
+// generate graph
+n_graph_data,tpl_graph_prompt,psr_json_python
+
+// import graph
+act_kb.importGraph?label='kb_test_req_metadata_graph_content'&data='{{n_graph_data}}'
+
+// prompt
+define('tpl_graph_prompt','''
+  请将我接下来提供的“数组内容”（每个对象代表 PDF 的一页）转换为下述目标 JSON 结构。务必严格遵循以下规则与模板，仅输出最终 JSON，不要额外解释或注释。
+
+  【目标结构模板（固定 + 动态参数）】
+  {
+    "properties": {
+      "name": "{{n_meta_data[0].fileName}}",
+      "documentId": "{{n_meta_data[0].documentId}}",
+      "relationKey": "name",
+      "fileName": "{{n_meta_data[0].fileName}}",
+      "ref_id": <自动生成的 long int 数字ID，例如基于当前时间戳或随机生成，保证唯一>,
+    },
+    "subNode": [
+      // 由输入数组生成的每页数据项
+    ]
+  }
+
+  【字段映射与规则】
+  1) fileName ← 由输入指定（你传什么就填什么）。
+  2) ref_id ← 自动生成 long int：
+    - 建议方式：使用当前 UTC 时间戳（毫秒级）直接转为整数，或使用 15~18 位随机整数。
+  3) properties 节点固定不变，不随 fileName/ref_id 变化。
+  4) subNode 数组生成规则：
+    - name ← 取输入对象的 title 字段值。若缺失或为空，则用 "Untitled Page {page}"。
+    - page ← 取输入对象的 page 字段值，转为字符串。
+    - relationKey ← 固定写入 "name"。
+    示例：
+    {properties:{ "name": "Introduction", "page": "1", "relationKey": "name" }}
+
+  5) subNode 对象按 page 升序排列。
+  6) 忽略输入数组的其他字段，只保留 name/page/relationKey。
+  7) 严格输出合法 JSON，字段顺序：fileName → ref_id → properties → subNode。
+  8) 输出 JSON 必须一次生成完整内容，不允许拆分或附加注释。
+
+  【示例输出】
+  {
+    "properties": {
+      "name": "OKP_PRD.pdf",
+      "documentId": "250297134704427008",
+      "relationKey": "name",
+      "fileName": "OKP_PRD.pdf",
+      "ref_id": 250297134704427008,
+    },
+    "subNode": [
+      {properties:{ "name": "Introduction", "page": "1", "relationKey": "name" }},
+      {properties:{ "name": "CHANGE HISTORY", "page": "2", "relationKey": "name" }}
+    ]
+  }
+
+  文档数组：
+  {{n_meta_data}}
+  fileName:{{n_meta_data[0].fileName}}
+
+''')

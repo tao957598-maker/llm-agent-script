@@ -1,0 +1,107 @@
+/*
+{
+	"title": "Recognize Cheque",
+	"description": "Recognize Cheque by LLM",
+    "parameter": [
+					{
+                        "name":"kbSpaceId",
+                        "label":"目录ID（支持多个）",
+                        "type":"textarea"
+                    },
+                    {
+                    	"name":"kbSpaceFileId",
+                    	"label":"File",
+						"required":true,
+						"type":"knowledge_space"
+                    }
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "life": "100"
+} */
+
+// 1. Set system prompt
+assign('system_prompt', '''
+- Role: 银行票据处理专家
+- Background: 用户需要对支票图片中的手写体语句进行涂改或修改的检测，以确保票据的合规性和真实性。支票作为重要的金融工具，其内容的完整性和真实性至关重要，任何涂改或修改都可能影响票据的有效性。
+- Profile: 你是一位在银行票据处理领域拥有多年经验的专家，精通支票图像识别技术，能够通过先进的图像分析工具和专业的合规性验证流程，准确识别手写体语句中的涂改或修改痕迹。
+- Skills: 你具备图像处理技术、手写体识别能力、合规性验证知识以及数据分析能力，能够综合运用这些技能，对支票图片中的手写体语句进行细致观察和分析，准确判断是否存在涂改或修改，并给出相应的概率评估。
+- Goals: 对支票图片中的手写体语句进行涂改或修改检测，准确识别修改位置，给出修改的概率评估，并以清晰的json格式输出结果。
+- Constrains: 需要确保分析的准确性和客观性，遵循银行票据处理的行业标准和合规性要求，同时保证输出的json数据格式规范、清晰易懂。
+- OutputFormat: 输出json数据 ，
+`is_modified`: true or false
+`modification_overall_probability`: 分数满分100
+`conclusion`:  总结
+`signature_exists`: true or false (是否存在签名)
+`analysis_details`字段包含以下key：explain（解释说明）、modify the score（修改的概率）、Identified as cause for modification（识别为修改的原因）。
+- Workflow:
+  1. 对支票图片进行预处理，包括图像增强、去噪等操作，以提高图像质量，便于后续分析。
+  2. 运用手写体识别技术，对支票图片中的手写体语句进行逐字识别，提取文字内容和笔迹特征。
+  3. 对比识别结果与原始文字内容，观察是否存在笔迹差异、墨迹浓淡不一、字迹重叠等涂改或修改痕迹，分析其特征和分布情况，确定修改位置。
+  4. 根据涂改或修改痕迹的明显程度、笔迹特征差异等因素，综合评估修改的概率，并给出相应的分数。
+  5. 将分析结果整理成清晰的解释说明，并以json格式输出，包括总结支票是否存在修改,支票是否存在签名、识别为修改的原因。
+- Examples:
+  - 例子：
+    ```
+    {
+   
+  "analysis_details": [
+    {
+      "explain": "在收款人字段中，原始手写内容为'Suny optical Tec Co., Ltd'，但其下方存在明显的覆盖重写痕迹，后续添加了'ATA Group Ltd. Bank chung'。该部分笔迹墨水浓度更深、笔压更重，且字体风格与原始文字明显不同，呈现两层笔迹叠加现象，符合覆盖重写的特征。",
+      "modify the score": 95,
+      "Identified as cause for modification": "覆盖重写、墨水浓度差异、笔压不一致、字体风格不同、两层笔迹叠加"
+    },
+    
+    ........
+  ],
+   "is_modified": true,
+    "modification_overall_probability": 85,
+    "conclusion": "支票存在明显涂改或修改痕迹，主要集中在收款人字段（原始为'Suny optical Tec Co., Ltd'，被覆盖重写为'ATA Group Ltd. Bank chung'），并伴有非标准内容的可疑添加。整体涂改可能性高，建议拒收并联系银行核实。"
+    "signature_exists": true
+ 
+}
+    ```
+
+''')
+
+// Set llm
+assign('llm', 'Qwen/Qwen3-VL-32B-Instruct')
+
+// 2. Get info for KB
+n_kb_datas,act_kb.selectBy?sql='SELECT knowledge_name,extension,store_uri FROM kb_spaces_folder_knowledge WHERE id in ({{kbSpaceFileId}})'
+
+
+
+// 3. Recognize Cheque by LLM
+foreach('kb_data', 'n_kb_datas', {
+    // 在循环内部可以访问循环变量
+    assign('current_index', '{{kb_data.index}}')
+    assign('current_item', '{{kb_data.item}}')
+	assign('file_name', '{{current_item.knowledge_name}}.{{current_item.extension}}')
+	assign('image_path', '{{current_item.store_uri}}')
+    
+	// Recognize Cheque by LLM
+	n_datas, tpl_image_chat,psr_all
+
+	// Import Data
+	n_import_data,act_func?js='''
+	(function() {
+		n_datas.fileName = '{{file_name}}';
+		n_datas.imagePath = '{{image_path}}';
+		n_datas.llm = '{{llm}}';
+		return JSON.stringify(arrList);
+	})();
+	'''
+
+	// Write result into kb
+	act_kb.defineAndImportData?tableName='kb_cheque_data_lht'&data='{{n_import_data}}'
+})
+
+
+define('tpl_image_chat', '''
+  /*{
+	 "llmType":"Qwen/Qwen3-VL-32B-Instruct"
+	}*/
+
+	{{fn.chatImageFlag('system_prompt', '', '', 'image_path', 1)}}
+''')

@@ -1,0 +1,57 @@
+/*
+{
+	"title":"单元测试：异常测试",
+	"parameter":"requirement=用户需求",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"tpl_convert_lowercase, n_do_math_multiply, n_do_pi, n_test_step",
+	"version":1
+}
+*/
+/
+// 添加睡眠用于测试2
+act_flow.wait?second=1
+
+// 准备计划列表
+assign("n_plans_list", '[\"aaa\", \"bbb\", \"ccc\", \"ddd\"]')
+
+// 测试AGT异常
+agt_grammer_test
+
+// 最终打印
+log('QQQQQQQ')
+
+define('tpl_convert_lowercase', '''
+	作为大数据Hive开发工程师，请检查和修正HiveSQL，使之符合规则：
+	
+	1. 全部为小写英文字母，如果大写请自动转换
+	2. 确保每个from的表都有别名，并且字段名称前加表别名
+	3. 请用三个反引号```sql <code>``` 来清晰分隔代码块，以便于阅读和理解
+	
+	Hive SQL：
+	{{requirement}}
+
+''')
+
+define('tpl_do_the_math', '''
+	请帮我计算值：8*12
+
+''')
+
+
+define('tpl_ask_pai', '''
+	请返回圆周率的值
+
+''')
+
+agent('add_partition', {
+	tpl_set_partition: '''
+		作为大数据Hive开发工程师，请检查和修正HiveSQL，使之符合规则：
+		
+		1. 要求所有分区表都有分区过滤，但是分区过滤不能太大
+		2. 确保每个from的表都有别名，并且字段名称前加表别名
+		3. 请用三个反引号```sql <code>``` 来清晰分隔代码块，以便于阅读和理解
+		
+		Hive SQL：
+		{{sys_last_result}}
+	''', psr_sql
+})

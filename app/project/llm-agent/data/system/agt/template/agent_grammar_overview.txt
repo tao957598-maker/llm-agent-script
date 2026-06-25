@@ -1,0 +1,74 @@
+# AgentFlow 语法概览
+
+基于简洁的 Groovy 语法，适用于一次性流程、代码生成 Agent、API/知识库调用等。脚本经预处理为执行图(Plan)再调度；仅支持约定 DSL，闭包内仅允许 DSL(assign/when/foreach/act_*/log 等)，禁止 def/return/if/for 及 it。续行用 \。
+
+**更多语法与细节请查阅：agent_grammar（完整的语法和API）、agent_grammar_fn（模板中的函数介绍）、agent_grammar_evolution（计划工具(act_plan.xxx)与 RPG 进化(act_rpg.xxx)）。**
+
+// 注释 // 开头。变量来自顶部 /*{ "parameter":[...] }*/ 或 assign。n_xxx=步骤结果变量兼 plan 标记(act_flow.go?plan=n_xxx)，须随语句同现、不可单独一行。tpl_xxx=define 的 LLM 模板；sys_=系统变量。模板内嵌套表达式用 %{}%。
+
+### 变量与赋值
+assign('var', 'value')
+assign('ref', '{{var}}')
+assign('num', '{{fn.raw(100)}}')   // 条件中数字比较时需数字类型，否则按字符串；用 fn.raw 写入
+assign('list', '["a","b"]')
+assign('json', '{"name":"jack"}')
+append('var', 'val1', 'val2')
+log('log info {{var}}')
+
+### 计划表达式
+// 链：rag→tpl→psr→vrf→act。左侧 n_xxx 即结果变量兼 plan 名(跳转用)；简写中 n_xxx 仅能作「n_xxx, act_xxx?params」前半部分。
+expression('rag_xxx', 'tpl_xxx', 'psr_xxx', 'vrf_xxx', 'act_xxx')
+// 简写：整行仅含 rag_/tpl_/psr_/vrf_/act_/n_ 逗号列表时可省略 expression(...)；不可与 assign 等混写
+rag_xxx, tpl_xxx, psr_xxx, vrf_xxx, act_xxx
+act_memory.assign?var=result&value=xxx
+
+### 控制流
+when('{{condition}}', { assign("score", "9") })
+when('condition', { ... }, { ... })   // 带 else；when('x') 与 when('{{x}}') 等价
+elsewhen('{{condition}}', { ... })
+elsewhen({ ... })   // 等价 else
+foreach('var_name', 'list', { ... })   // 第二参数为 list 或 condition(条件循环如 ReAct)
+on_failure({ ... })
+
+### 函数与文件
+act_func.run?script=''' fn.write("v","x"); return v '''
+act_func.read?filename='agt/xxx.txt'&version=1
+act_func.write?filename="{{path}}"&data="{{content}}"
+
+### Python
+act_python.writeTmp?requirement='需求'&pythonCode='{{tpl_llm_gen_code}}'
+act_python.run?filepath='{{n_file_info.kbspath}}'
+
+### 流程
+act_flow.go?plan=next   // plan 仅取 n_xxx 或 this/next/break/continue/end，不可写步骤序号或自定义标签
+act_flow.wait?second=3
+act_flow.page?pageCode='expense_form'   // 展示 UI 并等待用户输入
+
+### 知识库
+act_kb.defineKB?tableInfo='{"schema":"auto_test","tableName":"kb_xxx",...}'
+act_kb.importData?name='kb_xxx'&data='[{"id":"1"}]'
+n_data, act_kb.select?name='kb_xxx'&column='id'&where='{"id":"1"}'
+act_kb.search?requirement="语义"&name='kb_xxx'
+
+### API
+n_result, act_api?name="api_name"&params='{"key":"value"}'
+
+### LLM 模板 define 与调用
+// 模板内引用变量必须 {{var}}，不可裸写变量名。首行 /*{ ... }*/ 为可选模板头，仅在有流式/机型/投票等特定需求时加，多数情况不写；下例仅展示该写法存在。
+define('tpl_xxx', '''
+/*{ "stream":true, "llmType":"xxx", "scheduleMode":"vote" }*/
+{{userInput}}
+{{sys_hint}}
+直接返回 JSON，不要解释。
+''')
+tpl_xxx, psr_json
+
+### Agent 元信息与调用
+// 在语法上，agent 可视作「方法」：用 agt_xxx?p1=v1 调用已定义的 agent；用 agent('agt_inner', { ... }) 定义子 agent（方法体）。
+/*{
+	"title":"Demo",
+	"parameter":[{"name":"userInput","label":"需求","required":true}],
+	"resultPlan":"n_result"
+}*/
+agt_other_agent?p1=v1
+agent('agt_inner', { assign('var1', '{{p1}}') })   // 定义 Inner agent

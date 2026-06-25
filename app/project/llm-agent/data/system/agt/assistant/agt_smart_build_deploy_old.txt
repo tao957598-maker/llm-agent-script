@@ -1,0 +1,809 @@
+/*{
+  "title": "智能打包部署助手",
+  "description": "基于用户输入智能执行项目查找、分支切换、thin打包、部署等操作",
+  "parameter": [
+    {
+      "name": "userInput",
+      "label": "用户输入",
+      "required": true
+    },
+    {
+      "name": "projectName",
+      "label": "项目名称",
+      "type": "select",
+      "required": true,
+      "args": [
+        {
+          "label": "llm-agent",
+          "value": "llm-agent"
+        }
+      ]
+    },
+    {
+      "name": "gitRepoUrl",
+      "label": "Git仓库地址",
+      "description": "如果项目找不到，将从此地址克隆代码"
+    },
+    {
+      "name": "branchName",
+      "label": "Git分支名称",
+      "type": "select",
+      "required": true,
+      "defaultValue": "develop",
+      "args": [
+        {
+          "label": "develop (开发分支)",
+          "value": "develop"
+        },
+        {
+          "label": "HW-release (华为云发布分支)",
+          "value": "HW-release"
+        },
+        {
+          "label": "BEA-release (BEA发布分支)",
+          "value": "BEA-release"
+        }
+      ]
+    },
+    {
+      "name": "contextSystem",
+      "label": "操作系统",
+      "type": "select",
+      "required": true,
+      "args": [
+        {
+          "label": "Windows 11",
+          "value": "Windows11"
+        },
+        {
+          "label": "Windows 10",
+          "value": "Windows10"
+        },
+        {
+          "label": "Linux",
+          "value": "Linux"
+        },
+        {
+          "label": "MacOS",
+          "value": "MacOS"
+        }
+      ]
+    },
+    {
+      "name": "contextEnv",
+      "label": "目标环境",
+      "type": "select",
+      "required": true,
+      "defaultValue": "dev",
+      "args": [
+        {
+          "label": "本地环境 (local)",
+          "value": "localhost"
+        },
+        {
+          "label": "开发环境 (dev)",
+          "value": "172.18.2.14:2222"
+        },
+        {
+          "label": "UAT环境 (uat)",
+          "value": "172.18.3.11"
+        },
+        {
+          "label": "生产环境 (prod)",
+          "value": "189.1.224.215"
+        }
+      ]
+    },
+    {
+      "name": "skipTests",
+      "label": "是否跳过测试",
+      "type": "select",
+      "required": false,
+      "defaultValue": "true",
+      "args": [
+        {
+          "label": "跳过测试 (推荐)",
+          "value": "true"
+        },
+        {
+          "label": "执行测试",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "name": "deployTarget",
+      "label": "远程部署脚本（目标环境）",
+      "defaultValue": "/app/project/llm-agent/startup-test.sh"
+    }
+  ],
+  "resultPlan": "n_deploy_result",
+  "tag": "deploy",
+  "life": "100"
+}*/
+
+//# 正在分析用户需求
+when('!fn.hasValue(projectName) || !fn.hasValue(branchName) || !fn.hasValue(skipTests) || !fn.hasValue(deployTarget) || !fn.hasValue(gitRepoUrl)', {
+  // 优先使用用户下拉框选择的参数，如果没有则通过LLM智能提取
+  n_params, tpl_extract_params, psr_json
+}, {
+  // 用户已通过下拉框选择所有参数，跳过智能提取
+  assign('n_params', '{{fn.json("projectName, projectName, branchName, branchName, skipTests, skipTests, deployTarget, deployTarget, gitRepoUrl, gitRepoUrl, action, full_pipeline")}}')
+})
+
+// 参数优先级：用户选择 > 智能提取 > 默认值
+assign('n_project_name', '{{fn.optional(projectName, fn.optional(n_params.projectName, "llm-agent"))}}')
+assign('n_branch_name', '{{fn.optional(branchName, fn.optional(n_params.branchName, "develop"))}}')
+assign('n_skip_tests', '{{fn.optional(skipTests, fn.optional(n_params.skipTests, "true"))}}')
+assign('n_final_deploy_target', '{{fn.optional(deployTarget, fn.optional(n_params.deployTarget, "none"))}}')
+assign('n_action', '{{fn.optional(n_params.action, "full_pipeline")}}')
+assign('n_git_repo_url', '{{fn.optional(gitRepoUrl, fn.optional(n_params.gitRepoUrl, ""))}}')
+assign('n_log', '')
+assign('n_project_root', '')
+
+// 解析目标环境 IP 和端口（格式：ip 或 ip:port）
+n_ssh_parse, act_func?script='''
+  def env = (contextEnv ?: "").trim()
+  fn.put('n_env', env)
+  def parts = env.split(":", 2)
+  fn.put('n_ssh_host', parts[0])
+  fn.put('n_ssh_port', parts.length > 1 ? parts[1] : "22")
+  return true
+'''
+
+// 执行器类型控制：local_ac / cloud
+// local_ac: 使用本地AC工具执行
+// cloud: 使用云端执行
+
+// 检索全局变量：是否启用本地AC且可用状态
+n_g_local_ac_flag,act_memory.retrieve?var=n_g_localAcFlag&global=true
+when("fn.bool(n_g_local_ac_flag)",{
+  // 命令执行器：本地AC
+  assign('n_executor_type', 'local_ac')
+},{
+  // 命令执行器：云端
+  assign('n_executor_type', 'cloud')
+  // 获取云端配置信息
+  n_cloud_config, act_api.doExecuteDynamic?name="get_servers"
+  act_func?script='''
+    // 匹配选择ip n_ssh_host存在，则直接返回
+    def servers = n_cloud_config?.data
+    if (servers == null) {
+      fn.put('n_server_id', n_ssh_host)
+      return
+    }
+    def serverList = servers instanceof List ? servers : [servers]
+    for (def server : serverList) {
+      if (server?.host == n_ssh_host) {
+        fn.put('n_server_id', server?.serverId ?: server?.server_id ?: n_ssh_host)
+        return
+      }
+    }
+    fn.put('n_server_id', n_ssh_host)
+  '''
+})
+
+//# 检测操作系统
+n_os, act_func?script='''
+  def osType = 'linux'
+  if(contextSystem?.toLowerCase().contains("windows")){
+    osType = 'windows'
+  }
+  return osType
+ '''
+
+// 定义执行步骤列表
+n_steps, act_plan.parse?task='''
+- [ ] find_project
+- [ ] check_git
+- [ ] check_ssh
+- [ ] clone_repo
+- [ ] switch_branch
+- [ ] check_maven
+- [ ] build
+- [ ] check_bash
+- [ ] check_deploy
+'''
+//# 执行完整流程
+when('n_action != "full_pipeline" && n_action != "build"', {
+  assign('n_deploy_result', '暂不支持的操作: {{n_action}}\n\n当前支持:\n- 打包构建 (build)\n- 完整流程 (full_pipeline)')
+  act_flow.go?plan=end
+})
+
+foreach('n_step', 'n_steps', {
+  //# Step: {{n_step.item}}
+  assign("n_page_step_temp","{{n_step.item}}")
+
+  // 匹配 n_step.item 等于 "find_project" 的步骤并执行
+  when('n_step.item == "find_project"', {
+    // 调用内部 agent 查找项目
+    agt_inner_find_project
+  })
+  // 匹配 n_step.item 等于 "check_git" 的步骤并执行
+  when('n_step.item == "check_git"', {
+    // 调用内部 agent 检查 Git 环境
+    agt_inner_check_git
+  })
+  // 匹配 n_step.item 等于 "clone_repo" 的步骤并执行
+  when('n_step.item == "clone_repo"', {
+    agt_inner_clone_repo
+  })
+
+  // 匹配 n_step.item 等于 "check_maven" 的步骤并执行
+  when('n_step.item == "check_maven"', {
+    agt_inner_check_maven
+  })
+
+  // 匹配 n_step.item 等于 "switch_branch" 的步骤并执行
+  when('n_step.item == "switch_branch"', {
+    agt_inner_switch_branch
+  })
+
+  // 匹配 n_step.item 等于 "build" 的步骤并执行
+  when('n_step.item == "build"', {
+    agt_inner_build
+  })
+
+  // 匹配 n_step.item 等于 "check_bash" 的步骤并执行
+  when('n_step.item == "check_bash"', {
+    agt_inner_check_bash
+  })
+
+  // 匹配 n_step.item 等于 "check_ssh" 的步骤并执行
+  when('n_step.item == "check_ssh"', {
+    agt_inner_check_ssh
+  })
+
+  // 匹配 n_step.item 等于 "check_deploy" 的步骤并执行
+  when('n_step.item == "check_deploy"', {
+    agt_inner_check_deploy
+  })
+
+})
+
+on_failure({
+  assign('n_deploy_result', '❌ 执行失败\n\n{{n_log}}\n\n异常: {{sys_failure_task.result}}')
+})
+
+
+//# 智能参数提取
+define('tpl_extract_params', '''
+你是工程打包部署专家。请从用户输入中提取以下参数，以JSON格式返回：
+
+{
+  "projectName": "项目名称，默认 llm-agent",
+  "gitRepoUrl": "Git仓库地址，如 https://github.com/xxx/xxx.git 或 git@github.com:xxx/xxx.git",
+  "branchName": "分支名称，默认 develop",
+  "skipTests": "是否跳过测试，默认 true",
+  "deployTarget": "部署目标: docker/remote/none，默认 none",
+  "action": "用户意图: find_project/switch_branch/build/deploy/full_pipeline"
+}
+
+## 用户输入
+{{userInput}}
+
+## 当前系统
+{{contextSystem!}}
+
+## 当前环境
+{{n_env!}}
+
+## 提取规则
+1. 如果用户说"打包部署"/"全流程"，action设为 full_pipeline
+2. 如果只说"打包"/"构建"，action设为 build
+3. 如果只说"部署"，action设为 deploy
+4. 如果说"切换分支"，action设为 switch_branch
+5. 从用户输入中识别项目名、分支名等关键信息
+6. 如果提到"跳过测试"/"不测试"，skipTests设为true
+7. 如果提到"docker"，deployTarget设为docker
+8. 如果用户提供了 Git 地址（http://, https://, git@ 开头），提取为 gitRepoUrl
+9. 如果用户提到"克隆"、"clone"、"拉取代码"并给出地址，提取 gitRepoUrl
+
+仅返回JSON，不要解释。
+''')
+
+// 定义内部 agent：find_project
+// 参数: project_name, os, git_repo_url
+// 输出: n_project_root, n_need_clone
+agent('agt_inner_find_project',{
+  // 设置默认变量
+  assign('n_need_clone', 'false')
+  when('n_os == "windows"', {
+    assign('n_find_cmd', 'for %d in (Z Y X W V U T S R Q P O N M L K J I H G F E D C) do @if exist %d:\\ @for /f "delims=" %i in (\'dir /b /s /ad "%d:\\" 2^>nul ^| findstr /i "\\{{n_project_name}}$"\') do @if exist "%i\\deploy\\/build_thin_all.sh" echo %i')
+  }, {
+    // 搜索常用路径和临时目录
+    assign('n_find_cmd', 'find /app /opt /etc/ /home /var /tmp -maxdepth 4 -type d -name "{{n_project_name}}" 2>/dev/null | while read d; do [ -f "$d/deploy/build_thin_all.sh" ] && echo "$d"; done | head -5')
+  })
+  // 执行查找命令
+  n_find_result, agt_inner_cmd_executor?cmd={{n_find_cmd}}&cmd_executor_name="查找项目目录"
+  assign('n_find_output', '{{n_find_result}}')
+  n_find_ok, act_func?script='''
+    def output = n_find_output ?: ""
+    def lines = output.split("\\n")
+    def path = lines?[0]?.trim()
+    if (path == null || path.contains("NOT_FOUND") || path.isEmpty()) return false
+    def forwardSlashPath = path.replace('\\\\\\\\', '/').replaceAll(/[\r\n]+$/, '')
+    fn.put('n_project_root', forwardSlashPath)
+    return true
+  '''
+  when('fn.bool(n_find_ok)', {
+    assign('n_log', '{{n_log}}\n✓ 找到项目: {{n_project_root}}')
+  }, {
+    // 项目未找到，检查是否有 Git 仓库地址
+    when('fn.hasValue(n_git_repo_url)', {
+      assign('n_need_clone', 'true')
+      assign('n_log', '{{n_log}}\n⚠️ 未找到本地项目，需要从 Git 克隆\n仓库地址: {{n_git_repo_url}}')
+    }, {
+      assign('n_deploy_result', '❌ 未找到项目 {{n_project_name}}\n\n建议:\n1. 检查项目是否存在\n2. 提供 Git 仓库地址进行克隆')
+      act_flow.go?plan=break
+    })
+  })
+})
+
+// 定义内部 agent：clone_repo
+// 参数: os, project_name, git_repo_url, branch_name, need_clone
+// 功能: 克隆或更新 Git 仓库
+// 优先使用 find_project 找到的路径，如果不存在才 clone 到 /tmp
+agent('agt_inner_clone_repo',{
+  // 检查 /tmp/git-repository-clone 下是否有同名项目（优先使用）
+  when('n_os == "windows"', {
+    assign('n_tmp_check_cmd', 'if exist "C:\\temp\\git-repository-clone\\{{n_project_name}}" (echo EXISTS) else (echo NOT_EXISTS)')
+    assign('n_tmp_project_root', 'C:\\temp\\git-repository-clone\\{{n_project_name}}')
+  }, {
+    assign('n_tmp_check_cmd', 'if [ -d "/tmp/git-repository-clone/{{n_project_name}}" ]; then echo EXISTS; else echo NOT_EXISTS; fi')
+    assign('n_tmp_project_root', '/tmp/git-repository-clone/{{n_project_name}}')
+  })
+  n_tmp_check, agt_inner_cmd_executor?cmd={{n_tmp_check_cmd}}&cmd_executor_name="检查/tmp临时目录"
+  assign('n_tmp_exists', '{{fn.contains(n_tmp_check, "EXISTS")}}')
+  
+  // 优先使用 /tmp 下的项目
+  when('fn.bool(n_tmp_exists)', {
+    assign('n_project_root', '{{n_tmp_project_root}}')
+    assign('n_log', '{{n_log}}\n📥 检测到 /tmp 下已有项目: {{n_project_root}}')
+  })
+  
+  // 如果 /tmp 没有，检查 find_project 结果
+  when('!fn.bool(n_tmp_exists) && fn.hasValue(n_project_root)', {
+    assign('n_log', '{{n_log}}\n📥 使用找到的项目: {{n_project_root}}')
+  })
+  
+  // 如果任何项目路径存在，尝试 git pull
+  when('fn.hasValue(n_project_root)', {
+    assign('n_log', '{{n_log}}\n📥 尝试 git pull 更新')
+    assign('n_git_cmd', 'cd "{{n_project_root}}" && git fetch origin && git checkout {{n_branch_name}} && git pull')
+    n_git_result, agt_inner_cmd_executor?cmd={{n_git_cmd}}&cmd_executor_name="Git更新代码"
+    assign('n_git_pull_output', '{{n_git_result}}')
+    n_git_ok, act_func?script='''
+      def output = n_git_pull_output ?: ""
+      def success = output.contains("Updating") || output.contains("Already up to date") || output.contains("Fast-forward") || output.contains("branch is up to date") || output.contains("Switched to a new branch") || output.contains("Switched to branch")
+      fn.put("n_git_output", output)
+      return success
+    '''
+    when('fn.bool(n_git_ok)', {
+      assign('n_log', '{{n_log}}\n✓ 代码更新成功')
+    }, {
+      assign('n_log', '{{n_log}}\n⚠️ Git更新失败，将尝试继续使用现有目录')
+    })
+  }, {
+    // 没有找到任何项目，需要 clone
+    when('fn.bool(n_need_clone)', {
+      assign('n_log', '{{n_log}}\n📥 未找到本地项目，准备克隆仓库')
+      when('n_os == "windows"', {
+        assign('n_clone_base', 'C:\\temp\\git-repository-clone')
+        assign('n_project_root', '{{n_clone_base}}\\{{n_project_name}}')
+      }, {
+        assign('n_clone_base', '/tmp/git-repository-clone')
+        assign('n_project_root', '{{n_clone_base}}/{{n_project_name}}')
+      })
+      // 确保 base 目录存在
+      n_mkdir_result, agt_inner_cmd_executor?cmd='mkdir -p "{{n_clone_base}}"'&cmd_executor_name="创建基础目录"
+      // 执行 clone
+      assign('n_is_https_url', '{{fn.startsWith(n_git_repo_url, "https://")}}')
+      assign('n_effective_git_url', "{{fn.gitHttpsToSsh(n_git_repo_url)}}")
+      when('fn.bool(n_is_https_url)', {
+        assign('n_clone_cmd', 'git clone -b {{n_branch_name}} "{{n_effective_git_url}}" "{{n_project_root}}"')
+        assign('n_log', '{{n_log}}\n(已转换为SSH: {{n_effective_git_url}})')
+      }, {
+        assign('n_clone_cmd', 'git clone -b {{n_branch_name}} "{{n_git_repo_url}}" "{{n_project_root}}"')
+      })
+      n_clone_result, agt_inner_cmd_executor?cmd="{{n_clone_cmd}}"&cmd_executor_name="克隆Git仓库"
+      assign('n_clone_output', '{{n_executor_return}}')
+      // 验证 clone 成功
+      n_clone_ok, act_func?script='''
+        def output = n_clone_output ?: ""
+        def success = output.contains("Cloning into") || output.contains("warning: You appear to have cloned an empty repository")
+        return success
+      '''
+      when('fn.bool(n_clone_ok)', {
+        assign('n_log', '{{n_log}}\n✓ 仓库克隆成功')
+      }, {
+        assign('n_deploy_result', '❌ 仓库克隆失败\n\n命令: {{n_clone_cmd}}\n\n输出: {{n_clone_result}}')
+        act_flow.go?plan=break
+      })
+    }, {
+      assign('n_deploy_result', '❌ 未找到项目且未提供 Git 仓库地址\n\n建议:\n1. 检查项目是否存在\n2. 提供 Git 仓库地址')
+      act_flow.go?plan=break
+    })
+  })
+})
+
+// 定义内部 agent：check_git
+// 参数: os
+// 功能: 检查 Git 环境，如未安装则自动安装
+agent('agt_inner_check_git',{
+  // 检查 Git 版本
+  n_git_check, agt_inner_cmd_executor?cmd=git --version&cmd_executor_name="检查Git版本"
+  assign('n_git_installed', '{{fn.contains(n_executor_return, "git version")}}')
+  when('!fn.bool(n_git_installed)', {
+    // Git 未安装，自动安装
+    when('n_os == "windows"', {
+      n_git_install, agt_inner_cmd_executor?cmd=winget install --id Git.Git -e --source winget&cmd_executor_name="安装Git"
+    }, {
+      assign('n_git_install_cmd', 'sudo apt-get install -y git || sudo yum install -y git')
+      n_git_install, agt_inner_cmd_executor?cmd={{n_git_install_cmd}}&cmd_executor_name="安装Git"
+    })
+    assign('n_log', '{{n_log}}\n✓ Git 安装完成')
+  })
+})
+
+// 定义内部 agent：check_maven
+// 参数: os
+// 输出: n_mvn_bin
+// 功能: 检查 Maven 环境，如未安装则自动安装
+agent('agt_inner_check_maven',{
+  // 检查 Maven 环境（直接用 which mvn 找）
+  n_mvn_path, agt_inner_cmd_executor?cmd='which mvn 2>/dev/null || echo "NOT_FOUND"'&cmd_executor_name="检查Maven版本"
+  assign('n_mvn_found', '{{fn.contains(n_mvn_path, "/mvn") && !fn.contains(n_mvn_path, "NOT_FOUND")}}')
+  when('fn.bool(n_mvn_found)', {
+    // 找到 Maven - 提取 Maven home 目录
+    n_mvn_home, act_func?script='''
+      def mvnCmd = n_mvn_path ?: ""
+      if (mvnCmd.endsWith("/bin/mvn")) {
+        return mvnCmd.substring(0, mvnCmd.length() - 8)
+      } else if (mvnCmd.endsWith("/mvn")) {
+        return mvnCmd.substring(0, mvnCmd.length() - 4)
+      }
+      return mvnCmd
+    '''
+    assign('n_mvn_bin', '{{n_mvn_home}}/bin')
+    assign('n_log', '{{n_log}}\n✓ 找到 Maven: {{n_mvn_bin}}')
+  }, {
+    // Maven 未找到，尝试安装
+    when('n_os == "windows"', {
+      assign('n_mvn_install_cmd', 'winget install --id Apache.Maven -e --source winget || choco install maven -y')
+    }, {
+      assign('n_mvn_install_cmd', 'sudo apt-get update && sudo apt-get install -y maven || sudo yum install -y maven || (mkdir -p /opt && curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz -o /tmp/maven.tar.gz && tar -xzf /tmp/maven.tar.gz -C /opt && rm /tmp/maven.tar.gz && echo "/opt/apache-maven-3.9.6/bin")')
+    })
+    n_mvn_install_result, agt_inner_cmd_executor?cmd={{n_mvn_install_cmd}}&cmd_executor_name="安装Maven"
+    // 再次检查 Maven (安装后）
+    n_mvn_install_check, agt_inner_cmd_executor?cmd='which mvn 2>/dev/null || echo "NOT_FOUND"'&cmd_executor_name="再次检查Maven"
+    assign('n_mvn_install_ok', '{{fn.contains(n_mvn_install_check, "/mvn") && !fn.contains(n_mvn_install_check, "NOT_FOUND")}}')
+    when('fn.bool(n_mvn_install_ok)', {
+      assign('n_log', '{{n_log}}\n✓ Maven 安装完成')
+      assign('n_mvn_bin', '/opt/apache-maven-3.9.6/bin')
+    }, {
+      assign('n_deploy_result', '❌ Maven 未安装且无法自动安装')
+      act_flow.go?plan=break
+    })
+  })
+})
+
+// 定义内部 agent：switch_branch
+// 参数: os, project_root, branch_name, git_repo_url
+// 功能: 切换 Git 分支，如目录不存在则重新克隆
+agent('agt_inner_switch_branch',{
+  // 先检查目录是否存在
+  when('n_os == "windows"', {
+    assign('n_check_dir_cmd', 'if exist "{{n_project_root}}" (echo EXISTS) else (echo NOT_EXISTS)')
+  }, {
+    assign('n_check_dir_cmd', 'if [ -d "{{n_project_root}}" ]; then echo EXISTS; else echo NOT_EXISTS; fi')
+  })
+  n_dir_check, agt_inner_cmd_executor?cmd={{n_check_dir_cmd}}&cmd_executor_name="检查项目目录"
+  assign('n_dir_exists', '{{n_dir_check?trim == "EXISTS"}}')
+  when('!fn.bool(n_dir_exists)', {
+    assign('n_log', '{{n_log}}\n⚠️ 项目目录不存在，尝试重新克隆...')
+    // 确保 base 目录存在
+    n_mkdir_result, agt_inner_cmd_executor?cmd='mkdir -p "{{n_clone_base}}"'&cmd_executor_name="创建基础目录"
+    // 尝试重新 clone
+    assign('n_is_https_url', '{{fn.startsWith(n_git_repo_url, "https://")}}')
+    assign('n_effective_git_url', "{{fn.gitHttpsToSsh(n_git_repo_url)}}")
+    when('fn.bool(n_is_https_url)', {
+      assign('n_clone_cmd', 'git clone -b {{n_branch_name}} "{{n_effective_git_url}}" "{{n_project_root}}"')
+    }, {
+      assign('n_clone_cmd', 'git clone -b {{n_branch_name}} "{{n_git_repo_url}}" "{{n_project_root}}"')
+    })
+    n_clone_result, agt_inner_cmd_executor?cmd="{{n_clone_cmd}}"&cmd_executor_name="重新克隆Git仓库"
+    n_clone_ok, act_func?script='''
+      def output = n_clone_result ?: ""
+      return output.contains("Cloning into") || output.contains("warning: You appear to have cloned an empty repository")
+    '''
+    when('!fn.bool(n_clone_ok)', {
+      assign('n_deploy_result', '❌ 重新克隆仓库失败\n\n命令: {{n_clone_cmd}}\n\n输出: {{n_clone_result}}')
+      act_flow.go?plan=break
+    })
+    assign('n_log', '{{n_log}}\n✓ 重新克隆仓库成功')
+  })
+  //## 正在检查当前分支
+  when('n_os == "windows"', {
+    assign('n_current_branch_cmd', 'cd /d "{{n_project_root}}" && git rev-parse --abbrev-ref HEAD')
+  }, {
+    assign('n_current_branch_cmd', 'cd "{{n_project_root}}" && git rev-parse --abbrev-ref HEAD')
+  })
+  n_current_branch_result, agt_inner_cmd_executor?cmd={{n_current_branch_cmd}}&cmd_executor_name="获取当前Git分支"
+  assign('n_current_branch', '{{n_current_branch_result?trim}}')
+  when('n_current_branch != n_branch_name', {
+    //## 正在切换分支 {{n_branch_name}}
+    when('n_os == "windows"', {
+      assign('n_git_cmd', 'cd /d "{{n_project_root}}" && git checkout {{n_branch_name}} && git pull')
+    }, {
+      assign('n_git_cmd', 'cd "{{n_project_root}}" && git checkout {{n_branch_name}} && git pull')
+    })
+    n_git_result, agt_inner_cmd_executor?cmd={{n_git_cmd}}&cmd_executor_name="切换Git分支并拉取代码"
+    assign('n_log', '{{n_log}}\n✓ 切换到分支: {{n_branch_name}}')
+  }, {
+    //## 当前已在分支 {{n_branch_name}}，执行 git pull
+    when('n_os == "windows"', {
+      assign('n_git_cmd', 'cd /d "{{n_project_root}}" && git pull')
+    }, {
+      assign('n_git_cmd', 'cd "{{n_project_root}}" && git pull')
+    })
+    n_git_result, agt_inner_cmd_executor?cmd={{n_git_cmd}}&cmd_executor_name="拉取最新代码"
+    assign('n_log', '{{n_log}}\n✓ 已在分支 {{n_branch_name}}，已拉取最新代码')
+  })
+})
+
+// 定义内部 agent：build
+// 参数: os, project_root, skip_tests, mvn_bin
+// 功能: 执行 Maven thin 分层打包
+agent('agt_inner_build',{
+  // 先检查目录是否存在
+  when('n_os == "windows"', {
+    assign('n_check_dir_cmd', 'if exist "{{n_project_root}}" (echo EXISTS) else (echo NOT_EXISTS)')
+  }, {
+    assign('n_check_dir_cmd', 'if [ -d "{{n_project_root}}" ]; then echo EXISTS; else echo NOT_EXISTS; fi')
+  })
+  n_dir_check, agt_inner_cmd_executor?cmd={{n_check_dir_cmd}}&cmd_executor_name="检查项目目录"
+  assign('n_dir_exists', '{{n_dir_check?trim == "EXISTS"}}')
+  when('!fn.bool(n_dir_exists)', {
+    assign('n_deploy_result', '❌ 项目目录不存在: {{n_project_root}}\n\n无法执行构建操作')
+    act_flow.go?plan=break
+  })
+  //## 正在执行 thin 分层打包
+  when('n_os == "windows"', {
+    when('n_skip_tests == "true"', {
+      assign('n_build_cmd', 'cd /d "{{n_project_root}}" && call "{{n_project_root}}/deploy/build_thin_all.bat" -DskipTests')
+    }, {
+      assign('n_build_cmd', 'cd /d "{{n_project_root}}" && call "{{n_project_root}}/deploy/build_thin_all.bat"')
+    })
+  }, {
+    // Linux: 添加 Maven 到 PATH
+    when('n_skip_tests == "true"', {
+      assign('n_build_cmd', 'export PATH=$PATH:{{n_mvn_bin}} && cd "{{n_project_root}}" && bash deploy/build_thin_all.sh -DskipTests')
+    }, {
+      assign('n_build_cmd', 'export PATH=$PATH:{{n_mvn_bin}} && cd "{{n_project_root}}" && bash deploy/build_thin_all.sh')
+    })
+  })
+  n_build_result, agt_inner_cmd_executor?cmd={{n_build_cmd}}&cmd_executor_name="执行Maven打包"
+  assign('n_build_ok', '{{fn.contains(n_build_result, "BUILD SUCCESS")}}')
+  when('fn.bool(n_build_ok)', {
+    assign('n_log', '{{n_log}}\n✓ 打包成功')
+  }, {
+    assign('n_log', '{{n_log}}\n✗ 打包失败')
+    assign('n_deploy_result', '❌ 打包失败\n\n{{n_log}}\n\n错误信息:\n{{n_build_result}}')
+    act_flow.go?plan=break
+  })
+})
+
+// 定义内部 agent：check_bash
+// 参数: os, project_root
+// 输出: n_bash_path
+// 功能: 检查 Windows 系统上的 Git Bash
+agent('agt_inner_check_bash',{
+  when('n_os == "windows"', {
+    //## 正在检查 Git Bash
+    assign('n_bash_find_cmd', 'for %d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @if exist %d: @for /f "delims=" %i in (\'dir /b /s /ad "%d:\\Git" 2^>nul\') do @if exist "%i\\/bin\\/bash.exe" echo %i\\/bin\\/bash.exe')
+    n_bash_check, agt_inner_cmd_executor?cmd={{n_bash_find_cmd}}&cmd_executor_name="查找Git Bash"
+    n_bash_path, act_func?script='''
+      def out = n_bash_check ?: ""
+      out = out.trim()
+      return out.isEmpty() ? "" : out.replace('\\\\\\\\', '/')
+    '''
+    when('!fn.hasValue(n_bash_path)', {
+      assign('n_deploy_result', '❌ 未找到 Git Bash，请先安装 Git for Windows')
+      act_flow.go?plan=break
+    })
+    n_bash_drive, act_func?script='''
+      def root = n_project_root ?: ""
+      if (root =~ /^[A-Za-z]:\\//) {
+        def drive = root.substring(0, 1).toLowerCase()
+        return "/" + drive + "/" + root.substring(3)
+      }
+      return root
+    '''
+    assign('n_log', '{{n_log}}\n✓ Git Bash: {{n_bash_path}}')
+  })
+})
+
+// 定义内部 agent：check_ssh
+// 参数: os, env, executor_type, ssh_host, ssh_port
+// 功能: 检查 SSH 连接（GitHub SSH 或远程服务器 SSH）
+agent('agt_inner_check_ssh',{
+  assign('n_skip_ssh', '{{fn.str(n_env) == "localhost"}}')
+  when('!fn.bool(n_skip_ssh)', {
+    // cloud 模式：检查 Git SSH 连通性
+    when('n_executor_type == "cloud"', {
+      // 检查 Git SSH 连通性（用 grep 判断，返回码 0=成功，1=失败）
+      assign('n_git_ssh_test_cmd', 'ssh -T -o BatchMode=yes -o ConnectTimeout=10 git@github.com 2>&1 | grep -i "successfully authenticated"')
+      n_git_ssh_result, agt_inner_cmd_executor?cmd={{n_git_ssh_test_cmd}}&cmd_executor_name="测试GitHub SSH连接"
+      n_git_ssh_ok, act_func?script='''
+        def output = n_git_ssh_result ?: ""
+        fn.put('n_git_ssh_output', output)
+        // grep 成功匹配返回 true
+        return !output.isEmpty() && output.toLowerCase().contains("successfully authenticated")
+      '''
+      log("--------------------n_git_ssh_ok:{{n_git_ssh_ok}}")
+      when('!fn.bool(n_git_ssh_ok)', {
+        // 生成 RSA 公钥
+        when('n_os == "windows"', {
+          assign('n_keygen_cmd', 'if not exist "%USERPROFILE%\\.ssh\\id_rsa.pub" ssh-keygen -t rsa -b 4096 -N "" -f "%USERPROFILE%\\.ssh\\id_rsa"')
+          n_keygen_result, agt_inner_cmd_executor?cmd={{n_keygen_cmd}}&cmd_executor_name="生成SSH密钥"
+          assign('n_pubkey_cmd', 'type "%USERPROFILE%\\.ssh\\id_rsa.pub"')
+        }, {
+          assign('n_pubkey_cmd', '[ -f ~/.ssh/id_rsa.pub ] || ssh-keygen -t rsa -b 4096 -N "" -f ~/.ssh/id_rsa; cat ~/.ssh/id_rsa.pub')
+        })
+        n_pubkey_result, agt_inner_cmd_executor?cmd={{n_pubkey_cmd}}&cmd_executor_name="获取SSH公钥"
+        n_pubkey, act_func?script='''
+          def output = n_pubkey_result ?: ""
+          def lines = output.split("\\n")
+          def pubkey = lines?.find { it.trim().contains("ssh-rsa") }
+          return pubkey?.trim() ?: ""
+        '''
+        n_err_msg, act_func?script='''
+          def err = n_git_ssh_output ?: "未知错误"
+          def key = n_pubkey ?: "获取公钥失败"
+          def msg = "⚠️ Git SSH 未配置或认证失败\n\n错误：" + err + "\n\n配置方法：\n1. 在 GitHub 添加以下公钥\n2. 地址：https://github.com/settings/keys\n\n【当前公钥】\n" + key + "\n\n添加完成后重新执行部署。"
+          return msg
+        '''
+        assign('n_deploy_result', '{{n_err_msg}}')
+        act_flow.go?plan=break
+      })
+      assign('n_log', '{{n_log}}\n✓ Git SSH 验证通过')
+    })
+
+    // local_ac 模式：检查云端机器到远程服务器的 SSH（用于部署）
+    when('n_executor_type == "local_ac"', {
+      assign('n_ssh_test_cmd', 'ssh -p {{n_ssh_port}} -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{n_ssh_host}} echo OK && echo SSH_OK || echo SSH_FAIL')
+      n_ssh_test_result, agt_inner_cmd_executor?cmd={{n_ssh_test_cmd}}&cmd_executor_name="测试远程服务器SSH连接"
+      n_ssh_ok, act_func?script='''
+        def output = n_ssh_test_result ?: ""
+        fn.put('n_ssh_err', output)
+        return output.contains("SSH_OK")
+      '''
+      when('!fn.bool(n_ssh_ok)', {
+        // 生成 RSA 公钥
+        when('n_os == "windows"', {
+          assign('n_keygen_cmd', 'if not exist "%USERPROFILE%\\.ssh\\id_rsa.pub" ssh-keygen -t rsa -b 4096 -N "" -f "%USERPROFILE%\\.ssh\\id_rsa"')
+          n_keygen_result, agt_inner_cmd_executor?cmd={{n_keygen_cmd}}&cmd_executor_name="生成SSH密钥"
+          assign('n_pubkey_cmd', 'type "%USERPROFILE%\\.ssh\\id_rsa.pub"')
+        }, {
+          assign('n_pubkey_cmd', '[ -f ~/.ssh/id_rsa.pub ] || ssh-keygen -t rsa -b 4096 -N "" -f ~/.ssh/id_rsa; cat ~/.ssh/id_rsa.pub')
+        })
+        n_pubkey_result, agt_inner_cmd_executor?cmd={{n_pubkey_cmd}}&cmd_executor_name="获取SSH公钥"
+        n_pubkey, act_func?script='''
+          def output = n_pubkey_result ?: ""
+          def lines = output.split("\\n")
+          def pubkey = lines?.find { it.trim().contains("ssh-rsa") }
+          return pubkey?.trim() ?: ""
+        '''
+        assign('n_deploy_result', '⚠️ 云端到远程服务器 SSH 未通过\n\n错误：{{n_ssh_err}}\n\n配置方法：将以下公钥添加到远程服务器 ~/.ssh/authorized_keys\n\n{{n_pubkey}}\n\n添加完成后重新执行部署。')
+        act_flow.go?plan=break
+      })
+      assign('n_log', '{{n_log}}\n✓ 远程服务器 SSH 验证通过')
+    })
+  })
+})
+
+// 定义内部 agent：check_deploy
+// 参数: os, env, project_root, branch_name, bash_path, ssh_host, ssh_port, deploy_target
+// 功能: 读取部署脚本、检查 Docker 并执行部署
+//       如果有 clone 目录，deploy_target 指向项目目录下的 startup.sh
+agent('agt_inner_check_deploy',{
+  // 如果有 clone 目录，deploy_target 指向项目目录下的 startup.sh
+  when('fn.hasValue(n_project_root)', {
+    assign('n_final_deploy_target', '{{n_project_root}}/deploy/startup.sh')
+    assign('n_log', '{{n_log}}\n📦 使用项目内置部署脚本: startup.sh')
+  }, {
+    assign('n_final_deploy_target', '{{n_final_deploy_target}}')
+    assign('n_log', '{{n_log}}\n📦 使用默认部署脚本')
+  })
+
+  assign('n_is_local', '{{fn.str(n_env) == "localhost"}}')
+  //# 读取部署脚本内容判断是否需要 Docker
+  when('fn.bool(n_is_local)', {
+    // 本地读取部署脚本
+    when('n_os == "windows"', {
+      assign('n_read_script_cmd', 'type "{{n_final_deploy_target}}"')
+    }, {
+      assign('n_read_script_cmd', 'cat "{{n_final_deploy_target}}"')
+    })
+  }, {
+    //# 远程读取部署脚本
+    when('n_os == "windows"', {
+      assign('n_read_script_cmd', '"\\"{{n_bash_path}}\\" -c \\"ssh -p{{n_ssh_port}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{n_ssh_host}} cat {{n_final_deploy_target}}\\""')
+    }, {
+      assign('n_read_script_cmd', 'ssh -p{{n_ssh_port}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{n_ssh_host}} cat {{n_final_deploy_target}}')
+    })
+  })
+  n_script_content, agt_inner_cmd_executor?cmd={{n_read_script_cmd}}&cmd_executor_name="读取部署脚本"
+  //## 部署脚本内容预览
+  //# 判断部署脚本是否包含 docker 命令
+  assign('n_needs_docker', '{{fn.contains(fn.str(n_script_content).toLowerCase(), "docker") || fn.contains(fn.str(n_script_content).toLowerCase(), "compose")}}')
+  when('fn.bool(n_needs_docker)', {
+    //## 检测到需要 Docker 环境，开始检查...
+    //## 正在检查 Docker 环境
+    n_docker_check, agt_inner_cmd_executor?cmd="docker --version"&cmd_executor_name="检查Docker版本"
+    assign('n_docker_installed', '{{fn.contains(n_docker_check, "Docker version")}}')
+    when('!fn.bool(n_docker_installed)', {
+      //## 正在安装 Docker
+      when('n_os == "windows"', {
+        n_docker_install, agt_inner_cmd_executor?cmd="winget install --id Docker.DockerDesktop -e --source winget"&cmd_executor_name="安装Docker"
+      }, {
+        assign('n_docker_install_cmd', 'curl -fsSL https://get.docker.com | sh && sudo systemctl start docker && sudo systemctl enable docker')
+        n_docker_install, agt_inner_cmd_executor?cmd="{{n_docker_install_cmd}}"&cmd_executor_name="安装Docker"
+      })
+      assign('n_log', '{{n_log}}\n✓ Docker 安装完成')
+    }, {
+      //## Docker 已就绪
+    })
+  }, {
+    //## 脚本不需要 Docker，跳过检查
+  })
+  //## 执行部署脚本
+  when('fn.bool(n_is_local)', {
+    //## 正在本地执行部署脚本
+    when('n_os == "windows"', {
+      assign('n_deploy_cmd', '"\\"{{n_bash_path}}\\" -c \\"bash {{n_final_deploy_target}} 2>&1\\""')
+    }, {
+      assign('n_deploy_cmd', 'bash "{{n_final_deploy_target}}" 2>&1')
+    })
+  }, {
+    //## 正在 SSH 远程部署到 {{n_env}}
+    when('n_os == "windows"', {
+      assign('n_deploy_cmd', '"\\"{{n_bash_path}}\\" -c \\"ssh -p{{n_ssh_port}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 root@{{n_ssh_host}} \\"bash {{n_final_deploy_target}} 2>&1\\"\\""')
+    }, {
+      assign('n_deploy_cmd', 'ssh -p{{n_ssh_port}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 root@{{n_ssh_host}} "bash {{n_final_deploy_target}} 2>&1"')
+    })
+  })
+  // 开始执行部署脚本
+  n_deploy_result, agt_inner_cmd_executor?cmd={{n_deploy_cmd}}&cmd_executor_name="执行部署脚本"
+  //## 部署执行结果
+  assign('n_log', '{{n_log}}\n✓ 部署完成')
+  assign('n_deploy_result', '✅ 打包部署全部完成\n\n{{n_log}}\n\n部署结果:\n{{n_deploy_result}}')
+})
+
+// 定义命令执行器 agent
+agent('agt_inner_cmd_executor',{
+  assign('cmd_executor_name_text', '{{fn.optional(cmd_executor_name, "执行命令")}}')
+  assign('n_executor_mode', '{{fn.when(n_executor_type == "local_ac", "本地", "云端")}}')
+
+  //## [{{n_executor_mode}}] {{cmd_executor_name_text}} - 执行命令
+  act_memory.assign?var=cmd_text&value={{cmd}}&type=code
+
+  when('n_executor_type == "local_ac"', {
+    n_result, act_rpa.send?command=RunShell&parameters='{"shell_input":"{{cmd_text}}"}'
+    //## [{{n_executor_mode}}] {{cmd_executor_name_text}} - 输出结果
+    assign("n_executor_return", '{{n_result.data}}')
+  }, {
+    //## [{{n_executor_mode}}] {{cmd_executor_name_text}} 查看执行详情
+    n_result, act_api.doExecuteDynamic?name="send_cmd"&dynamicParamData='{"command":"{{cmd_text}}","commands":"","server_id":"{{n_server_id}}"}'
+    assign("n_result_data","{{n_result.data}}")
+    when('n_result_data.exit_code == 0', {
+        //## [{{n_executor_mode}}] {{cmd_executor_name_text}} - 成功
+        act_memory.assign?var=n_executor_return&value={{n_result_data.stdout}}&type=code
+    }, {
+        //## [{{n_executor_mode}}] {{cmd_executor_name_text}} - 失败
+        act_memory.assign?var=n_executor_return&value="{{((n_result_data.command == '')?then(n_result_data.commands, n_result_data.command))}}\n{{n_result_data.stderr}}"&type=code
+    })
+  })
+})
+

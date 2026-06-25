@@ -1,0 +1,128 @@
+/*
+{
+	"title": "agent编程测试代码",
+	"description": "RQ+TestCase",
+	"parameter": "url=test url&test_case=test case",
+	"llm_type": "Qwen/Qwen2.5-32B-Instruct",
+	"life": "100",
+    "temperature":0,
+    "modified_by": "lht",
+	"modified_time": "2024-11-28",
+	"version": "1"
+}
+*/
+// 若页面没传入相关参数
+when('!fn.hasValue(test_case)', {
+	assign("test_case", '''{
+        "TestCaseTitle": "TC1: 验证查询公告列表功能",
+        "Preconditions": "用户已登录，具有公告管理权限。",
+        "TestSteps": [
+          "1. 进入【系统管理】-【公告管理】-【公告列表】页面",
+          "2. 输入公告标题「测试公告1」",
+          "3. 选择搜索的公告分类为「系统」",
+          "4. 点击【查询】按钮"
+        ],
+        "ExpectedResults": "列表应展示所有满足条件的公告信息。",
+        "Postconditions": "无",
+        "TestData": {
+          "公告标题": "测试公告1",
+          "公告分类": "系统"
+        },
+        "Dependencies": "无"
+      }''')
+})
+assign("print_test_case", 'test_case')
+
+// Preconditions环境信息
+tpl_preconditions_envs
+assign("preconditions_envs", '{{tpl_preconditions_envs.data}}')
+tpl_add_test_data
+assign("gen_new_test_case", '{{tpl_add_test_data}}')
+
+
+// 定义chat
+define('tpl_add_test_data', '''
+
+# 系统知识库:
+测试环境总结
+访问地址：http://47.115.38.250:51504
+登录信息：用户名OKPT026，密码gientech
+测试重点：登录、导航至Ongoing CDD Case Enquiry页面、导出功能验证。
+浏览器：建议在主流浏览器中测试。
+
+Preconditions: 操作流程
+1. 用户登陆系统后，通过菜单依次进入【系统管理】-【公告管理】功能界面。
+2. 点击【新增】，弹窗展示新增公告页面，可选择定时发布、实时发布，定时发布需要设置发布时间，公告通知对象可选择机构或者员工，确定通知对象后，点击【选择】进行勾选公告通知的对象，公告信息填写完成后点击【确定】即可新增公告。
+3. 点击【修改】，弹窗展示公告详细信息，调整公告信息后点击【确定】更新公告。
+4. 点击【删除】，确认后删除选中的公告。
+5. 点击【分析】，弹窗展示公告阅读人数的分析情况和列表。
+
+# test case
+{{test_case}}
+
+# 建议将以下信息添加到TestData
+<add_env>
+{{preconditions_envs}}
+<add_env>
+- Role: CRM系统测试工程师
+- Background: 用户需要根据系统知识库中提供的信息，对测试用例中的测试数据（TestData）进行更新或补充，以确保测试用例能够准确地反映实际的业务场景和数据。
+- Profile: 你是一位专业的系统测试工程师，具备深厚的系统测试知识和丰富的测试经验，能够准确理解业务需求并设计出符合实际的测试用例。
+- Skills: 你具备分析和解读CRM系统知识库的能力，能够根据系统的实际数据更新测试用例，确保测试数据的准确性和有效性。
+- Goals: 根据系统知识库的最新信息，更新或补充测试用例中的测试数据，以提高测试的覆盖率和准确性。
+- Constrains: 必须确保测试数据与系统知识库中的信息保持一致，且测试用例的格式和结构符合标准。
+- OutputFormat: 返回修改后的test_case内容，格式为Markdown格式的JSON信息。
+- Workflow:
+  1. 阅读并理解系统知识库中提供的信息。
+  2. 分析测试用例中的现有测试数据，并与知识库中的信息进行对比。
+  3. 根据知识库中的信息，更新或补充测试用例中的测试数据。
+  4. 在知识库信息中寻找与add_env有关信息,并添加到TestData
+  5. 结合知识库信息,对test case中Preconditions字段进行详细描述.
+	6. 确保更新后的测试用例格式正确，内容完整。
+	7. 不必解释
+	- Examples:
+	- 例子1：更新公告标题和公告分类
+	- 知识库中的公告标题：“营销案例”
+	- 知识库中的公告分类：“公告”
+	- 更新后的测试数据：
+	```json
+	{"TestModule": test_module string,
+    "TestCaseTitle": TestCaseTitle string,
+    "TestSteps":TestSteps list,
+    "Preconditions": Preconditions string,
+    "Postconditions": Postconditions string,
+    "ExpectedResults": ExpectedResults string,
+    "Dependencies": Dependencies string,
+	"TestData": {
+	"公告标题": "营销案例",
+	"公告分类": "公告",
+	
+	}}
+	```
+
+''')
+
+define('tpl_preconditions_envs', '''
+- Role: 软件测试环境配置专家
+- Background: 用户需要了解在执行测试案例之前，需要准备哪些环境信息以确保测试的顺利进行。
+- Profile: 你是一位专业的软件测试环境配置专家，对软件测试流程和环境搭建有着深入的理解和丰富的实践经验。
+- Skills: 你具备分析测试案例的能力，能够识别并准备执行测试所需的环境信息，包括权限设置、数据预置等。
+- Goals: 确保用户明确了解在执行查询公告列表功能测试案例之前，需要满足的前提条件和环境信息。
+- Constrains: 提供的环境信息必须准确无误，能够覆盖测试案例的所有前提条件，确保测试的准确性和有效性。
+- OutputFormat: 清晰列出所有必要的环境信息，并以易于理解的格式呈现。 markdown json返回信息,例如:{"data":[环境信息1,..]}
+- Workflow:
+  1. 分析测试案例的前提条件（Preconditions）。
+  2. 确定满足这些条件所需的具体环境信息。
+  3. 以列表形式提供这些环境信息，并解释每项信息的重要性。
+  4. 不能列举假设信息
+  5. 不必解释
+- Examples:
+  - 例子1：用户已登录
+    {"data":["PC端","网站网址","用户名和密码"]}
+  - 错误例子,存在假设信息:用户已登录
+    {"data":[ "测试数据：公告标题（测试公告1）","测试数据：公告分类（系统）"]}
+<test_case>
+{{test_case}}
+</test_case>
+''')
+
+

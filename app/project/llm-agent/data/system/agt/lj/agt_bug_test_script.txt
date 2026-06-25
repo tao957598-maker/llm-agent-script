@@ -1,0 +1,39 @@
+/*
+{
+	"title":"agt_bug_test_script",
+	"description":"测试script脚本-lj",
+	"parameter":"{\"current_step\":\"12222\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_similar_file,resultTip",
+	"version":1
+}
+*/
+/*
+assign("n_similar_file",'''
+{"requirement": "18.save 'Balance' history data [id_3205385424]", "filename": "/selenium/system/save_history_data.py", "parameter": {"target": "id_3205385424"}}
+''')
+
+assign('resultTip', '{{fn.i18n("job.created","UI JOB","122222222")}}')
+
+assign('n_current_step',"1112")
+
+// 赋值步骤描述1
+n_similar_file, act_func?script="""
+    def data = [:] + n_similar_file
+    data.parameter.put('current_step', '''{{n_current_step}}''')
+    return data
+    """
+
+log('----------------n_similar_file:{{n_similar_file}}')
+log('----------------n_similar_file:{{n_similar_file.filename}}')
+log('----------------n_similar_file:{{n_similar_file.parameter}}')
+*/
+//## Run selenium code similar file
+//agt_run?python_file="{{n_similar_file.filename}}"&parameters="{{n_similar_file.parameter}}"
+ 
+//assign("n_kb_all_data","[{\"msg\":\"点击【Accounts】查看账户\",\"step_relate_id\":268673616402792448,\"run_steps\":[{\"type\":\"click\",\"target\":\"id_171780386\"}],\"create_time\":\"2026-02-13 06:17:09\",\"action_type\":\"execute\",\"content_id\":\"9f63006b3051336b092693f0e3c5e1ac\",\"system_name\":\"Cloud Bank Test0212\",\"base_url\":\"http://189.1.224.215:8888\",\"spider_deep\":4,\"generate_type\":1,\"update_time\":\"2026-02-13 08:16:45\",\"is_return_able\":1,\"target_uri\":null,\"id\":268673932679528448,\"directory_id\":null,\"run_success\":2,\"biz_id\":null,\"current_uri\":\"/transfer/betweenAccounts\"}]")
+assign("n_kb_all_data","[{\"msg\":\"点击【Accounts】查看账户\",\"step_relate_id\":268673616402792448}]")
+// 测试 long精度丢失问题 (发现后端ok，前端自己反序列化时出现的问题)
+n_parameters,act_func?script='''n_kb_all_data[0]'''
+log("('----------------n_parameters:{{n_parameters}}")

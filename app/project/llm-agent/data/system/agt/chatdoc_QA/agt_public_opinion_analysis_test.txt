@@ -1,0 +1,300 @@
+/*
+{
+	"title":"Public Opinion Analysis System",
+	"description":"A comprehensive public opinion analysis system with multi-channel data collection, intelligent processing, and automated reporting",
+	"parameter":[
+		{
+			"name":"analysis_topic",
+			"label":"Analysis Topic",
+			"required":true,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		},
+		{
+			"name":"collection_channels",
+			"label":"Collection Channels",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"select"
+		},
+		{
+			"name":"analysis_period",
+			"label":"Analysis Period (days)",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"number"
+		}
+	],
+	"tag":"chatdoc_QA",
+	"displayOrder":5,
+	"version":2
+}
+*/
+// 1. Initialize and configure data collection
+assign('topic', '{{analysis_topic}}')
+
+assign('channels', '{{collection_channels}}')
+
+assign('period_days', '{{analysis_period}}')
+
+// Define prompt for data collection configuration
+
+
+// Generate collection configuration
+n_collection_config, tpl_collection_config, psr_json
+
+// 2. Multi-channel data collection
+foreach('n_channel_item', '{{n_collection_config.sources}}', {
+	assign('source_type', '{{n_channel_item.type}}')
+
+	assign('source_name', '{{n_channel_item.name}}')
+
+	assign('source_url', '{{n_channel_item.url}}')
+
+	when('{{source_type == "API"}}', {
+		// API-based collection
+		n_api_data, act_api?name="collect_public_data"&params='{{fn.json("topic,topic,source,source_name,url,source_url,keywords,n_collection_config.keywords")}}'
+	
+		append('collected_data', '{{n_api_data}}')
+	})
+
+	when('{{source_type == "Web"}}', {
+		// Web crawler collection
+		n_web_data, act_func.run?script='''
+		            // Web crawling logic
+		            def crawler = new WebCrawler()
+		            def content = crawler.fetch("{{source_url}}")
+		            return content
+		        '''
+	
+		append('collected_data', '{{n_web_data}}')
+	})
+
+	when('{{source_type == "RSS"}}', {
+		// RSS feed collection
+		n_rss_data, act_func.run?script='''
+		            // RSS parsing logic
+		            def rssParser = new RSSParser()
+		            def feed = rssParser.parse("{{source_url}}")
+		            return feed.items
+		        '''
+	
+		append('collected_data', '{{n_rss_data}}')
+	})
+})
+
+// 3. Intelligent content processing
+
+
+// Process collected content
+n_processed_data, tpl_content_processing, psr_json
+
+// 4. Entity recognition and sentiment analysis enhancement
+
+
+// Perform enhanced analysis
+n_enhanced_analysis, tpl_enhanced_analysis, psr_json
+
+// Convert processed content to vectors
+n_vector_data, act_kb.convert?data='{{n_processed_data.processed_content}}'&convert=vector
+
+// Store in vector database
+act_kb.importData?name='kb_public_opinion'&data='{{fn.json("topic,topic,content,n_processed_data.processed_content,vector,n_vector_data,entities,n_enhanced_analysis.enhanced_entities,sentiment,n_processed_data.sentiment,tags,n_enhanced_analysis.dynamic_tags,metadata,n_processed_data.metadata,timestamp,fn.now()")}}'
+
+// 6. Semantic similarity search capability
+
+
+// Perform semantic search
+n_similar_content, act_kb.search?requirement='{{tpl_semantic_search}}'&name='kb_public_opinion'
+
+// 7. Automated report generation
+
+
+// Generate final report
+n_final_report, tpl_report_generation, psr_md
+
+// Create monitoring task
+assign('monitoring_task', '{{fn.json("name,Public Opinion Monitoring - topic,topic,channels,channels,frequency,daily,status,ACTIVE,last_run,fn.now(),next_run,fn.addDays(fn.now(), 1)")}}')
+
+// Store task configuration
+act_kb.importData?name='kb_monitoring_tasks'&data='{{monitoring_task}}'
+
+// 9. Create one-time or periodic collection jobs
+when('{{uiEntrance.schedule_type == "periodic"}}', {
+	assign('jobData', '{{fn.json("agentName,agt_public_opinion,jobDesc,Periodic Public Opinion Collection,parameters,fn.json("analysis_topic,topic,collection_channels,channels,analysis_period,period_days"),schedule,0 0 * * *,notifyStrategy,On Failure")}}')
+
+	n_job_created, act_job.createAndTrigger?data='{{jobData}}'&isOneOffTask=false
+})
+
+when('{{uiEntrance.schedule_type == "one_time"}}', {
+	assign('jobData', '{{fn.json("agentName,agt_public_opinion,jobDesc,One-time Public Opinion Analysis,parameters,fn.json("analysis_topic,topic,collection_channels,channels,analysis_period,period_days"),notifyStrategy,全部通知")}}')
+
+	n_job_created, act_job.createAndTrigger?data='{{jobData}}'&isOneOffTask=true
+})
+
+// 10. Error handling and logging
+on_failure({
+	assign('error_message', '{{sys_last_error}}')
+
+	log('Public opinion analysis failed: {{error_message}}')
+
+	// Send notification
+	act_func.run?script='''
+	        // Send error notification
+	        def notification = new NotificationService()
+	        notification.sendAlert(
+	            "Public Opinion Analysis Failed",
+	            "Topic: {{topic}}
+	Error: {{error_message}}",
+	            "HIGH"
+	        )
+	    '''
+
+	// Store error for analysis
+	act_kb.importData?name='kb_analysis_errors'&data='{{fn.json("topic,topic,error,error_message,timestamp,fn.now(),agent,agt_public_opinion")}}'
+})
+
+// 11. Return final results
+assign('final_result', '{{fn.json("report,n_final_report,analysis,n_enhanced_analysis,similar_content,n_similar_content,monitoring_task,monitoring_task,job_created,n_job_created")}}')
+
+// Store analysis history
+act_kb.importData?name='kb_analysis_history'&data='{{fn.json("topic,topic,report_summary,fn.substring(n_final_report, 0, 500),sentiment_score,n_processed_data.sentiment.score,risk_level,n_enhanced_analysis.risk_level,analysis_date,fn.now()")}}'
+
+// Output final result
+act_memory.assign?var=analysis_result&value='{{final_result}}'&type=json
+
+
+
+
+define('tpl_collection_config', '''
+Based on the analysis topic: {{topic}}
+And selected channels: {{channels}}
+
+Generate a data collection configuration including:
+1. Search keywords and queries
+2. Target websites/APIs
+3. Collection frequency
+4. Data format requirements
+
+Return in JSON format:
+{
+  "keywords": ["keyword1", "keyword2"],
+  "sources": [
+    {
+      "type": "API/Web/RSS",
+      "name": "source_name",
+      "url": "source_url",
+      "parameters": {}
+    }
+  ],
+  "schedule": "daily/hourly",
+  "filters": {
+    "language": "en/zh",
+    "date_range": "last_{{period_days}}_days"
+  }
+}
+''')
+
+define('tpl_content_processing', '''
+Process the following collected content for public opinion analysis:
+
+Content: {{collected_data}}
+
+Perform the following operations:
+1. Extract main text content
+2. Remove advertisements, navigation, and irrelevant content
+3. Convert encoding if necessary
+4. Deduplicate similar content
+5. Identify key entities (people, companies, locations, products)
+6. Perform sentiment analysis (positive/negative/neutral)
+7. Generate relevant tags
+
+Return in JSON format:
+{
+  "processed_content": "cleaned text",
+  "entities": [
+    {"type": "PERSON/COMPANY/LOCATION/PRODUCT", "name": "entity_name", "frequency": count}
+  ],
+  "sentiment": {
+    "score": -1 to 1,
+    "label": "POSITIVE/NEGATIVE/NEUTRAL"
+  },
+  "tags": ["tag1", "tag2"],
+  "metadata": {
+    "source": "source_name",
+    "date": "timestamp",
+    "word_count": count
+  }
+}
+''')
+
+define('tpl_enhanced_analysis', '''
+Enhance the analysis of the following content:
+
+Content: {{n_processed_data.processed_content}}
+Current entities: {{n_processed_data.entities}}
+Current sentiment: {{n_processed_data.sentiment}}
+
+Perform enhanced analysis:
+1. Cross-reference entities with knowledge base
+2. Analyze sentiment trends over time
+3. Identify emerging topics
+4. Generate dynamic tags based on context
+5. Calculate influence score
+
+Return enhanced JSON:
+{
+  "enhanced_entities": [
+    {
+      "name": "entity_name",
+      "type": "entity_type",
+      "sentiment_trend": "improving/declining/stable",
+      "mention_count": count,
+      "influence_score": 0-100
+    }
+  ],
+  "topic_clusters": [
+    {
+      "topic": "topic_name",
+      "related_entities": ["entity1", "entity2"],
+      "sentiment_distribution": {"positive": %, "negative": %, "neutral": %},
+      "trend": "emerging/stable/declining"
+    }
+  ],
+  "dynamic_tags": ["#financial_fraud", "#product_launch", "#policy_impact"],
+  "risk_level": "LOW/MEDIUM/HIGH"
+}
+''')
+
+define('tpl_report_generation', '''
+Generate a comprehensive public opinion analysis report:
+
+Analysis Topic: {{topic}}
+Analysis Period: Last {{period_days}} days
+Data Sources: {{channels}}
+
+Key Findings:
+1. Content Volume: {{fn.size(collected_data)}} items collected
+2. Sentiment Distribution: {{n_enhanced_analysis.topic_clusters[0].sentiment_distribution}}
+3. Top Entities: {{fn.slice(n_enhanced_analysis.enhanced_entities, 0, 5)}}
+4. Emerging Topics: {{fn.filter(n_enhanced_analysis.topic_clusters, 'cluster -> cluster.trend == "emerging"')}}
+5. Risk Assessment: {{n_enhanced_analysis.risk_level}}
+
+Generate a markdown report with:
+- Executive Summary
+- Methodology
+- Key Findings
+- Sentiment Analysis
+- Entity Analysis
+- Topic Clusters
+- Risk Assessment
+- Recommendations
+- Appendix: Similar Content Found
+
+Format the report professionally with charts and data visualization suggestions.
+''')

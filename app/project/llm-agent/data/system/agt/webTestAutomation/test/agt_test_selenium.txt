@@ -1,0 +1,890 @@
+/*
+{
+	"title":"Generate selenium script",
+	"description":"Generate seleniumn for test requirement",
+	"parameter":"test_no=测试编号&current_step=当前验证步骤&steps=完整验证步骤&system=系统名称&envinfo=environment information&taskType=任务类型",
+	"resultPlan":"n_python_file",
+	"life":50,
+	"version":1
+}
+*/
+// get current url
+n_get_page_path_info, act_rpa.send?command=GetPageInfo
+act_memory.assign?var=current_page_path_info&value={{n_get_page_path_info}}&global=true
+
+n_envinfo, act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'
+assign('envinfo', '{{n_envinfo}}')
+
+// Try to run existed code
+agt_test_run_exist_code?test_no={{test_no}}&step_index={{step_index}}&current_step={{current_step}}&steps={{steps}}&system={{system}}&envinfo={{envinfo}}
+
+// Run code successfully, go to end
+act_flow.go?plan=end
+
+// Try to use the standard analysis procedure
+on_failure({
+	// Force to success status
+	act_flow.success
+})
+
+// Use selenium
+assign('pythonType', 'selenium', 'subfolder', '{{test_no}}')
+n_global_variable, act_memory.retrieve?var=global_variable&global=true
+// Check task type
+when('!fn.hasValue(taskType)', {
+	// Set default task type
+	assign('taskType', 'OPERATION_EXECUTE_TASK')
+})
+
+//# Collect page information
+n_collect_page, act_rpa.send?command=CollectPageInfo,act_func?name=StepTestInfo
+
+// Check for multiple failures
+when('sys_run_count>3', {
+	// Multiple failures, announce task failure
+	act_flow.fail?result={{fn.json("failure_count, sys_run_count, error_info, sys_hint_agt")}}
+})
+
+// Split test step
+when('taskType=="DYNAMIC_SELECT_TASK"', {
+	// Split test step for dynamic task, only choose first step
+	tpl_dynamic_task_split, act_memory.assign?var=element_info_step&value='{{sys_last_result[0]}}'
+}, {
+	// Prepare the material of element analysis
+	assign('element_info_step', '{{current_step}}')
+})
+
+// Analyse action type
+n_action_type,tpl_get_action_type,psr_json_python
+assign('result', '{{n_action_type}}')
+
+when('result.need_page_info=="true"',{
+	// 关于vrf_flag规则的解释：为对话框模式或者没有页面元素时，直接pass，否则要求给出具体的元素
+	// Analyse page elements and call agent to save it
+ 	tpl_task_element_info, psr_json,\
+			vrf_flag?value='fn.when(fn.bool(sys_last_result, "hasDialog") || StepTestInfo.pageinfo_size==0, true, fn.hasValue(sys_last_result,"prefer,alternative,related"))',\
+			vrf_func?name=CheckElements,\
+			agt_save_explorer?columns='''
+				test_no, test_no, step, StepTestInfo.current_step, task_type, taskType,
+				element_info, StepTestInfo.simplepageinfo, related_element_info, tpl_task_element_info'''
+},
+{
+	// Set page info to None
+	assign('tpl_task_element_info', '{}')
+})
+
+
+when('result.action_type!="table"',{
+	// Try to run triple code 
+	agt_test_step_to_triple?test_no={{test_no}}&step_index={{step_index}}&current_step={{current_step}}&steps={{steps}}&system={{system}}&envinfo={{envinfo}}&collect_page={{n_collect_page}}&StepTestInfo={{StepTestInfo}}
+
+	// Run code successfully, go to end
+	act_flow.go?plan=end
+
+	// Try to use the standard analysis procedure
+	on_failure({
+		// Force to success status
+		act_flow.success
+	})
+})
+
+
+when('result.action_type=="OpenUrl"',{
+	// Gen OpenUrl code by action type
+	n_result, agt_test_selenium_open_url?current_step={{current_step}}&envinfo={{envinfo}}
+})
+
+when('result.action_type=="dependOn"',{
+	// Gen dependOn code by action type
+	n_result, agt_test_selenium_dependon?current_step={{current_step}}&system={{system}}&version={{version}}&envinfo={{envinfo}}
+})
+
+when('result.action_type=="table"',{
+	// Gen table code by action type
+	n_result, agt_test_selenium_table?current_step={{current_step}}
+})
+
+when('result.action_type=="Select"',{
+	// Gen Select code by action type
+	n_result, agt_test_selenium_select?current_step={{current_step}}&element_info={{tpl_task_element_info}}
+})
+
+when('result.action_type=="UploadFile"',{
+	// Gen UploadFile code by action type
+	n_result, agt_test_selenium_upload_file?current_step={{current_step}}&element_info={{tpl_task_element_info}}
+})
+
+when('result.action_type=="saveHistoryData"',{
+	// Gen saveHistoryData code by action type
+	n_result,agt_test_selenium_save_memory?current_step={{current_step}}
+	// python_codepython_code
+	assign('python_codepython_code', '{{n_result.python_code}}')
+})
+
+
+when('n_result.result=="true"', {
+	// Get python_code by action type
+	assign('python_code', '{{n_result.python_code}}')
+},
+{
+	// Get python_code by tpl_test_script 
+	n_python_code,tpl_test_script, psr_python
+	assign('python_code', "{{n_python_code}}")
+})
+
+
+// Write temporary selenium script
+n_python_file_2, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{python_code}}
+assign('python_file', '{{n_python_file_2.kbspath}}')
+assign('python_code', '{{n_python_file_2.sourceCode}}')
+
+//# Run selenium script through RPA client
+n_rpa_test,act_rpa.send?name={{python_file}}
+act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,sys_last_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+act_memory.assign?var=ACExecuteCodeResult&value={{n_rpa_test}}&global=true
+// time sleep 3 seconds
+act_flow.wait?second=3
+
+//# Collect page information again
+n_collect_page_again, act_rpa.send?command=CollectPageInfo
+assign('new_collect_page', '{{n_collect_page_again}}')
+n_result,agt_test_action_type?current_step={{current_step}}&StepTestInfo={{StepTestInfo}}&new_collect_page={{new_collect_page}}
+
+// Write python script to new path
+agt_test_save_file?current_step={{current_step}}&test_no={{test_no}}&sourceCode={{python_code}}
+
+// Check if dialog exists
+when('n_cmp1.hasDialog', {
+	// 考虑用tpl自动检测：n_test_step.nextItem
+	// Add new step
+	n_need_close, tpl_check_hasDialog
+	// n_result_n_result n_result_n_result
+	assign('need_close_need_close_need_close', '{{n_need_close}}')
+	when('n_need_close.need_close', {
+		n_plan_result, act_plan.add?agent=agt_test_steps_run&var=n_test_step&plan='Click the button to close the pop-up window_{{step_index+1}}'
+	
+		// Save to KB
+		when('n_plan_result.success', {
+			// Clean old plan and save new plan to KB
+			act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'
+			n_map_list,act_kb.convert?data={{steps}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'
+			act_kb.importData?name=kb_testcase_step&data={{n_map_list}}
+		})
+	})
+})
+
+// Try to fix script error
+on_failure({
+	// Collect page information when failure
+	n_fail_rpa_coll, act_rpa.send?command=CollectPageInfo
+
+	// Analysis page information
+	rag_func?name=StepTestInfo, tpl_task_page_info, agt_save_explorer?columns='page,tpl_task_page_info.pageName,url,tpl_task_page_info.pageUrl,page_type,tpl_task_page_info.pageType,tip_message,tpl_task_page_info.tipMessage!'
+
+	// Check for multiple failures
+	when('sys_run_count>3', {
+		// Multiple failures, announce task failure
+		act_flow.fail?result={{fn.json("failure_count, sys_run_count, error_info, sys_hint_agt")}}
+	})
+	
+	// Try to restore original page
+	when('fn.bool(tpl_task_page_info.hasDialog) && !fn.bool(tpl_task_element_info.hasDialog)', {
+		// Click the cancel button
+		act_rpa.send?command=RunDynamicScript&name='clickElementByItem(browser, "{{tpl_task_page_info.cancelElementId}}")'
+	})
+
+	// Try to fix the script
+	when('fn.hasValue(python_code)', {
+		// Collect page elements
+		tpl_task_element_info
+	
+		// Fix the script
+		n_fix_python_code,tpl_self_fix,psr_json_python
+		assign('python_code', "{{n_fix_python_code}}")
+		act_flow.go?plan={{fn.optional(plan, 'n_python_file_2')}}&step=act
+	}, {
+		// No python code, announce task failure 
+		act_flow.fail?result={{fn.json("failure_count, sys_run_count, error_info, sys_hint_agt")}}
+	})
+})
+
+// Return result
+assign('result', '{{fn.json("hasDialog, n_cmp1.hasDialog, python_file, n_python_file")}}')
+
+
+
+//# 在末尾将验证材料存储
+log('step_type=="VerifyExecute"')
+//# 拼接sql：根据 test_no、version、application 查找 步骤id
+assign('query_step_id_sql', 'select id from kb_testcase_step where version = {{version}} and test_no = {{test_no}} and application = {{system}}')
+n_step_id,act_kb.selectBy?sql='{{query_step_id_sql}}'
+//# 验证逻辑移动，需要将数据给到验证Agent
+assign('tableName', 'kb_test_case_instance_intermediates')
+assign('columnValues', '''
+{
+"verification_type": "{{step_type}}",
+"dom_before": "{{fn.str(StepTestInfo.simplepageinfo)}}",
+"dom_after": "{{fn.str(new_collect_page)}}",
+"key_elements_info": "{{fn.str(tpl_task_element_info)}}",
+"llm_final_result": "{{fn.str(n_cmp1)}}",
+"is_valid": "{{fn.bool(n_cmp1.run_success)}}",
+"python_code_used": "{{python_code}}"
+}
+''')
+assign('whereCondition', '{"test_step_id":"{{n_step_id}}"}')
+// 将验证数据存储到数据库
+when('fn.hasValue(tableName) && fn.hasValue(columnValues) && fn.hasValue(whereCondition)', {  
+	// 3. 调用 act_kb.merge 合并数据  
+	// 注意：columnValues 和 where 参数需要是 JSON 字符串，这里使用 fn.str() 将 Map 转为字符串  
+	n_merge_result, act_kb.merge?name='{{tableName}}'&columnValues='{{fn.str(columnValues)}}'&where='{{fn.str(whereCondition)}}'  
+	//# 存储用于验证的资料是否成功
+	log('{{n_merge_result}}')
+}, {  
+	//# 存储用于验证的资料 数据结构缺失，构建失败
+	log('{"error": "输入数据无效，请提供包含 tableName, columnValues 和 where 的 JSON 字符串"}')  
+})  
+
+
+
+// 判断弹框界面
+define('tpl_check_hasDialog', '''
+- Role: web自动化测试的专家
+- Background: 根据"当前测试步骤"以及弹框的页面元素，判断弹框是否需要关闭
+- Profile: 你是一位经验丰富的测试自动化工程师，熟悉软件测试流程，擅长使用各种测试工具和技术，能够准确地识别和匹配页面元素，对测试结果进行精确的分析和输出。
+- Skills: 你具备资深web测试能力、JSON数据处理能力以及逻辑分析能力。你能够熟练使用Selenium库进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。
+- Workflow:
+    1. 分析'当前测试步骤'以及弹框的页面元素
+    2. 根据分析结果，生成符合要求的JSON格式审查结果。
+
+- Examples:
+  - 例子1：如果分析结果为弹框需要被关闭，只返回json数据:
+    ```json
+    {"need_close": "true"}
+    ```
+- 例子2：如果分析结果为弹框不需要被关闭，只返回json数据:
+    ```json
+    {"need_close": "false"}
+    ```
+	# 本次局部测试步骤：
+
+{{element_info_step}}
+
+# 完整的测试步骤为：
+{{StepTestInfo.steps}}
+
+# 弹框的页面元素(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, children:[子元素信息]}...])： 
+{{StepTestInfo.simplepageinfo}}
+
+
+# 返回弹框界面是否需要关闭
+{"need_close"："xxxx"}
+
+''')
+
+// 动态选择元素的步骤分解
+define('tpl_dynamic_task_split', '''
+	你是测试专家，结合"完整测试步骤"作为参考，分析“本次局部测试步骤”，它的任务类型是DYNAMIC_SELECT_TASK， 请分析它要做的动作，不要做的动作，提供一个分解的描述：第一步为：选定什么样的元素，第二步为：做什么样的动态选择。直接用JSON返回：["XXX"， "XXX"]
+	
+	# 本次局部测试步骤：
+	{{current_step}}
+	
+	# 完整的测试步骤为：
+	{{steps}}
+''')
+
+// 结合需求分析页面元素
+define('tpl_task_element_info', '''
+	/*{
+		"llmType":""
+	}*/
+- Role: 测试自动化工程师
+- Background: 用户需要对局部测试步骤进行自动化测试，通过识别目标元素来完成测试任务。
+- Profile: 你是一位经验丰富的测试自动化工程师，熟悉软件测试流程，擅长使用各种测试工具和技术，能够准确地识别和匹配页面元素，对测试结果进行精确的分析和输出。
+- Skills: 你具备强大的编程能力，熟悉JSON数据结构和页面元素操作，能够快速定位和匹配元素，同时具备良好的逻辑思维和问题解决能力。
+- Goals:
+  1. 提取局部测试步骤中的目标元素。
+  2. 在完整测试步骤中定位局部测试步骤的上下文。
+  3. 匹配待测试页面中的元素。
+  4. 检查页面状态并生成相应的测试结果。
+- Constrains: 严格按照测试步骤和页面状态进行操作，确保测试结果的准确性和可靠性。
+- OtherInformation:
+  元素类型`type`说明:
+    - dynamic-select-item: 表示动态生成的可选择项（通常是下拉框选项或菜单项）。用于下拉框、单选/多选菜单的选项。
+    - dynamic-select: 表示动态生成的下拉选择框（<select> 元素）。用户需要从中选择一项的表单控件。
+    - dynamic-menu: 表示动态生成的菜单项或交互式元素（如链接、按钮、输入框等）。子类型：按钮（tag: "button"）：如提交按钮。输入框（tag: "input"）：如文本输入框。链接（tag: "link"）：如导航菜单项。
+    - div / container: 表示容器元素（通常是<div>），用于包裹其他子元素。用途：布局或分组页面内容。
+    - date: 表示日期选择器或日期显示字段。 用于日期输入或展示。
+    - textarea: 表示多行文本输入框（<textarea>）。用户输入长文本（如备注、描述）。
+    - input: 表示单行文本输入框（<input type="text">）。注意：部分输入框可能被归类为 dynamic-menu。
+    - text: 表示纯文本元素（静态文本或标签）。用于显示不可交互的文本（如标题、标签）。
+    - link: 表示超链接（<a> 元素）。用途：导航或跳转链接。
+  其他注意事项: 
+    - notInView 属性：若为 true，表示元素当前不可见（如被弹窗遮挡或滚动隐藏）。
+    - disabled 属性：表示元素是否禁用（不可交互）
+    - placeholder 属性：输入框的占位提示文本。
+  这些 type 主要用于描述元素的交互类型和功能，帮助自动化测试工具定位和操作元素。实际测试时需结合 tag、name 和上下文进一步匹配。
+- OutputFormat: 生成符合verifyResult_1或verifyResult_2结构的JSON格式结果。
+- Workflow:
+  1. 提取局部测试步骤中的目标元素,括号内容为提示信息。
+  2. 在完整测试步骤中定位局部测试步骤所在的步骤位置。
+  3. 根据上下文确定该步骤涉及的页面操作，如选择下拉框选项。
+  4. 在待测试的页面元素（JSON结构）中查找与目标元素名称或文本匹配的元素。
+  5. 将匹配到的元素按以下分类：
+     - prefer：完全匹配的有效元素。
+     - alternative：可能存在问题的元素，如命名类似但上下文不符。
+     - related：关联但不是主要目标的元素，如该选项所在的下拉框。
+  6. 检查页面状态：
+     - 判断是否存在弹窗（hasDialog），即是否有notInView=true的元素。
+     - 检查页面pageTitle：
+       - "新标签页"或"Browser is closed" → 返回verifyResult_1，无需匹配元素。
+       - 服务器错误 → 返回verifyResult_2，说明服务器未能正常启动。
+  7. 根据分类匹配的元素和页面状态，生成符合verifyResult_1或verifyResult_2结构的
+
+- example:
+  - 不同场景的JSON输出结果参考
+    情况1：当待待测试的页面元素为`[""]`,或者为`Browser is closed`,无需进行元素定位，回复：{"type":"verifyResult_1","result":{}}
+	情况2：有匹配的数据。回复：{{fn.task().result('{"prefer": [有效的元素], "alternative": [有问题的元素] ...}')}}
+	情况3：“待测试的页面元素”显示服务器错误，说明服务器未能正常启动。回复：{{fn.task(false).thought("服务器页面加载错误")}}
+  - JSON输出结果的结构为：
+    # JSON输出结果的结构为：
+	{
+		"type": "verifyResult_1或verifyResult_2",		// 可参考后面的不同场景的介绍，注意新标签页适应于情况1
+		"result":{
+			"prefer": [{"id":xxx,"name":"匹配的元素名","tag":"xxx","value":"xxx",remark:"可选的20字以内的备注"}...] 	// 请务必完整列出有效的元素。没有元素时，为空
+			"alternative": [{"id":xxx,"name":"匹配的元素名","tag":"xxx","value":"xxx",remark:"可选的20字以内的备注"}...]		// 有问题的元素
+			"related": [{"id":xxx,"name":"关联的元素","tag":"xxx",remark:"可选的20字以内的备注"}]			// 本次局部测试中涉及的关联元素，比如局部测试步骤："填写托管人的其他身份證"，如果页面有"托管人"元素，那么它可作为关联元素输出
+			"hasDialog": true/false		// 页面是否存在可见的弹窗（注：“可见”意味着弹窗元素不可以存在notInView=true的属性）
+		}
+	}
+	关于remark字段的说明：
+        - 用于有多个同名的元素时，加上有业务含义的辅助的remark进行区别。
+        - 用于表格字段时，备注表头和列
+        - 若元素属于下拉框选项: "remark":"select-item"
+
+
+# 本次局部测试步骤：
+{{element_info_step}}
+
+# 完整的测试步骤为：
+{{StepTestInfo.steps}}
+
+# 待测试的页面元素(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, children:[子元素信息]}...])： 
+{{StepTestInfo.simplepageinfo}}
+
+{{sys_hint}}
+
+
+	
+# JSON结果中的alternative，来自下面文字中提及有问题的元素：
+{{fn.removeHintFlag(sys_hint_agt)}}
+
+    
+''')
+
+// 分析页面结构
+define('tpl_task_page_info', '''
+	你是熟悉selenium的大模型，请按照检查方法的引导，检查“页面信息”，请分析出页面名称、弹窗信息，用json回复。
+	
+	# json回复格式：
+	{"pageName":xxx页面，"pageUrl":页面url, "tipMessage":xxx页面提示信息，"pageType": 界面类型(可选为：表格界面，表单界面，其他), "hasDialog":true/fase, "elements":[{"name":xxx, "id":xxx}...], "cancelElementId":xxx, "confirmElementI":xxx}
+
+	# JSON回复内容的要求：
+	1. 数据需要来自页面信息，不可自己假设数据
+	2. tipMessage是查询页面的没有匹配的提示，或者是输入页面的输入错误提示。没有tipMessage时，无需返回tipMessage
+	3. elements为弹窗的页面元素，包括：确认按钮，取消按钮，其中cancelElementId为取消按钮的id, confirmElementId为确认按钮的id。hasDialog为false时，无需返回:elements,cancelElementId,confirmElementId
+	4. elements宁愿返回空值，也不可编造，每个值必须完全来自页面信息
+
+	# 检查方法：
+	1. 页面名称：先分析页面布局，聚焦他的顶部内容进行分析，特别是导航关键词：“主页>xxx”。 同时结合pageUrl所表示的含义，进行确定。依然无法确定时，回复不确定。
+	2. 弹窗元素信息：需要识别出弹窗的框体元素，确认按钮，取消按钮。
+	3. tipMessage：如果有显示，通常其位置是紧随在页面的头部下边。
+	4. pageUrl：来自页面信息中的字段pageUrl
+	
+	# 页面信息(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, rect: 元素坐标，children:[子元素信息]}...])：
+	{{StepTestInfo.pageinfo}}
+''')
+
+// Generate script
+define('tpl_test_script',"""
+- Role: Python自动化测试脚本开发专家
+- Background: 用户需要一个Python函数`run(browser)`，该函数将被主模块以`module.run(browser)`的方式调用，用于实现特定的自动化测试步骤。用户提供了详细的测试脚本要求、实际页面元素信息以及来自`autotest`库的可调用函数列表。用户希望对代码进行审查，以确定是否存在需要替换的元素，并根据审查结果返回特定的JSON格式结果。此外，用户还要求`局部测试步骤`依赖于`主模块涉及的测试步骤`的前序步骤，这些前序步骤环境和条件已经准备好，根据分析结果，返回`局部测试步骤`目的，生成`局部测试步骤`的代码。
+- Profile: 你是一位精通Python编程和自动化测试的专家，对Selenium库和自动化测试框架有深入的理解和丰富的实践经验。你熟悉JSON格式的数据处理，能够准确地分析代码逻辑，并根据实际页面元素信息生成符合要求的测试脚本。
+- Skills: 你具备Python编程能力、自动化测试脚本开发能力、JSON数据处理能力以及逻辑分析能力。你能够熟练使用Selenium库进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。
+- Goals: 
+    1. 分析`局部测试步骤`依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤分析结果，返回前序步骤已经完成的操作. 
+    3. 审查`run(browser)`函数代码，确定是否存在需要替换的元素。
+    4. 根据审查结果，按照指定的JSON格式返回结果。
+    5. 根据JSON格式结果和`局部测试步骤`目的,决定是否生成符合局部测试步骤要求的Python代码。
+- Constrains: 
+  1.优先使用`autotest`库中封装的方法:
+    {{fn.when("taskType=='OPERATION_EXECUTE_TASK'", "
+	- gotoPage(browser, systemName, url), 用于打开指定的页面,验证页面并等待页面加载完成,systemName为待测试系统名,url为待测试的页面地址
+	")}}
+	{{fn.when("taskType=='DYNAMIC_SELECT_TASK'", "
+	- existElement(browser, item, target_text), 基于item获取元素或容器的xpath，并检查该元素或其子元素中是否包含指定的文本（target_text）。这里的target_text代表要查找的状态描述或任意文字内容。如果元素或其内部包含与target_text相匹配的文本，则函数返回True；否则返回False
+	")}}
+    - getXpathByItem(browser, item),基于item获取页面元素的xpath,元素不存在时返回None.注：如果同时涉及点击动作，建议直接使用clickElementByItem或sendKeysToElementByItem或selectByItem
+    - loadTestData(category), 用于加载测试数据,返回为List<json>, 为页面的字段的列表数据
+    - writeResult(success, desc),记录执行结果,success为测试是否成功的true/false标志,desc为结果的说明
+    - clickElementByItem(browser, item, waitSecond, disableLog), 用于元素点击. 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False.
+    - sendKeysToElementByItem(browser, item, keys),用于文字输入. 基于item查询对应的xpath,并基于xpath定位元素,输入keys所代表的字符.成功返回True,否则返回False.
+    - selectByItem(browser, item, condition), 可以直接作用于要选择的选项元素,item 参数应该直接指向可选择的选项元素,condition是选项名称; 
+    - getBrowser(),用于获得已经初始化的WebDriver（webdriver.Chrome）,返回为browser
+	- copyData(browser, item), 用于复制数据，item为分析页面元素后得到的元素信息，item不能含有xpath信息
+	- pasteCopyData(browser, item), 用于粘贴数据，基于item查询对应的xpath,并基于xpath定位元素,输入后台已保存的数据.成功返回True,否则返回False.
+    注意item可以是json字符串,也可以是python dict类型; condition为python字符串类型
+
+  2.生成的Python代码要求:
+    - 代码第二行需要标注`run function dynamic parameters:`: 例如输入用户名字 '''{"user":"tester"}'''
+    - 代码注释必须要用英文
+    - 必须符合测试脚本要求，使用Selenium 4版本的方法。比如：它定位元素用的是browser.find_elements(By.XPATH, 'xxx')
+    - 只能使用实际页面元素中列出的元素，不能假设不存在的元素。
+    - 生成的代码应仅包含局部测试步骤，不补充前面步骤或提前实现后面步骤的代码。
+    - 优先使用autotest中封装的方法。如果必须使用selenium的原生的find_elements, xxx_element_located等方法时，不可直接使用item中的mapping id，比如：@id="id_XXX"
+    - 请先调用getXpathByItem获取真实的xpath， 然后才可以使用原生方法
+    - 测试结果（无论成败）需要调用函数writeResult(sucess, desc)。
+    - 使用autoptest中的可调用函数：xxxByItem，实现对元素的操作
+  {{fn.when("taskType=='DYNAMIC_SELECT_TASK'", "
+    - 动态过滤的具体步骤为：对上面的“实际页面元素”中的prefer元素逐个分析，过滤出符合条件的元素列表。比如：perfer_items=[xxx]
+    [item for item in prefer_items if yes/not existElement(browser, item, '进行中') and xxx，表示排除'进行中'这一状态的过滤结果
+    - 随机选择元素为：import random, 然后：random.choice(filtered_items)
+  ", "
+    - 对于关闭弹窗的测试步骤，应加入元素判断，如果有弹窗按钮，再通过点击按钮去关闭弹窗. if getXpathByItem(browser, close_button_item): success = clickElementByItem(browser, close_button_item)
+    - 只有“局部测试步骤”明确说明要跳转某个具体的url时，才可引入gotoPage语句，注意gotoPage自带验证，无需二次验证页面是否加载成功
+  ")}}
+  3.run函数必须传入参数:
+    - 第一个参数必须是browser浏览器实例 例如 `def run(browser):` 
+    - 其它传入参数根据步骤自己定义参数名称
+	- 最后必须添加`**kwargs`参数,用于接收其他可选参数
+  4.分析选择的操作元素是否正确,并用独立的JSON格式返回结果：
+	- 选择的正确的情况: 场景：如打开首页等无需元素收集的操作,或者 操作元素选择正确 , 处理：直接进入下一流程,返回格式：{"type": "verifyResult_1", "plan": "next"},则生成对应的Python代码
+	- 需修正的元素情况：场景： 检测到非实际页面元素，但可提供具体修正方案 处理：返回修正建议（不生成代码）
+	用JSON格式返回：{{fn.task(false).thought('补充思考').suggest('建议修正方法XXXX')}},不需要生成Python代码
+	- 需重新收集元素的情况: 场景：检测到非实际页面元素且需重新采集 处理：切换至元素收集计划（n_collect_page）不需要生成Python代码
+	用JSON格式返回：{{fn.task().thought('假设的元素XXX，或者需要替换的元素XXX').suggest('建议修正方法XXXX').plan('n_collect_page')}}
+
+- OutputFormat: 
+    1.`局部测试步骤`位置及依赖的前序步骤
+    2.结合`补充解释`和`局部测试步骤` 返回精准指令的结果
+    3.根据精准指令结果和元素信息,需要选择什么元素进行操作
+    4.JSON格式的审查结果。
+    5.JSON格式结果,决定是否生成符合局部测试步骤要求的Python代码。
+- Workflow:
+    1. 分析`局部测试步骤`位置及依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤分析结果，返回前序步骤已经完成的操作和`局部测试步骤`精准指令. 
+    3. 根据精准指令结果和元素信息,需要选择什么元素进行操作
+    4. 分析实际页面元素信息，选择的操作元素是否正确,。
+    5. 根据分析结果，生成符合要求的JSON格式审查结果。 
+    6. 若JSON格式是{"type":"verifyResult_1","plan":"next"},则生成对应的Python代码,代码注释必须要用英文。
+- Examples:
+  - 例子1：假设代码中存在需要替换的元素，只返回json数据:
+    具体的修正方案:
+    {{fn.task(false).thought('补充思考xxxx内容').suggest('建议修正方法XXXX')}}
+    需要重新收集页面元素，进行二次替换:
+    {{fn.task().thought('假设的元素XXX，或者需要替换的元素XXX').suggest('建议修正方法XXXX').plan('n_collect_page')}}
+  - 例子2：代码中的元素都是来自实际页面元素。
+    ```json
+    {
+      "type": "verifyResult_1",
+      "plan": "next"
+    }
+    ```
+```python
+# -*- coding: utf-8 -*-
+# run function dynamic parameters:
+'''{"item":{"id":"id_2442932471","name":"OKP FI CI Maintenance","tag":"DIV","value":"","remark":"点击目标元素"}}'''
+from autotest import *
+
+def run(browser,item = {"id":"id_2442932471","name":"OKP FI CI Maintenance","tag":"DIV","value":"","remark":"点击目标元素"},**kwargs):
+	try:
+		success = clickElementByItem(browser, item)
+		if not success:
+		writeResult(False, "Failure explanation xxxx")
+		return
+		writeResult(success, "Step Success Description xxxx")
+	except Exception as e:
+		writeResult(False, "An error occurred during the test: " + str(e))
+```
+  - 例子3：打开网页。
+    ```json
+    {
+      "type": "verifyResult_1",
+      "plan": "next"
+    }
+    ```
+```python
+# -*- coding: utf-8 -*-
+# run function dynamic parameters:
+'''{"system_name":"system_name","url":"http://xxxxx"}'''
+from autotest import *
+
+def run(browser,system_name = "system_name", url = "http://xxxxx"):
+	try:
+		success = gotoPage(browser, system_name, url)
+		if not success:
+		writeResult(False, "Failed to navigate to the specified URL: " + url)
+		return
+		writeResult(success, "Step Success Description xxxx")
+	except Exception as e:
+		writeResult(False, "An error occurred during the test: " + str(e))
+```
+  - 例子4：输入内容。
+    ```json
+    {
+      "type": "verifyResult_1",
+      "plan": "next"
+    }
+    ```
+```python
+# -*- coding: utf-8 -*-
+# run function dynamic parameters:
+'''{"system_name":"system_name","url":"http://xxxxx"}'''
+from autotest import *
+
+def run(browser,item =  {"id":"id_xxxx","name":"user_name","tag":"input","value":"","remark":"输入元素"}, keys = "user1"):
+	try:
+		success =  sendKeysToElementByItem(browser, item, keys)
+		if not success:
+		writeResult(False, "Failure explanation xxxx")
+		return
+		writeResult(success, "Step Success Description xxxx")
+	except Exception as e:
+		writeResult(False, "An error occurred during the test: " + str(e))
+```
+
+
+
+	# 局部测试步骤为（共1步, 注意：不要自主补充前面步骤已经完成过的代码，不要提前实现后面步骤待完成的代码。如果页面已经准备好，不用再次gotoPage）：
+	{{StepTestInfo.current_step}}
+
+	# 主模块涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+
+	{{sys_hint}}
+	{{sys_hint_agt}}
+		
+	# 补充解释：
+	{{envinfo}}
+		
+	# 实际页面元素：(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, value:表单元素的值, id: 用于定位元素的mapping id, children:[子元素信息]}...])：
+	{{tpl_task_element_info}}
+""")
+// 结果比较
+define('tpl_test_script_no_element',"""
+- Role: Python自动化测试脚本开发专家
+- Background: 用户需要一个Python函数`run(browser)`，该函数将被主模块以`module.run(browser)`的方式调用，用于实现特定的自动化测试步骤。用户提供了详细的测试脚本要求、实际页面元素信息以及来自`autotest`库的可调用函数列表。用户希望对代码进行审查，以确定是否存在需要替换的元素，并根据审查结果返回特定的JSON格式结果。此外，用户还要求`局部测试步骤`依赖于`主模块涉及的测试步骤`的前序步骤，这些前序步骤环境和条件已经准备好，根据分析结果，返回`局部测试步骤`目的，生成`局部测试步骤`的代码。
+- Profile: 你是一位精通Python编程和自动化测试的专家，对自动化测试框架有深入的理解和丰富的实践经验。你熟悉JSON格式的数据处理，能够准确地分析代码逻辑，并根据实际页面元素信息生成符合要求的测试脚本。
+- Skills: 你具备Python编程能力、自动化测试脚本开发能力、JSON数据处理能力以及逻辑分析能力。你能够熟练使用用户提供封装的方法进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。
+- Goals: 
+    1. 分析`局部测试步骤`依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤分析结果，返回前序步骤已经完成的操作. 
+    3. 审查`run(browser)`函数代码，确定是否存在需要替换的元素。
+    4. 根据审查结果，按照指定的JSON格式返回结果。
+    5. 根据JSON格式结果和`局部测试步骤`目的,决定是否生成符合局部测试步骤要求的Python代码。
+- Constrains: 
+  1.优先使用`autotest`库中封装的方法:
+    
+	- gotoPage(browser, systemName, url), 用于打开指定的页面,验证页面并等待页面加载完成,systemName为待测试系统名,url为待测试的页面地址
+	
+
+  2.生成的Python代码要求:
+    - 代码第二行需要标注`run function dynamic parameters:`: 例如输入用户名字 '''{"user":"tester"}'''
+    - 代码注释必须要用英文
+    - 生成的代码应仅包含局部测试步骤，不补充前面步骤或提前实现后面步骤的代码。
+  
+  3.run函数必须传入参数:
+    - 第一个参数必须是browser浏览器实例 例如 `def run(browser):` 
+    - 其它传入参数根据步骤自己定义参数名称
+  4.分析是否有需要替换的元素的情况，review该python函数并用独立的JSON格式返回结果：
+    - 代码中的元素有些不是来自"实际页面元素"，并且可找到具体的修正方案，那么：
+	用JSON格式返回：{"type":"verifyResult_2","thought":"{"reasoning":"补充思考","suggest":"建议修正方法XXXX"}"},不需要生成Python代码
+	- 代码中的元素有些不是来自"实际页面元素"，需要重新收集页面元素，进行二次替换。那么，切换plan为n_collect_page。不需要生成Python代码
+	用JSON格式返回：{"type":"verifyResult_1","plan":"n_collect_page","thought":"{"reasoning":"假设的元素XXX，或者需要替换的元素XXX","suggest":"建议修正方法XXXX"}"}
+	- 代码中的元素都是来自"实际页面元素", 或者是首个步骤无需给出元素列表，可进入下一个流程。
+	用JSON格式返回：{"type":"verifyResult_1","plan":"next"}。则生成对应的Python代码
+
+- OutputFormat: 
+    1.`局部测试步骤`位置及依赖的前序步骤
+    2.结合`补充解释`和`局部测试步骤` 返回精准指令
+    3.JSON格式的审查结果。
+    4.JSON格式结果,决定是否生成符合局部测试步骤要求的Python代码。
+- Workflow:
+    1. 分析`局部测试步骤`位置及依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤分析结果，返回前序步骤已经完成的操作. 
+    3. 由于未收集到实际页面元素信息，结合`补充解释`是否可以完成本次`局部测试步骤`指令。
+    4. 根据分析结果，生成符合要求的JSON格式审查结果。
+    5. 若JSON格式是{"type":"verifyResult_1","plan":"next"},则生成对应的Python代码,代码注释必须要用英文。
+- Examples:
+  - 例子1：打开网页。
+    ```json
+    {
+      "type": "verifyResult_1",
+      "plan": "next"
+    }
+    ```
+```python
+# -*- coding: utf-8 -*-
+# run function dynamic parameters:
+'''{"system_name":"system_name","url":"http://xxxxx"}'''
+from autotest import *
+
+def run(browser,system_name = "system_name", url = "http://xxxxx"):
+	try:
+		success = gotoPage(browser, system_name, url)
+		if not success:
+		writeResult(False, "Failed to navigate to the specified URL: " + url)
+		return
+		writeResult(success, "Step Success Description xxxx")
+	except Exception as e:
+		writeResult(False, "An error occurred during the test: " + str(e))
+```
+	
+# 局部测试步骤为（共1步, 注意：不要自主补充前面步骤已经完成过的代码，不要提前实现后面步骤待完成的代码。如果页面已经准备好，不用再次gotoPage）：
+{{StepTestInfo.current_step}}
+
+# 主模块涉及的测试步骤为：
+{{StepTestInfo.steps}}
+
+{{sys_hint}}
+{{sys_hint_agt}}
+	
+# 补充解释：
+{{envinfo}}
+	
+# 实际页面元素：(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, value:表单元素的值, id: 用于定位元素的mapping id, children:[子元素信息]}...])：
+{{tpl_task_element_info}}
+""")
+
+
+// 修改代码
+define('tpl_self_fix', '''
+	你是一个熟悉selenium4的大模型，现在有一个局部的测试用例描述，请判断上次任务的结果失败的原因(目前已经修【{{sys_run_count}}】次)，选择合适的应对方案，用指定的JSON格式返回。
+	如有可能修正上次任务的python代码，那么返回2个结果，一个为不含代码的JSON，另一个为python代码标记的代码块(此时，第一个JSON结果的canFix为true)。
+
+	# 局部的测试用例描述：
+	{{StepTestInfo.current_step}}
+	
+	# 主模块涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+		
+	# 上次任务的代码：
+	{{python_code}}
+	
+	# 检查"上次任务的代码"，使之符合下面的3条要求后，再继续接下来的分析：
+	1. 涉及元素定位时，只可使用autotest中的可调用函数
+	2. 移除代码中出现的gotoPage，如果它不属："当前步骤"明确指定需要gotoPage
+	3. selenium的代码请基于版本4
+	
+	{{sys_hint_agt}}
+
+	# 页面元素信息以及与弹窗有关的元素信息：
+	{{tpl_task_page_info}}
+	{{tpl_task_element_info}}
+
+	# 可选择的失败原因及应对方案如下，请仔细的逐一思考，先排除了原因1才需要思考原因2，排除了原因2才需要思考原因3。（其中的plan字段流程标记，不要改动，step_xxx指完整测试步骤的某一步) 
+	原因1. 有弹框存在时，或者有新的弹窗再次弹出时，应该是点击“确认”关闭弹窗，无论成功失败都不用记录日志，直接继续后续的点击元素的操作。
+	应对方案：基于新提示给出修正后的python代码。并同时返回修正成功的JSON标记： {{fn.task().thought('遗漏xxx1步骤，需进行xxx操作').plan('next').put('canFix','true')}}
+
+	原因2. 执行反馈显示有弹窗或遮挡（element click intercepted），但是“弹窗有关的元素信息”中的hasDialog为false
+	应对方案：弹窗已经被关闭，考虑重新执行一次代码。{{fn.task().thought('原因2. xxx').plan('n_python_file_2','act')}}
+
+	原因3. 缺失import语句
+	应对方案：首行代码加入import语句，from autotest import XXX
+
+	原因4. 采用了原始的selenium函数进行元素定位，而非autotest中的函数：
+	应对方案：调整为优先使用sendKeysToElementByItem或者clickElementByItem这类函数，给出修正后的python代码。并同时返回JSON格式：{{fn.task().thought('xxx调整思路').plan('next').put('canFix','true')}}
+
+	原因5. 脚本错误：unexpected indent
+	应对方案：注意python代码的缩进问题，给出修正后的python代码。并同时返回JSON格式：{{fn.task().thought('xxx调整思路').plan('next').put('canFix','true')}}
+
+	原因6：代码和注释中，存在假设的内容，无足够信息修正
+	应对方案：由后续逻辑重新收集页面信息进行分析。并同时返回JSON格式：{{fn.task().thought('原因5. xxx').plan('n_collect_page')}}
+
+	原因7：代码和注释中，存在与当前局部的测试用例无直接关系的，假设的操作
+	应对方案：移除该假设的步骤，给出修正后的python代码。并同时返回修正成功的JSON标记： {{fn.task().thought('移除不相关的假设逻辑').plan('next').put('canFix','true')}}
+	
+	原因8. 库的内部问题或环境设置问题
+	思考过程中不要质疑autotest中的函数的定义问题，环境和库已经被其他脚本验证过多次，不要考虑增加等待条件，现有autotest的可调用函数已经内置了等待元素可点击，也不要加入假设存在的其他函数。回到应对方案1-7，重新思考
+
+	原因9. [{{sys_run_count}}]次修正错误，无法做出合适判断。
+	跳过本次判断，由后续逻辑思考，返回JSON格式： {{fn.task().thought('原因9. xxx').plan('n_collect_page')}}
+	
+	# 其中来自autotest的可调用函数（通过from autotest import XXX 导入下面的函数）：
+	其中item来自实际的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	{{fn.when("taskType=='VERIFICATION_TASK'", "\
+		1. getXpathByItem(browser, item),基于item获取页面元素的xpath.参数browser是已经构建好的webdriver.Chrome实例,参数item来自实际的页面元素.
+	")}}
+	{{fn.when("taskType=='DYNAMIC_SELECT_TASK'", "
+		1. existElement(browser, item, target_text), 基于item获取元素或容器的xpath，并检查该元素或其子元素中是否包含指定的文本（target_text）。这里的target_text代表要查找的状态描述或任意文字内容。如果元素或其内部包含与target_text相匹配的文本，则函数返回True；否则返回False
+		2. clickElementByItem(browser, item), 用于元素点击. 基于item查询对应的xpath，并基于xpath定位元素，等待元素可点击后，进行点击。点击成功返回True，否则返回False。
+		3. sendKeysToElementByItem(browser, item, keys)，用于文字输入. 基于item查询对应的xpath，并基于xpath定位元素，输入keys所代表的字符。成功返回True，否则返回False。
+		4. writeResult(success, desc)，记录执行结果，success为测试是否成功的true/false标志，desc为结果的说明
+		5. selectByItem(browser, item, condition), 用于下拉框选择. 基于item查询对应的xpath,并基于xpath定位select或mat-select,选择condition指定的过滤条件.成功返回True,否则返回False.
+	")}}
+	{{fn.when("taskType=='OPERATION_EXECUTE_TASK'", "
+		1. clickElementByItem(browser, item), 用于元素点击. 基于item查询对应的xpath，并基于xpath定位元素，等待元素可点击后，进行点击。点击成功返回True，否则返回False。
+		2. sendKeysToElementByItem(browser, item, keys)，用于文字输入. 基于item查询对应的xpath，并基于xpath定位元素，输入keys所代表的字符。成功返回True，否则返回False。
+		3. writeResult(success, desc)，记录执行结果，success为测试是否成功的true/false标志，desc为结果的说明
+		4. selectByItem(browser, item, condition), 用于下拉框选择. 基于item查询对应的xpath,并基于xpath定位select或mat-select,选择condition指定的过滤条件.成功返回True,否则返回False.
+	")}}
+#　完整的python代码示例：
+```python
+# -*- coding: utf-8 -*-
+# run function dynamic parameters:
+from autotest import *
+
+def run(browser,item = {"id":"id_2442932471","name":"OKP FI CI Maintenance","tag":"DIV","value":"","remark":"点击目标元素"}):
+	＃　业务逻辑代码
+```
+
+''')
+
+// 修改代码添加检测
+define('tpl_self_add_wait', '''
+	/*{
+		 "llmType":"alias.code"
+	 }*/
+	你是熟悉selenium 4的从事银行业务的高级测试，请基于下面的python代码需求，完成run函数。
+    # python函数：run(browser)
+	它将被主模块用run(browser)的方式调用。
+	{{python_code}}
+	
+	# python代码需求
+	在run的结尾，添加：waitElement(browser, item, '{{n_cmp1.change_behavior}}') 等待页面的加载完成，item为下面的待检测元素
+
+	# 待检测的元素：
+	{{n_cmp1.change_element}}
+	
+	# 其中来自autotest的可调用函数（通过from autotest import waitElement 补充导入函数）：
+	参数item是来自弹窗的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	参数browser是已经构建好的webdriver.Chrome实例
+	1. waitElement(browser, item, type),等待item所指向的元素出现/消失/改变,取决于type类型(add/remove/update)
+''')
+
+// 修改代码添加检测
+define('tpl_self_remove_wait', '''
+	/*{
+		 "llmType":"alias.code"
+	 }*/
+	你是熟悉selenium 4的从事银行业务的高级测试，请基于下面的python代码需求，完成run函数。
+    # python函数：run(browser)
+	它将被主模块用run(browser)的方式调用。
+```python
+{{python_code}}
+```	
+	# python代码需求
+	在run的结尾，添加：waitElement(browser, item, '{{n_cmp1.change_behavior}}') 等待页面的加载完成，item为下面的待检测元素
+
+	# 待检测的元素：
+	- 元素: {{n_cmp1.change_element}}
+    - type类型: remove
+	
+	
+	# 其中来自autotest的可调用函数：
+	参数item是来自弹窗的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	参数browser是已经构建好的webdriver.Chrome实例
+	1. waitElement(browser, item, type),等待item所指向的元素出现/消失/改变,取决于type类型(add/remove/update)
+''')
+
+
+// 修改代码处理弹窗 - 废弃
+define('tpl_self_add_dialog', '''
+	你是熟悉selenium 4的从事银行业务的高级测试，请基于下面的python代码需求，完成run函数。
+    # python函数：run(browser)
+	它将被主模块用run(browser)的方式调用。
+	{{python_code}}
+	
+	# python代码需求
+	判断弹窗的可点击按钮(item)存在后，用clickElementByItem(browser, item, 2)关闭弹窗。
+
+	# 弹窗的页面元素：
+	{{n_cmp1.elements}}
+	
+	# 其中来自autotest的可调用函数（通过from autotest import gotoPage, clickElementByItem, getBrowser。。。导入下面的函数）：
+	参数item是来自弹窗的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	参数browser是已经构建好的webdriver.Chrome实例
+	1. getXpathByItem(browser, item),基于item获取页面元素的xpath,item不存在返回False.
+	2. clickElementByItem(browser, item, waitSecond, disableLog), 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒.disableLog为可选参数,默认为False,不禁止输出日志. 点击成功返回True,否则返回False.
+''')
+
+// 校验元素
+func('CheckElements', '''
+import com.llm.agentcore.core.agent.FunctionUtil
+import java.util.Map
+public class CheckElements {
+	public static Object execute(Object sys_last_result, Map StepTestInfo, FunctionUtil fn) {
+		// 检查每个check_elements中的元素都是在elements中存在的 （注：check_elements中不是element的元素，无需检查）
+		def elements = fn.list(StepTestInfo.simplepageinfo)
+		def check_elements = fn.map(sys_last_result)
+		 
+		def allElementsExist = true
+		def resultMessages = new StringBuilder()
+		check_elements.each { entry ->
+			def key = entry.key
+			def list = entry.value
+			if (list instanceof List) {
+				list.each { element ->
+					if (!elementExistsInElements(element, elements)) {
+						resultMessages += "元素 ${element['name']}(ID: ${element['id']})不存在; "
+						allElementsExist = false
+					}
+				}
+			}
+		}
+		return fn.task(allElementsExist).result(resultMessages.toString()).build()
+	}
+	
+	def static boolean elementExistsInElements(element, elements) {
+		for (item in elements) {
+			if (!item || !(item instanceof Map)) continue // 跳过空元素
+			if (item['id'] == element['id']) {	// 放开name的检查： item['name'] == element['name']
+				return true
+			}
+			if (item['children'] instanceof List) {
+				// 递归检查 children
+				if (elementExistsInElements(element, item['children'])) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
+''')
+
+// 动作类型分流 补充不同指令执行不同js -> 生成脚本
+define('tpl_get_action_type',"""
+- Role: web自动化测试的专家
+- Background: 用户将web测试所涉及的操作动作分,用户需要根据"当前测试步骤"执行的操作,获取相应的操作类型
+- Profile: 你是一位精通Python编程和自动化测试的专家，对Selenium库和自动化测试框架有深入的理解和丰富的实践经验。你熟悉JSON格式的数据处理，能够准确地分析代码逻辑，并根据实际页面元素信息生成符合要求的测试脚本。
+- Skills: 你具备资深web测试能力、JSON数据处理能力以及逻辑分析能力。你能够熟练使用Selenium库进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。
+- Workflow:
+    1. 分析'当前测试步骤'位置及依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤所执行的操作，获取相应的操作类型
+	3. 根据操作类型说明，判断是否需要页面元素信息，如果有注明不需要页面元素信息，则need_page_info为false,否则为true
+    3. 根据分析结果，直接返回符合要求的JSON格式: 
+```json
+{"action_type": "对应的action_type", "need_page_info": "true"}
+``` 
+- 操作类型对照表:
+  以下是整理后的操作类型对照表（基于提供的示例）：  
+
+| **操作描述（current_step）**                     | **返回的 action_type** | **说明**                     |
+|-----------------------------------------------|----------------------|----------------------------|
+| 数据记忆，将指定元素数据进行保存、记录                 | `"saveHistoryData"` | 涉及数据存储、元素读取              |
+| 选择表格数据，或针对表数据进行点击、输入、随机选取          | `"table"`           | 涉及表格操作                   |
+| 文件上传，或读取知识空间文件并上传                  | `"UploadFile"`      | 涉及文件上传操作                 |
+| Open url，打开网址、网站                      | `"OpenUrl"`         | 涉及页面跳转或加载，不需要页面元素信息                 |
+| 选择XX下拉框的XX选项（如 select xx dropdown by value/text）| `"Select"` |1.步骤缺少明确的下拉框名称或选项值 属于false类型; 2.根据规则需同时满足两个条件（下拉框名称 + 选项值），缺一不可为select 类型 |
+| 完成某些操作或者步骤         | `"dependOn"`           | 涉及前置条件的操作或者步骤, 不需要页面元素信息               |
+| 耗时等待                | `"TimeSleep"`           | 耗时等待，不需要页面元素信息    |
+| **其他未列出的情况**                           | `"false"`           | 无法匹配已知操作类型时返回 例如:click, input, send   |
+
+要求: 1.不要根据关键词匹配
+
+# 当前测试步骤
+{{current_step}}
+
+{{sys_hint_agt}}
+""")

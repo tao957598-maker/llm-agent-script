@@ -1,0 +1,46 @@
+/*
+{
+	"title":"JSON列表转Markdown表格",
+	"description":"将JSON列表数据转换为markdown表格格式",
+	"parameter":"{\"name\":\"json_list\",\"label\":\"JSON列表数据\"}",
+	"version":1
+}
+*/
+// [{"name":"张三","age":18},{"name":"李四","age":20}]
+// 定义输入参数 
+assign("json_list", '''{{json_list}}''')
+
+// 定义转换脚本
+n_markdown_table, act_func?script='''
+def data =  json_list
+// 动态生成表头
+if(data.size() > 0) {
+    def firstItem = data[0]
+    def headers = []
+    def separators = []
+    
+    // 遍历map的所有key
+    firstItem.each { key, value ->
+        headers.add(key)
+        separators.add("-".repeat(key.length()))
+    }
+  def markdown = '| ' + headers.join(' | ') + ' |\\n'
+markdown += '|' + separators.join('|') + '|\\n'
+  
+ // 生成表格内容
+    data.each { item ->
+        def row = []
+        item.each { key, value ->
+            row.add(value.toString())
+        }
+        markdown += '| ' + row.join('|')  + '|\\n'
+    }
+    return   markdown
+} else {
+    return "No data available"
+}
+'''
+
+n_combined_result,act_memory.assign?value='''{{n_markdown_table}}'''&type=md
+// 输出结果
+assign("markdown_table", "{{n_combined_result}}")

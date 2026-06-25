@@ -1,0 +1,111 @@
+/*
+{
+    "title":"AI Assist",
+    "description":"AI-powered assistant for intelligent task handling and knowledge retrieval."
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"fileName",
+			"label":"文件名称"
+		},
+		{
+			"name":"currentUrl",
+			"label":"当前URL路径"
+		}
+	],
+	"version":1
+}
+*/
+
+
+// global variable
+assign("global_variable","{{fn.json('userInput,userInput,kbSpaceFileId,kbSpaceFileId,currentUrl,currentUrl')}}")
+
+act_memory.assign?var=global_variable&value={{global_variable}}&global=true
+
+//# Task type
+n_task_name,tpl_task_type,psr_all
+
+// Map task type to specific agent
+n_plan_agent_map, act_func?script='''
+	def taskType = '{{n_task_name}}'
+	def agentList = [
+		['agt_api_registrar','agt_api_registrar'],
+		['agt_agent_store_create','agt_agent_store_create'],
+		['agt_agent_gen_code','agt_agent_gen_code'],
+		['agt_model_create','agt_model_create'],
+		['agt_schema_manager','agt_schema_manager']
+	]
+	def agent = agentList.find { it[1] == taskType }?.getAt(0) ?: 'agt_test_selenium.test'
+	return agent
+'''
+// executor为空后再次赋值
+assign('plan_agent', '{{n_plan_agent_map}}')
+n_data,act_plan.runPlan?executor={{plan_agent}}&parameters='userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&kbSpaceFileId={{kbSpaceFileId}}'&callAgentNames='''
+				[['agt_test_triple.test','TRIPLE_TASK','Triple'],
+				['agt_test_verification.test','VERIFICATION_TASK','Verify'],
+				['agt_test_selenium.test','OPERATION_EXECUTE_TASK','Execute'],
+				['agt_test_selenium_dyna.test','DYNAMIC_SELECT_TASK','Select'],
+				['agt_test_planlist.test','DYNAMIC_PLAN_TASK','Plan']]
+			'''
+assign('data_data', '{{n_data}}')
+
+
+
+
+define('tpl_task_type', '''
+你是一个智能调度助手，负责根据 **当前页面路由（route）** 和 **用户输入的自然语言请求**，从预定义的 Agent 列表中选择最合适的执行单元（.agt 文件），并返回其文件名。
+
+#### 可用的 Agents：
+- `agt_agent_gen_code.txt`：用于生成代码（如函数、类、脚本等）。
+- `agt_api_registrar.txt`：用于注册、管理或查询 API 接口信息。
+- `agt_model_create.txt`：用于创建或配置数据模型、机器学习模型等。
+- `agt_agent_store_create.txt`：用于创建、部署或管理智能体（Agent）本身。
+- `agt_main_executor.txt`：通用执行器，处理不匹配其他专用 Agent 的任务。
+- `agt_schema_manager.txt`：用于管理数据库 schema、数据结构定义、字段校验规则等。
+
+#### 调度规则：
+1. **优先匹配页面路由**：如果当前路由明确指向某个功能模块（如 `/schema_manager`），则优先使用对应 Agent。
+2. **其次分析用户意图**：若路由为通用页（如 `/dashboard` 或 `/`），则根据用户请求的语义判断最相关的 Agent。
+
+#### 输入格式：
+- 当前路由：`<route>`
+- 用户请求：`<user_query>`
+
+#### 输出要求：
+仅输出匹配的文件名（不含路径），不要解释或添加其他内容。
+
+---
+
+### ✅ 示例
+
+**输入：**  
+当前路由：`/schema_manager`  
+用户请求：添加一个名为 user_profile 的新表，包含 id、name、email 字段  
+
+**输出：**  
+`agt_schema_manager`
+# User Input
+{{userInput}}
+Url: {{currentUrl}}
+''')
+
+
+// Agent代码模板
+define('tpl_gen_agent_code', '''
+  # 用户需求
+  {{userInput}}
+  ## 用户上传的文件内容
+  {{file_element}}
+
+
+  {{fn.chatFlag('system_message', 'userInput', '', '', 20)}}
+''')

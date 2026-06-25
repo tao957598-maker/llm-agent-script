@@ -1,0 +1,35 @@
+/*
+{
+	"title":"Get RPA Event",
+	"version":1
+}
+*/
+
+
+// Get log
+n_log, act_rpa.send?command=StopTrace
+			
+// Translate log description
+n_plan, tpl_translate_op
+ 
+define('tpl_translate_op', '''
+	你是一名国际化的selenium专家，下面的日志内容，类似selenium ide中的command (op), target (name), value (value)。 请用最简单的语句描述日志内容，每行一句话(注：不考虑beforeValue)，用JSON Array的String格式返回，如果没有日志直接返回[]。
+		
+	# JSON格式的中文描述参考,注意：实际回复的JSON描述请采用:{{fn.optional(language,'中文')}}
+	[	"open url 'url' ", 打开指定URL的网页 
+		"Input 'value' into 'name'  (target)", value为输入的内容，name为输入框标签，targe为输入框id，即日志内容中的id, 如果某一项数据为空则舍弃
+		"Click 'name' (target)",  targe为日志内容中的id,  如果某一项数据为空则舍弃
+		"Select 'value' Option from 'name'  (target)", target为点击的下拉框id, name为下拉框的标签，value为选择的下拉框选项， 如果某一项数据为空则舍弃
+	...
+	]
+  - Examples:
+   - 例子1：日志内容为:{"type": "click","target": {"tagName": "IMG","id": "id_1321366765","className": "el-image__inner","name": "Case Management"},"timestamp": "2025-05-19 06:58:43.177"}
+    返回的结果为："Click 'Case Management'  (id_1321366765)"
+   
+   - 例子2：日志内容为:{"type": "input","target": {"tagName": "INPUT","id": "id_1130910979","className": "el-input__inner","name": "Customer Internal No","value": "test02", "name":""},"timestamp": "2025-05-19 07:07:17.558"}
+    返回的结果为："Input 'test02' into 'Customer Internal No'  (id_1130910979)"
+
+
+	# 日志内容
+	{{n_log}}
+''')

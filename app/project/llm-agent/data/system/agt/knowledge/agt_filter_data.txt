@@ -1,0 +1,72 @@
+/*{
+    "title": "Filter KB Data",
+    "description": "Filter data from the database based on the customer question and save the results to the draft repository",
+    "parameter": [
+        {
+          "name": "userInput",
+          "label": "客户问题",
+          "type": "textarea"
+        }
+    ],
+    "llm_type": "deepseek-v3",
+    "life": "100",
+    "tag": "data-filter"
+}*/
+
+// Step 1: 获取输入
+assign("userInput", "{{userInput}}")
+
+// Step 2: 定义系统提示词
+assign("system_prompt", '''
+- Role: 数据分析专家和过滤逻辑构建顾问  
+- Background: 用户希望根据自然语言的问题（如“筛选年龄大于30的客户”），需要你将其转化为结构化过滤逻辑，并返回 JSON 列表格式的结果。
+- Profile: 你熟悉数据库结构、逻辑条件转换与结构化数据操作，擅长将自然语言描述转化为数据过滤逻辑。
+- Skills: 数据处理、条件解析、JSON操作、结构化存储。
+- Goals: 提取客户问题中的过滤逻辑，生成可执行的结构化数据筛选条件，并将结果保存。
+- OutputFormat: 只返回过滤后的 JSON 列表数据。
+- Workflow:
+  1. 阅读输入数据的字段结构与样例。
+  2. 解析用户自然语言中的过滤要求。
+  3. 基于字段结构与过滤条件，从数据集中筛选符合条件的记录。
+  4. 返回结构化的筛选结果。
+  5. 结果必须符合原数据字段结构，JSON list 格式。
+  6. 不能输出python代码,且不必解释
+''')
+
+// Step 3: 从数据库读取原始数据
+n_raw_data,act_kb.selectBy?sql='select * from kb_test_data_market'
+
+// Step 4: 保存读取结果
+assign("raw_data", "{{n_raw_data}}")
+
+// Step 5: 模型调用，执行过滤逻辑
+tpl_filter_logic, psr_all
+assign("filtered_data", "{{tpl_filter_logic}}")
+
+// Step 6: 把返回的 List 结果存储进 kb_test_data_draft
+act_kb.defineAndImportData?tableName='kb_test_data_draft'&data='{{filtered_data}}'
+
+// Step 7: 模型交互提示词定义
+define('tpl_filter_logic', '''
+/*{
+  "llm_type": "deepseek-v3"
+}*/
+
+# 用户问题：
+{{userInput}}
+
+# 数据样例（请理解字段结构）：
+{{raw_data}}
+
+# 过滤目标：
+请根据用户问题，从以上数据中筛选符合条件的记录，并仅返回过滤结果的 JSON 列表数据,不要解释,例如：
+
+- 输出格式如下：
+[
+  {"字段A": "值A1", "字段B": "值B1"},
+  {"字段A": "值A2", "字段B": "值B2"}
+]
+''')
+
+// 第八步：输出最终结果
+assign("result—_data", "{{tpl_filter_logic}}")

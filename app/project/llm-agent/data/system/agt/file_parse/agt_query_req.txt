@@ -1,0 +1,60 @@
+/*
+{
+	"title": "Query Requirement",
+	"description": "Agent for querying requirement",
+	"parameter": [
+		{
+			"name":"document_id",
+			"label":"文档ID",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"页码提取"
+		}
+  ],
+	"resultPlan":"document_id,n_req_list",
+  "life":1000,
+	"version": "1"
+}
+*/  
+
+// pages
+when('fn.hasValue(pages)', {
+  assign("sql", "SELECT * FROM kb_doc_req_features WHERE documentId = {{document_id}} AND JSON_OVERLAPS(sourcePages, '[{{pages}}]')")
+},{
+  assign("sql", "SELECT * FROM kb_doc_req_features WHERE documentId = {{document_id}}")
+})
+
+// feature
+n_old_features_kb,act_kb.selectBy?sql='{{sql}}'
+
+// featureId
+n_featureIds,act_func?script='''
+	def featureIds = n_old_features_kb.collect { '"' + it.featureId + '"' }.join(',')
+	return featureIds
+'''
+
+// story
+n_old_stories_kb,act_kb.selectBy?sql='SELECT * FROM kb_doc_req_stories WHERE documentId = {{document_id}} AND featureId IN ({{n_featureIds}})'
+
+// storyId
+n_storyIds,act_func?script='''
+	def storyIds = n_old_stories_kb.collect { '"' + it.storyId + '"' }.join(',')
+	return storyIds
+'''
+
+// task
+n_old_tasks_kb,act_kb.selectBy?sql='SELECT * FROM kb_doc_req_tasks WHERE documentId = {{document_id}} AND storyId IN ({{n_storyIds}})'
+
+// req list
+n_req_list,act_func?script='''
+	def req_list = [:]
+	req_list.features = n_old_features_kb
+	req_list.stories = n_old_stories_kb
+	req_list.tasks = n_old_tasks_kb
+	return req_list
+'''
+
+// return
+assign('return', '{{n_req_list}}')

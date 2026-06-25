@@ -1,0 +1,47 @@
+/*
+{
+	"title":"agt_bug_test_rpa",
+	"description":"lj测试agt_bug_test_rpa",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"displayOrder":0,
+	"version":1
+}
+*/
+ 
+assign('n_generated_python_code',"""
+# -*- coding: utf-8 -*-
+# run function dynamic parameters:
+'''{"vendor": "\u56fe\u50cf\u5904\u7406\u670d\u52a1"}'''
+from autotest import *
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+def run(browser, vendor='\u56fe\u50cf\u5904\u7406\u670d\u52a1', **args):
+    try:
+        wait = WebDriverWait(browser, 10)
+        # Locate the table body rows
+        rows = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "tr.el-table__row")))
+        found = False
+        for row in rows:
+            # Get the 4th column (API Vendor) - index 3 (0-based)
+            cells = row.find_elements(By.CSS_SELECTOR, "td.el-table__cell")
+            if len(cells) >= 4:
+                vendor_cell = cells[3]
+                vendor_text = vendor_cell.text.strip()
+                if vendor_text == vendor:
+                    # Click the checkbox in the first column (index 0)
+                    checkbox = cells[0].find_element(By.CSS_SELECTOR, "label.el-checkbox")
+                    checkbox.click()
+                    found = True
+                    break
+        if not found:
+            writeResult(False, "No row found with API Vendor: " + vendor)
+        else:
+            writeResult(True, "Successfully checked the row with API Vendor: " + vendor)
+    except Exception as e:
+        writeResult(False, "An error occurred during the test: " + str(e))
+""")  
+//## Execute the generated Python code and capture the raw list result  接口接受的参数被截取
+n_execute_result, act_rpa.send?command=RunPythonCode&parameters='{{fn.json("python_code,n_generated_python_code")}}'

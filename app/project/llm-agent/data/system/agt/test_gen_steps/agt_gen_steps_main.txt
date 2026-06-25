@@ -1,0 +1,90 @@
+/*
+{
+	"title":"主程序入口",
+	"parameter":[
+		{
+			"name":"system_name",
+			"label":"系统名称",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name": "userInput",
+			"label": "用户需求",
+			"required": true
+		}
+	],
+	"version":1
+}
+*/
+// Set parameter
+assign('params','{"question":"{{userInput}}","folderIds":"{{folderIds!}}","knowledgeIds":"{{knowledgeIds!}}"}')
+// n_listn_list
+n_list,agt_get_list_url?system_name={{system_name}}&userInput={{userInput}}
+when('!fn.hasValue(n_list)', {
+	assign('result', '[]')
+
+},{
+
+
+// 页面之间跳转的操作
+n_search_condition,agt_get_start_end_url?system_name={{system_name}}&list_uri={{n_list}}
+assign('start',"{{n_search_condition.start_url}}")
+assign('end',"{{n_search_condition.end_url}}")
+
+	when('start==end', {
+		assign("sql", "SELECT collect_data FROM llm_agent.kb_spiderdeep_content where system_name = '{{system_name}}'  and current_uri = '{{start}}'  ")
+		// 执行SQL查询
+		n_search_graph_data,act_kb.selectBy?sql={{sql}}
+		
+
+	},{
+	// search_graph_data
+	assign('passThrough','{{ fn.when(fn.hasValue(n_search_condition.passThrough), n_search_condition.passThrough,"[]") }}')
+	n_search_graph_data,act_kb.searchGraphShortPath?label='kb_spiderdeep_directory_graph_content'&filterKey='current_uri'&start={{start}}&passThrough={{passThrough}}&end={{end}}&systemName={{system_name}}
+	})
+	// tpl_get_page_action_info
+	n_data,tpl_get_page_action_info,psr_json
+
+	assign('async_list', '[]')
+	n_get_url_node,act_func.run?script='''
+	def newList2 = n_data.collect { [No: it.No, Current_URI: it.Current_URI] }
+	return newList2
+	'''
+	// 异步处理每页数据
+	foreach('n_page_content', 'n_data', {
+		// 获取当前模块名称
+		assign('page_content', '{{n_page_content.item}}')
+		// 计算数据
+		n_pamp,agt_get_pamp?application='{{system_name}}'&page_url={{page_content.Current_URI}}&data={{page_content}}&userInput={{n_get_url_node}}
+		act_func?script="async_list.add(n_pamp)"
+	})
+	// assign('validSummary', '{{async_list.validSummary}}')
+	assign('result', '{{async_list}}')
+})
+
+// 补充 TODO 页面里边的操作序列
+
+define('tpl_get_page_action_info', '''
+{{n_search_graph_data}}
+# 用户目标:
+{{userInput}}
+
+# 以上数据用json展示,4个字段如下:
+**No**: 顺序数字
+**Current_URI**: 当前页面URI
+
+**Operation_Sequence**:
+包含:`序号`+`步骤描述`+`[操作类型 target id]`
+`步骤描述`中关键重要的信息需要用``标记: 例如: 点击`Transfer`,输入`lht`密码
+
+**Target_URI**:  完成操作序列后导航到的页面路径
+
+# 返回json数据格式
+```json
+[{},{}...]
+```
+''')
+

@@ -1,0 +1,369 @@
+/*
+{
+	"title":"agt_sum_cust_detail",
+	"description":"取得客戶完整原始記錄,含 Basic Information 全部欄位、AML-Related Info、Related Parties、Address、FATCA/CRS。(備註:本接口會同時返回客戶本體及關聯方資料,是 Page 3 Name Screening 合併主名單的主要來源之一。) 輸出:Raw Customer JSON + Related Parties Array。",
+	"parameter":[
+		{
+			"name":"caseId",
+			"label":"caseId",
+			"required":true,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		}
+	],
+	"tag":"all",
+	"displayOrder":0,
+	"version":50
+}
+*/
+assign("customerParams", '{"caseId": "{{caseId}}"}')
+// 获取客户数据ByCaseId
+n_customerProfile, act_api.doExecuteDynamic?name='okp_agent_tool_customer_profile'&dynamicParamData='{{customerParams}}'
+
+// 获取KYC数据ByCaseId
+n_kycData, act_api.doExecuteDynamic?name='okp_agent_tool_kyc'&dynamicParamData='{{customerParams}}'
+
+
+define('tpl_agt_sum_cust_detail','''
+你是一位资深的KYC数据分析专家，熟悉银行反洗钱（AML）及客户尽职调查（CDD）流程。请基于提供的客户信息（n_customerProfile）和KYC数据（n_kycData），结合页面字段含义，进行结构化解析与标准化映射，并填充至指定JSON结构中。
+
+📥 输入数据
+客户信息: {{n_customerProfile}}
+KYC数据: {{n_kycData}}
+⚙️ 分析逻辑与处理要求
+1. 字段映射原则
+严格基于页面展示字段进行语义匹配（如 Basic Information、Risk Factors、FATCA/CRS、Related Parties 等模块）。
+字段名称可能不完全一致，需要根据业务语义进行映射，例如：
+“Customer Type” → customerType.value
+“Concluded Risk Rating” → concludedRiskRating.value
+“Nature of Ongoing CDD” → natureOfCara.value
+若同一字段在多个来源出现，优先使用 KYC数据（n_kycData）。
+2. 数据标准化规则
+日期保持原始格式（如 DD-MMM-YYYY 或 YYYY-MM-DD），不做格式转换。
+布尔字段（仅填 value）：
+“Yes” → true
+“No” → false
+去除无效值（如 -、空格、N/A），统一处理为空字符串 ""。
+3. 风险与标记处理
+specialRiskCode.value：提取风险代码（如 CDD-XXX）。
+warnings.value：整合 AML Risk / High-Risk Industry / Mandatory Risk 等信息，合并为字符串。
+holdMeasures.value：直接提取，无则填 ""。
+4. 地址与合规信息
+地址映射：
+Registered → registeredAddress.value
+Business → businessAddress.value
+Correspondence → correspondenceAddress.value
+FATCA / CRS：
+FATCA Status → fatcaStatus.value
+CRS Entity Type → crsEntityType.value
+CRS Tax Residence → crsTaxResidence.value
+Tax Identification No → taxIdentificationNo.value
+5. Related Parties 处理
+每条记录映射为 relatedParties 数组中的一个对象。
+所有字段仅填 .value
+sortOrder.value：
+按页面顺序从 1开始递增
+若无数据，返回空数组 []
+6. 缺失值处理
+字符串字段 → ""
+布尔字段 → false
+数值字段 → 0
+❗关键约束（非常重要）
+只允许填充 value 字段
+以下字段必须保持空字符串，不允许填任何内容：
+aiRationale
+knowledgeBaseUsed
+dataSource
+严禁在这些字段中生成解释或推理内容
+📤 输出规范
+仅输出 JSON（不得包含解释或说明）
+必须严格遵守JSON结构
+不得新增、删除或修改字段
+caseId 必须为：{{caseId}}
+所有字段必须完整输出（即使为空）
+
+目标json结构:
+{
+  "data": {
+    "customerProfileData": {
+      "caseId": "",
+      "profile": {
+        "customerType": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "name": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "documentId": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "dateOfBirth": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "gender": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "nationality": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "occupation": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "relationshipSince": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "concludedRiskRating": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "lastApprovalDate": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "nextAssessmentDate": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "natureOfCara": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "specialRiskCode": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "adverseNews": {
+          "value": true,
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "pep": {
+          "value": true,
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "highRiskIndustry": {
+          "value": true,
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "complexShareholding": {
+          "value": true,
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "highRiskCountry": {
+          "value": true,
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "nonFaceToFace": {
+          "value": true,
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "internalWatchlists": {
+          "value": true,
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "warnings": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "holdMeasures": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "registeredAddress": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "businessAddress": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "correspondenceAddress": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "fatcaStatus": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "crsEntityType": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "crsTaxResidence": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        },
+        "taxIdentificationNo": {
+          "value": "",
+          "aiRationale": "",
+          "knowledgeBaseUsed": "",
+          "dataSource": ""
+        }
+      },
+      "relatedParties": [
+        {
+          "role": {
+            "value": "",
+            "aiRationale": "",
+            "knowledgeBaseUsed": "",
+            "dataSource": ""
+          },
+          "nameInEng": {
+            "value": "",
+            "aiRationale": "",
+            "knowledgeBaseUsed": "",
+            "dataSource": ""
+          },
+          "nameInChi": {
+            "value": "",
+            "aiRationale": "",
+            "knowledgeBaseUsed": "",
+            "dataSource": ""
+          },
+          "dateOfBirth": {
+            "value": "",
+            "aiRationale": "",
+            "knowledgeBaseUsed": "",
+            "dataSource": ""
+          },
+          "gender": {
+            "value": "",
+            "aiRationale": "",
+            "knowledgeBaseUsed": "",
+            "dataSource": ""
+          },
+          "nationality": {
+            "value": "",
+            "aiRationale": "",
+            "knowledgeBaseUsed": "",
+            "dataSource": ""
+          },
+          "idType": {
+            "value": "",
+            "aiRationale": "",
+            "knowledgeBaseUsed": "",
+            "dataSource": ""
+          },
+          "identityNo": {
+            "value": "",
+            "aiRationale": "",
+            "knowledgeBaseUsed": "",
+            "dataSource": ""
+          },
+          "specialRiskCode": {
+            "value": "",
+            "aiRationale": "",
+            "knowledgeBaseUsed": "",
+            "dataSource": ""
+          },
+          "sortOrder": {
+            "value": 0,
+            "aiRationale": "",
+            "knowledgeBaseUsed": "",
+            "dataSource": ""
+          }
+        }
+      ]
+    },
+    "customerProfileReportUrl": "",
+    "customerProfileReportWithRationaleUrl": ""
+  }
+}
+''')
+
+n_customerProfileByAi,tpl_agt_sum_cust_detail,psr_json
+log('n_customerProfileByAi=={{n_customerProfileByAi}}')
+
+
+
+//Step 11: Call report pdf generator agent
+n_pdf_url,agt_report_pdf_generator_okp?reportName='NSR1{{n_random_3}}'&reportJsonData='{{n_customerProfileByAi.data}}'&caseId='{{caseId}}'&userInput='样式设计要求简约清晰、视觉美观，优先使用表格呈现结构化信息'
+log('******n_pdf_url=={{n_pdf_url}}')
+n_update_url_json,act_func?script='''
+    def reportJson = n_customerProfileByAi
+    // 1. 确保 reportJson 存在
+    if(reportJson == null){
+        return [:]
+    }
+    // 2. 确保 data 存在
+    if(reportJson.data == null){
+        reportJson.data = [:]
+    }
+    // 3. 只在有 URL 时才更新
+    if(n_pdf_url != null && n_pdf_url.toString().trim() != ""){
+        reportJson.data.put("customerProfileReportWithRationaleUrl", n_pdf_url.n_url_with_rational)
+        reportJson.data.put("customerProfileReportUrl", n_pdf_url.n_url_no_rational)
+    }
+    // 4. 返回最终结果
+    return reportJson
+'''
+
+
+log('-------n_update_url_json===={{n_update_url_json}}')
+// ---------- Step 12: save customer profile ----------
+n_report_callback, act_api.doExecute?name='okp_agent_tool_save_customer_profile'&params='{{n_update_url_json}}'

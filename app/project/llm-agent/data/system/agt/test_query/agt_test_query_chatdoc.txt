@@ -1,0 +1,71 @@
+/*
+{
+	"title":"ChatDoc Gen test case",
+	"parameter": [
+    {
+      "name":"userInput",
+      "label":"客户问题",
+      "type":"textarea"
+    },
+    {
+      "name":"kbSpaceId",
+      "label":"目录ID（支持多个）",
+      "type":"textarea"
+    },
+    {
+      "name":"kbSpaceFileId",
+      "label":"File",
+      "type":"knowledge_space"
+    },
+    {
+      "name":"kbData",
+      "label":"知识库数据",
+      "type":"textarea"
+    },
+    {
+			"name":"seek_mode",
+			"label":"搜索模式",
+			"args":[
+				{
+					"label":"快速模式",
+					"value":"1"
+				},
+				{
+					"label":"深度模式",
+					"value":"0"
+				}
+			],
+      "defaultValue":"快速模式",
+			"required":true,
+			"type":"select"
+		}],
+	"tag":"chatdoc",
+	"uiEntrance":"chatDoc",
+	"resultPlan":"n_chatdoc_answer",
+	"life":100,
+	"displayOrder":0,
+	"version":2
+}
+*/
+
+
+// Execute Query
+n_query_answer, agt_test_query_demo_v1?userInput={{userInput}}&kbSpaceId={{kbSpaceId}}&kbSpaceFileId={{kbSpaceFileId}}&kbData={{kbData}}
+
+when('n_query_answer?size>0',{
+  rag_kbs.searchReference?data='{{n_query_answer}}',
+})
+
+assign('system_prompt', '''#页面以及内容:
+{{n_query_answer}}''')
+
+//# Finally answer
+n_chatdoc_answer, tpl_check_content,psr_all
+
+// Check if the answer meets the question
+define('tpl_check_content', '''
+ Customer's Question：
+	{{userInput}}
+ 
+ {{fn.chatFlag('%{system_prompt}%', 'userInput', 'n_result', '', 10)}}
+''')

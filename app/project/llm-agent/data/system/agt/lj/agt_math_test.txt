@@ -1,0 +1,50 @@
+/*
+{
+	"title":"agt_math_test",
+	"description":"测试math-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"tpl_do_the_math,agt_math_test1",
+	"version":1
+}
+*/
+ 
+
+// 查询知识空间的地址路径 isSource为true时，指切片地址
+//n_file_address,rag_kbs.getFileAddress?kbSpaceFileId={{kbSpaceFileId!}}&isSource=false
+n_file_data,act_kbs.readSectionFile?folderName='CloudBank'&knowledgeName='bank_req'&isSource=true
+
+// 数学加减乘除计算   
+tpl_do_the_math, psr_all
+
+// call agt_math_test1
+agt_math_test1
+
+define('tpl_do_the_math', '''
+	请帮我计算值：8*12+3
+
+''')
+
+// foreach assign
+foreach('n_data', '[1..9]', {
+	// index 下标
+	assign('test_data_index', '{{n_data.index}}')
+	// 下标对应内容
+	assign('test_item', '{{n_data.item}}')
+})
+
+n_param,act_func?script='''
+				return d_item
+			'''
+          
+          
+		when('fn.hasValue(d_item, "biz_id")', {
+          n_param,act_func?script='''
+				return "11"
+			'''
+		}, {
+          n_param,act_func?script='''
+				return "22"
+			'''
+		})

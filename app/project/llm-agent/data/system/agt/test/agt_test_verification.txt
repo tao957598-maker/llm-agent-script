@@ -1,0 +1,24 @@
+/*
+{
+	"title":"Verify result",
+	"description":"Verify test result",
+	"parameter":"test_no=Test Case No&current_step=当前验证步骤&steps=完整验证步骤&envinfo=environment information",
+	"version":1
+}
+*/
+// Try to run existed code
+agt_test_run_exist_code?test_no={{test_no}}&current_step={{current_step}}&steps={{steps}}&system={{system}}&envinfo={{envinfo}}
+
+// Run code successfully, go to end
+act_flow.go?plan=end
+
+// Handle the error
+on_failure({
+	// Force to success status
+	act_flow.success
+})
+
+// Find and check target element
+agt_test_findelement?test_no={{test_no}}&current_step={{current_step}}&steps={{steps}}&envinfo={{envinfo}}
+// Run Find and check target element successfully, go to end
+act_flow.go?plan=end

@@ -1,0 +1,24 @@
+/*  
+{
+	"title": "保存Excel数据到知识库",
+	"parameter": "tablename=知识库名称&excelFilename=要保存的Excel文件名&columns=从excel中挑选出来的要保存的字段&embedding=用于向量化查询的字段",
+	"description": "columns和vector、scalar选填",
+	"category": "知识库"
+} 
+*/
+
+
+n_excel_data, act_func.read?filename={{excelFilename}}
+act_kb.importData?name={{tablename}}&data={{n_excel_data}}
+
+
+
+define('tpl_excel_column_mapping', '''
+	你是一名高级开发工程师，请检查数据库的表字段的定义，已经待导入的参考数据(JSON格式)，给出两者的字段映射关系，以JSON格式返回：{'DB COLUMN NAME1': '数据属性A', 'DB COLUMN NAME2': '数据属性B'...}
+	
+	# 数据库的表字段定义：
+	{{fn.query('MetaTableInfo', 'tableName=' + tablename)}}
+	
+	# 待导入的参考数据
+	{{fn.dataRange(n_excel_data, 0, 2)}}
+''')

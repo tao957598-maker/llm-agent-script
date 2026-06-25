@@ -1,0 +1,33 @@
+/*
+{
+	"title":"Simple Chat Agent",
+	"resultPlan":"n_chat_response",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"User Message\",\"required\":true,\"maxLength\":5000,\"hidden\":false,\"readOnly\":false,\"description\":\"Enter your message to chat with the AI\"}",
+	"uiEntrance":"34",
+	"displayOrder":0,
+	"version":1
+}
+*/
+// Define the chat prompt template
+define('tpl_chat_response', '''
+/*{
+	"temperature": 0.7,
+	"stream": true
+}*/
+You are a helpful AI assistant. Respond to the user's message in a friendly and helpful manner.
+
+User: {{userInput}}
+
+Assistant:
+''')
+
+// Main chat logic
+// Call the LLM with our chat template and get the response
+tpl_chat_response, psr_all
+
+// Store the response in a variable for display
+assign('n_chat_response', '{{sys_last_result}}')
+
+// Log the conversation (optional)
+log('User: {{userInput}}')
+log('AI: {{n_chat_response}}')

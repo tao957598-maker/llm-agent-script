@@ -1,0 +1,54 @@
+/*
+ {
+	 "title": "自动化测试-ui文件解析",
+	 "description": "解析指定ui文件",
+	 "parameter": [
+	 	{
+        	 		"name":"requirement",
+        	 		"label":"需求文档",
+        	 		"type":"file"
+        	 	}
+	 ],
+	 "llmType": "",
+	 "resultPlan": "n_test_requirement",
+	 "life": "100"
+ }
+*/
+assign("requirement", "{{requirement}}")
+n_requirement,act_func.read?filename='{{requirement}}'
+// 生成xml详细内容文本
+n_xml_detailInfo, tpl_ui_analysis
+//写python代码
+act_python.writeTmp?requirement='ui解析文件'&pythonType='pythoncode'&pythonCode='{{n_xml_detailInfo}}'
+
+// **++++++++++====== ui说明文档输出详细解析 ======++++++++++**
+define('tpl_ui_analysis', '''
+# 需求文档的内容
+<requirement>
+{{requirement}}
+</requirement>
+请分析以下UI布局，识别各个UI组件类型并描述它们的功能和格式要求，同时标注它们的依赖关系和交互逻辑。如果未指定具体组件 请结合需求文档进行合理推理
+1. 组件1（如输入框）：功能、格式要求、依赖性。
+2. 组件2（如按钮）：功能、交互逻辑、依赖关系。
+3. 组件3（如下拉框）：格式要求、输入/输出行为、依赖性。
+
+请为以下UI组件生成详细描述文档： 如果未指定具体组件 请结合需求文档进行合理推理
+1. 组件1（如输入框）：用途、输入/输出行为、交互方式、依赖关系。
+2. 组件2（如按钮）：用途、输入/输出行为、交互方式、依赖关系。
+3. 组件3（如下拉框）：用途、输入/输出行为、交互方式、依赖关系。
+请确保这些描述符合设计要求，并能够支持持续优化。
+- Role: 高级ui专家
+- Background: 用户需要对产品需求文档进行分析，提取精炼整理ui相关信息。
+- Profile: 你是一名对ui非常熟悉的高级分析人员，拥有丰富的ui工作经验和敏锐的业务洞察力。
+- Skills: 你具备深入分析ui需求的能力，可以将概要设计拆分成多个交互逻辑，能够准确分析产品需求文档中ui相关的详细内容，并格式化规范化地输出ui组件分析（包含所有交互逻辑和依赖关系）。
+- Goals: 格式化规范化地输出ui组件分析文档（包含所有交互逻辑和依赖关系）。要求详细记录每一条可能发生的交互逻辑以及依赖关系。
+- OutputFormat:markdown格式，建议内容。
+- Workflow:
+1. 阅读并理解需求文档内容。
+2. 根据需求文档的具体内容并格式化规范化地输出ui组件分析（包含所有交互逻辑和依赖关系）。
+3. 将上一步的内容转换为详细语言，具体交互操作要描述清晰，用json包裹输出返回
+- Examples:
+{
+data: 输出内容
+}
+''')

@@ -1,0 +1,142 @@
+/*
+{
+	"title":"AI Assist",
+	"description":"AI-powered assistant for intelligent task handling and knowledge retrieval.",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"fileName",
+			"label":"文件名称"
+		},
+		{
+			"name":"currentUrl",
+			"label":"当前URL路径"
+		},
+		{
+			"name":"outputFormat",
+			"label":"输出得数据格式"
+		},
+		{
+			"name":"modifyContent",
+			"label":"待修改的内容"
+		}
+	],
+	"version":2
+}
+*/
+// global variable
+assign("global_variable","{{fn.json('userInput,userInput,kbSpaceFileId,kbSpaceFileId,currentUrl,currentUrl,outputFormat,outputFormat,modifyContent,modifyContent')}}")
+assign('n_currentUrl', '{{currentUrl}}')
+// kbSpaceFileIdkbSpaceFileId
+when('fn.hasValue(kbSpaceFileId)', {
+	// n_file_datan_file_data
+    n_file_data,agt_kb_space_query.tool_ecosystem?kbSpaceFileId={{kbSpaceFileId}}
+	// file_namefile_name
+	assign("file_name", "{{n_file_data.file_name}}")
+})
+// **Log** ✅
+log('{{global_variable}}')
+act_memory.assign?var=global_variable&value={{global_variable}}&global=true
+
+n_task_type,tpl_task_type,psr_all
+ 
+ 
+// Gen API registrar datas ✅
+when('n_task_type.task_type=="agt_api_registrar"') {
+    n_data,agt_api_registrar?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}
+}
+
+when('n_task_type.task_type=="agt_agent_store_create"') {
+    n_data,agt_agent_store_create?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}
+}
+
+when('n_task_type.task_type=="agt_agent_gen_code"') {
+    n_data,agt_agent_gen_code?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}&docContent={{modifyContent}}
+}
+
+when('n_task_type.task_type=="agt_model_create"') {
+    n_data,agt_model_create?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}
+}
+// Gen schema manager code 
+when('n_task_type.task_type=="agt_schema_manager"') {
+    n_data,agt_schema_manager?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}
+}
+// Gen autotest python code ✅
+when('n_task_type.task_type=="agt_python_code_modifier"') {
+	// agt_python_code_modifieragt_python_code_modifier
+    n_data,agt_python_code_modifier?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}&textContent={{modifyContent}}
+}
+// Gen autotest txt ✅
+when('n_task_type.task_type=="agt_txt_modifier"') {
+	// agt_txt_modifier 
+    n_data,agt_txt_modifier?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}&fileName={{fileName}}&textContent={{modifyContent}}
+}
+assign('finalResult', '{{n_data}}')
+
+
+
+
+
+define('tpl_task_type', '''
+你是一个智能调度助手，负责根据 **当前页面路由（route）** 和 **用户输入的自然语言请求**，从预定义的 Agent 列表中选择最合适的执行单元（.agt 文件），并返回其文件名。
+
+#### 可用的 Agents：
+| 路由 | 语义说明 | 对应 agt 文件 |
+|------|----------|---------------|
+| `/flow-home` | 生成agent代码（如函数、类、脚本等） | `agt_agent_gen_code` |
+| `/api-registrar` | 生成 API 注册信息 | `agt_api_registrar` |
+| `/model-create` | 生成模型配置数据等 | `agt_model_create` |
+| `/agent-store-create` | 生成智能体（Agent）配置数据 | `agt_agent_store_create` |
+| `/main-executor` | 通用执行器，处理不匹配其他专用 Agent 的任务 | `agt_main_executor` |
+| `/knowledge-base` | 生成数据库 schema、数据结构定义、字段校验规则等 | `agt_schema_manager` |
+| `/python-code-modifier` | 用于修改 Python 自动化测试代码，如添加、删除、替换代码块等 | `agt_python_code_modifier` |
+| Nan | 如果user是修改文件,或者是生成内容写入文件 | `agt_txt_modifier` |
+| `/chat-knowledge-base` | 如果user是修改文件,或者是生成内容写入文件 | `agt_txt_modifier` |
+#### 调度规则：
+1. **优先分析用户意图**：若路由为通用页（如 `/dashboard` 或 `/`），则根据用户请求的语义判断最相关的 Agent。
+2. **其次匹配页面路由**：如果当前路由明确指向某个功能模块（如 `/schema_manager`），则优先使用对应 Agent。
+
+
+#### 输入格式：
+- 当前路由：`<route>`
+- 用户输入：`<user_query>`
+
+#### 输出要求：
+仅输出匹配的文件名（不含路径），不要解释或添加其他内容。
+
+---
+
+### ✅ 示例
+
+**输入：**  
+当前路由：`/schema_manager`  
+用户请求：添加一个名为 user_profile 的新表，包含 id、name、email 字段  
+
+**输出：**  
+{'task_type':'agt_schema_manager'}
+
+# User Input
+Url: {{fn.when(fn.hasValue(currentUrl),currentUrl,'Nan')}}
+file_name: {{fn.when(fn.hasValue(file_name),file_name,'Nan')}}
+{{userInput}}
+''')
+
+
+// Agent代码模板
+define('tpl_gen_agent_code', '''
+  # 用户需求
+  {{userInput}}
+  ## 用户上传的文件内容
+  {{file_element}}
+
+
+  {{fn.chatFlag('system_message', 'userInput', '', '', 20)}}
+''')

@@ -1,0 +1,112 @@
+/*
+{
+	"title":"hlt-All-scenario intelligent chat",
+	"description":"hlt-All scenario AI chat agent.",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"用户输入\"}",
+	"tag":"chatdoc",
+	"uiEntrance":"chatDoc",
+	"life":100,
+	"version":3
+}
+*/
+// 正在分析用户输入选择工具
+//## Analyzing user input for tool selection
+tpl_choose_tool, psr_json
+
+// 确认选择工具
+//## Confirm the selected tool
+n_tool_confirm, act_flow.page?pageCode=sys_tool_param_confirm&params={{tpl_choose_tool}}
+
+assign('sys_prompt_parameter_extract', '''
+	你是智能化系统专家，请根据工具参数信息，结合用户输入和补充信息，完善工具参数以Json格式返回。请注意如果工具没有参数，则params={}空
+	1. 工具参数规则按照properties描述填充；
+	2. 必填项需要有值，默认值一般为缺省的值；
+	3. 遇到日期业务的字段，格式一般都为yyyy-MM-dd或者yyyy-MM-dd HH:mm:ss
+	4. 遇到测试编号可以按照业务生成一个测试编号+序号，如测试登录案例，则测试编号为test_logincase_001;
+5. 其它知识:
+	工具描述中提到查询测试用例: `userInput`参数中补充查询测试用例的表:`kb_testcase`
+
+	6. value的值必须要使用英文
+
+	# 返回示例：
+	{
+		"type": "AGENT",
+		"name": "agt_test_xxx.test",
+		"params": {
+			"key1": "value1"
+		}
+	}
+
+	# 工具描述：
+	{{fn.tool(n_tool_confirm.confirmed.type, n_tool_confirm.confirmed.name)}}
+''')
+
+// 正在提取参数
+//## Extracting parameters
+n_tool_param, tpl_parameter_extract, psr_json
+
+// 进行人工确认运行参数
+//# Confirm parameters manually
+n_param_confirm, act_flow.page?pageCode=sys_tool_param_confirm&toolType={{n_tool_confirm.confirmed.type}}&toolCode={{n_tool_confirm.confirmed.name}}&params={{n_tool_param.params}}
+
+// 根据人工确认后的参数运行工具
+when('n_param_confirm.confirmed.type == "AGENT" && ["agt_test_steps.test", "agt_test_doc_summary.test_req_poc"]?seq_contains(n_param_confirm.confirmed.name)', {
+	// 构建JOB参数
+	assign('jobData','{"agentName":"{{n_param_confirm.confirmed.name}}","jobDesc":"ChatDocJob","notifyStrategy":"全部通知","executorParam":{{n_param_confirm.confirmed}}}')
+
+	// 创建自动化测试agent JOB
+	n_tool_exec, act_job.createAndTrigger?data={{jobData}}&isOneOffTask=true&isOnlyAdd=true
+
+	//# Result Tip
+	assign('resultTip', '任务已创建，任务名： {{n_tool_exec.jobDesc}}，点击<a href="/chat-conversation?isFullScreen=true&bizId={{n_tool_exec.bizId}}" target="_blank">{{n_tool_exec.bizId}}</a>可查看任务')
+}, {
+	// 工具执行处理
+	//## Tool execution
+	n_tool_exec, act_plan.exec?toolType={{n_param_confirm.confirmed.type}}&code={{n_param_confirm.confirmed.name}}&parameters={{n_param_confirm.confirmed}}
+
+	// 执行结果
+	assign('resultTip', '')
+})
+
+
+define('tpl_choose_tool', '''
+- Role: 熟悉智能办公系统的管家
+- Background: 需要根据用户的输入，精确的定位使用哪种工具，符合用户的需求。
+- Requirements:
+1. 结果以Json格式返回选择的工具名和工具所属分类；
+2. json需要包含score分值，范围0-10，值越高则代表匹配度越高；
+3. 如果工具列表都不符合用户的需求，则name为空，score的值为0；
+	5.优先选择以下的agent:
+| agent名称                     | 用途                         | type  |
+|-------------------------------|-----------------------------|-------|
+| agt_test_doc_summary.test_req_poc | 需求文档生成测试案例         | AGENT |
+| agt_test_steps.test           | 自动化执行测试案例           | AGENT |
+| agt_auto_sql_data.knowledge       | 查询测试用例内容必须用这个    | AGENT |
+| jira_search_issues_chatdoc       | 查询jira数据                 | API   |
+| Jira_Create_Issues_API       | 创建jira数据                 | API   |
+| agt_fee_apply_12.oa | 费用申请          | AGENT |
+| agt_chat_ide.template | 生成agent代码          | AGENT |
+| agt_testcase_statistic.test | Query the percentage of testing statistics      | AGENT |
+
+
+# 返回示例：
+{
+	"type": "AGENT",
+	"name": "agt_test_xxx.test",
+	"score": 5
+}
+
+# 用户输入：
+{{userInput}}
+
+# 工具集列表：
+{{fn.toolset('toolset_all_scenario')}}
+
+''')
+
+define('tpl_parameter_extract', '''
+	# 用户输入：
+	{{userInput}}
+
+	{{fn.chatFlag('sys_prompt_parameter_extract', 'userInput', 'resultTip', '', 6)}}
+''')

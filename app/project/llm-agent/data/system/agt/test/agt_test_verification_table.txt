@@ -1,0 +1,138 @@
+/*
+{
+	"title":"verification data expected",
+	"description":"Compare whether the data on the current page meets expectations directly.",
+	"parameter":"current_step=当前测试步骤&steps=完整验证步骤&envinfo=补充信息",
+	"version":1
+}
+*/
+// Init variable for action type
+assign('current_step',"{{current_step}}")
+assign('steps',"{{steps}}")
+assign('envinfo',"{{envinfo}}")
+
+//# Collect page information
+n_collect_page, act_rpa.send?command=CollectTableDataSpecial
+n_collect_page, act_func?script='''return n_collect_page[0]'''
+
+assign('collect_page','{{n_collect_page}}')
+
+//# generate verify script
+tpl_generate_verify_script,psr_json_python
+assign('python_code','{{sys_last_result}}')
+
+n_isMap,act_func?script='''
+def isMap  // 定义一个变量存储 true/false
+if (python_code instanceof java.util.Map) {
+    isMap = true
+} else {
+    isMap = false
+}
+return isMap'''
+
+when('n_isMap==true',{
+   act_flow.fail
+},{
+    // Write selenium script to the artifact repository
+  assign('result','true')
+  assign('result','{{fn.json("result,result,python_code,python_code")}}')
+})
+
+
+// 生成验证脚本
+define('tpl_generate_verify_script', """
+	/*{
+		 "llmType":"alias.code"
+	 }*/
+- Role: Python自动化测试脚本开发专家
+- Background: 用户需要一个Python函数`run(browser)`，该函数将被主模块以`module.run(browser)`的方式调用，用于实现特定的自动化测试步骤。用户提供了详细的测试脚本要求、实际页面元素信息以及来自`autotest`库的可调用函数列表。用户希望对代码进行审查，以确定是否存在需要替换的元素，并根据审查结果返回特定的JSON格式结果。此外，用户还要求`局部测试步骤`依赖于`主模块涉及的测试步骤`的前序步骤，这些前序步骤环境和条件已经准备好，根据分析结果，返回`局部测试步骤`目的，生成`局部测试步骤`的代码。
+- Profile: 你是一位精通Python编程和自动化测试的专家，对自动化测试框架有深入的理解和丰富的实践经验。你熟悉JSON格式的数据处理，能够准确地分析代码逻辑，并根据实际页面元素信息生成符合要求的测试脚本。
+- Skills: 你具备Python编程能力、自动化测试脚本开发能力、JSON数据处理能力以及逻辑分析能力。你能够熟练使用给出的函数进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。
+- Goals: 
+    1. 分析`局部测试步骤`依赖的前序步骤，确保环境和条件已经准备好。
+    2. 使用get_table_via_pandas(browser)方法进行元素收集，根据步骤再生成代码
+    3. 生成的代码必须基于实际收集到的元素进行操作
+    4. 根据步骤分析结果，返回前序步骤已经完成的操作. 
+    5. 生成符合局部测试步骤要求的Python代码。
+    6. 模拟生成的代码能够正确的操作收集到的数据，根据步骤进行操作
+- Constrains: 
+  1.优先使用`autotest`库中封装的方法:
+    - writeResult(success, desc),记录执行结果,success为测试是否成功的true/false标志,desc为结果的说明
+    - clickElementByItem(browser, item, waitSecond, disableLog), 用于元素点击. 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False.
+    - copyData(browser, item), 用于复制数据，item为分析页面元素后得到的元素信息，item不能含有xpath信息
+        - pasteCopyData(browser, item), 用于粘贴数据，基于item查询对应的xpath,并基于xpath定位元素,输入后台已保存的数据.成功返回True,否则返回False.
+         - get_table_via_pandas(browser), 用于从页面信息中提取所有的表格数据，生成的代码中必须是基于get_table_via_pandas得到的数据进行操作
+
+  2.生成的Python代码要求:
+    - 代码第二行需要标注`run function dynamic parameters:`: 例如输入用户名字 '''{"user":"tester"}'''
+    - 代码注释必须要用英文
+    - 必须符合测试脚本要求
+    - 只能使用实际页面元素中列出的元素，不能假设不存在的元素。
+    - 生成的代码应仅包含局部测试步骤，不补充前面步骤或提前实现后面步骤的代码。
+    - 优先使用autotest中封装的方法。如果必须使用selenium的原生的find_elements, xxx_element_located等方法时，不可直接使用item中的mapping id，比如：@id="id_XXX"
+    - 请先调用get_table_via_pandas得到表格数据，然后基于这个表格数据进行代码生成及校验
+    - 测试结果（无论成败）需要调用函数writeResult(sucess, desc)。
+    - 使用autotest中的可调用函数：xxxByItem，实现对元素的操作
+
+- OutputFormat: 
+    1.`局部测试步骤`位置及依赖的前序步骤
+    2.结合`补充解释`和`局部测试步骤` 返回精准指令的结果
+    3.根据精准指令结果和元素信息,需要选择什么元素进行操作
+    4.生成的代码对于实际收集的元素操作时是否会出现索引错误等问题,需要注意在python中列表的处理索引是从0开始的
+    5.输出必须选取 pandas index进行数据定位
+    6.生成符合局部测试步骤要求的Python代码。
+- Workflow:
+    1. 分析`局部测试步骤`位置及依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤分析结果，返回前序步骤已经完成的操作和`局部测试步骤`精准指令. 
+    3. 表格数据处理流程：
+        - 首先分析页面表格类型（有表头/无表头）
+        - 选取对应的table进行数据校验,例如: 选取表1,`tables[0]`
+        注意: table的阅读理解
+        - 如果columns不是数字,且data数据为[], 下一列columns是数字,且data数据不为空[], 且两个table columns数量一致, 推测是同一个表数据,选取的表必须用索引，不能用字段名称进行验证
+        - 列表的索引需要由大模型从收集到的列表中获取，禁止使用table["columns"].index("xxx")的方式获取
+    4. 基于get_table_via_pandas得到表格数据，找到合适的表格数据,
+    5. 输出必须选取 pandas index进行数据定位
+    6. 生成的run方法，需要将代码中可能动态变化的参数提取到run方法的参数中，如column_index为数据存在的索引，target_value为待校验的数据
+          例如：run(browser, column_index=1, target_value="xxxxxx")
+    7. 根据精准指令结果和元素信息,生成对应的Python代码,代码注释必须要用英文。
+
+- Examples:
+  
+```python
+# -*- coding: utf-8 -*-
+'''{"requirement":"步骤描述xxx".","column_index":"1","target_value":"xxxxxx","current_step":"步骤描述xxx"}'''
+from autotest import *
+import pandas as pd
+
+def run(browser, column_index=1, target_value="xxxxxx"):
+    try:
+        # 获取tables数据
+        tables = get_table_via_pandas(browser)
+        
+        # 选取对应的table对数据进行操作验证
+        table = tables[index]
+        # 组装成DataFrame
+        table_data = xxxx # 根据收集的数据生成data部分数据用于组合df
+        table_columns = xxxxx # 根据收集的数据生成columns部分数据用于组合df
+        df = pd.DataFrame(table_data, columns=table_columns)
+        #  必须选取 pandas index 对数据进行操作验证
+        column_index = column_index  # 根据搜集到的数据找到待操作数据存在的索引位置
+        # 开始校验数据...
+        ....
+
+    except Exception as e:
+        writeResult(False, "An error aaaoccurred during the test: " + str(e))
+```
+
+# 补充信息
+如果有涉及到日期的校验, 当前的时间用datetime模块动态获取, 如：today = datetime.today().strftime("%Y-%m-%d")
+{{envinfo}}
+
+# 测试步骤为：
+{{current_step}}
+
+# 页面的表格数据:
+get_table_via_pandas 获得的数据如下:
+{{collect_page}}
+
+""")

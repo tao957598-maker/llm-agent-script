@@ -1,0 +1,50 @@
+/*
+{
+	"title":"Cookie Page Auth Probe",
+	"description":"Cookie Page Auth Probe",
+	"parameter":[
+		{
+			"name":"system_name",
+			"label":"系统名称",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"Cookie",
+			"label":"Cookie",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"spider",
+	"dependency": "ac",
+	"uiEntrance":"graph",
+	"displayOrder":3,
+	"version":1
+}
+*/
+// get n_kb_spiderdeep_content_data
+n_kb_spiderdeep_content_data, act_kb.selectBy?sql='SELECT ANY_VALUE(id) as id, ANY_VALUE(base_url) as base_url, current_uri FROM kb_spiderdeep_content WHERE system_name = "{{system_name}}" AND login_redirect_uri IS NULL GROUP BY current_uri'
+assign('cookie', '{{Cookie}}')
+
+foreach('n_content_data', 'n_kb_spiderdeep_content_data', {
+		assign('n_content_item', '{{n_content_data.item}}')
+		// 构建请求体
+		n_parameters,act_func?script='''
+			def params = [:]
+			params.base_url = n_content_item.base_url
+			params.probe_uri = n_content_item.current_uri
+			params.cookie = binding.hasVariable('cookie') ? cookie : ""
+			return params
+		'''
+		// 发起请求
+		n_spider_deep_result, act_rpa.send?command=SpiderAuthProbe&parameters='{{n_parameters}}'
+
+		n_spider_result,act_func?script='''return n_spider_deep_result[0] '''
+
+		// 找到任务表并更新任务表状态
+		act_kb.selectBy?sql='UPDATE kb_spiderdeep_content SET guest_redirect_uri="{{n_spider_result.guest_redirect_uri}}", login_redirect_uri="{{n_spider_result.login_redirect_uri}}" WHERE system_name = "{{system_name}}" and current_uri = "{{n_content_item.current_uri}}"'
+	}
+)

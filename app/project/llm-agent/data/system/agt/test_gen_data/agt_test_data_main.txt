@@ -1,0 +1,196 @@
+/*
+{
+	"title":"Test Data Generation",
+	"description":"Generate test data from file input",
+	"parameter":[
+		{
+			"name":"file_data",
+			"label":"*文件",
+			"type":"file"
+		},
+		{
+			"name":"count",
+			"label":"Generation Quantity"
+		},
+		{
+			"name":"knowledge_name",
+			"label":"File Name"
+		},
+		{
+			"name":"folder_name",
+			"label":"knowledge Space"
+		}
+	],
+	"resultPlan":"Applicant_metadata,Appl_Card_metadata,Applicant_data,Appl_Card_data",
+	"life":10000,
+	"version":1
+}
+*/
+assign("file_data", "{{file_data}}")
+
+when('!fn.hasValue(count)', {
+	assign("count", "10")
+})
+
+
+// 判断没有文件取知识库参数
+when('fn.hasValue(file_data)',{
+  // 读取信息
+  n_result_data1,act_func.read?filename='{{file_data}}'
+  assign("n_file_data", "{{n_result_data1}}")
+},{
+  // 读取知识库文件
+  n_result_data2,act_kbs.readSectionFile?folderName='{{folder_name}}'&knowledgeName='{{knowledge_name}}'&isSource=true
+  assign("n_file_data", "{{n_result_data2}}")
+})
+
+
+// 调用大模型，返回表名称
+tpl_table_list
+
+// 将返回的 data["data"] 赋值给 table_list
+assign("table_list", '{{tpl_table_list.data}}')
+assign("data_table_list", '{{tpl_table_list.data}}')
+
+
+//  数据解析与关联关系识别
+foreach('n_data', 'table_list', {
+  // 下标对应内容
+  assign('table_item', '{{n_data.item}}')
+
+  // 生成元数据信息
+  n_metadata,agt_metadata_information?input="{{n_file_data}}"&other="生成表名称{{table_item}}"
+  // 赋值
+  when('table_item == "Applicant"', {
+    // Applicant
+    assign("Applicant_metadata", '{{n_metadata}}}')
+  })
+  when('table_item == "Appl_Card"', {
+      // Appl_Card
+      assign("Appl_Card_metadata", '{{n_metadata}}}')
+    })
+})
+// 关联关系识别
+n_relationship_data,agt_relationship_extraction?input="{{n_file_data}}"&other=""
+
+assign("Applicant_data", '[]')
+assign("Appl_Card_data", '[]')
+assign("table_list2", '["Applicant","Appl_Card"]')
+// 数据生成
+foreach('tb2', 'table_list2', {
+  // 数据生成下标对应内容
+  assign('table_item', '{{tb2.item}}')
+  when('!fn.hasValue(other_information)', {
+  	assign("other_information", "[]")
+  })
+  // 生成数据
+  n_data,tpl_gen_data
+  when('table_item == "Applicant"', {
+    // Applicant
+    assign("Applicant_data", '{{n_data}}')
+  })
+  foreach('n_data', 'Applicant_data.data', {
+  // 下标对应内容
+   assign('table_item', '{{n_data.item}}')
+    tpl_gen_data_2
+    // Appl_Card_data生成数据
+    assign("Appl_Card_data", '{{tpl_gen_data_2}}')
+    // act_flow.go?plan=end
+  })
+
+})
+
+
+// 数据
+assign("n_table_data", '{{Applicant_data}}')
+
+// 处理
+n_d_data,act_func?script='''
+def result = []
+for (i in 0..<n_table_data.data.size()) {
+  def row = [:]
+  def dataRow = n_table_data.data[i]
+  for (j in 0..<n_table_data.columns.size()) {
+    if (j < dataRow.size()) {
+      row[n_table_data.columns[j]] = dataRow[j]
+    } else {
+      row[n_table_data.columns[j]] = null
+    }
+  }
+  result.add(row)
+}
+
+return result
+'''
+assign("result_list",'{{n_d_data}}')
+
+// 保存数据库
+act_kb.defineAndImportData?tableName='kb_test_data_market_demo'&data='{{result_list}}'
+// act_kb.defineAndImportData?tableName='kb_{{n_table_data.table_name}}_data_market'&data='{{result_list}}'
+
+
+define('tpl_table_list', '''
+- Role: 数据分析师和信息提取专家
+- Background: 用户需要从复杂的数据信息中快速准确地提取出表名，以便进行进一步的数据分析和处理。
+- Profile: 你是一位专业的数据分析师，擅长从大量数据中提取关键信息，具有敏锐的洞察力和高效的信息处理能力。
+- Skills: 你具备强大的数据解析能力，能够识别和提取数据集中的表名，同时理解数据结构和数据库设计原则。
+- Goals: 从提供的数据信息中准确提取表名，并能够识别表名的模式和结构。
+- Constrains: 提取的表名需要准确无误，同时应避免提取无关信息，确保提取过程的高效性和准确性。
+- OutputFormat: 以列表形式输出提取的表名，每个表名清晰标注，便于用户查阅和使用。直接返回json list数据:```json\n{"data":[table1,table2...]}```
+- Workflow:
+  1. 接收并分析提供的数据信息。
+  2. 识别数据中的表结构和表名模式。
+  3. 提取所有表名，并进行整理和验证。
+  4. 以清晰、有序的格式输出提取的表名。
+  5. 不要解释
+
+# 数据信息
+{{n_file_data}}
+''')
+
+
+
+define('tpl_gen_data', '''
+- Role: 数据生成专家
+- Background: 用户需要根据特定的元数据信息和补充信息来生成测试数据，这些数据需要尽可能地符合实际场景，以便进行有效的测试和验证。
+- Profile: 你是一位经验丰富的数据生成专家，擅长根据元数据和补充信息构建符合实际场景的数据模型。
+- Skills: 你具备数据建模、编程和逻辑分析能力，能够理解元数据的结构和含义，以及如何根据补充信息生成真实感强的数据。
+- Goals: 生成符合元数据定义和补充信息要求的测试数据，并以JSON格式返回。
+- Constrains: 生成的数据必须符合元数据的结构，同时要考虑到数据的合理性和实际场景的适用性。
+- OutputFormat: 输出markdown内容,```json\n{"table_name":"表名称","columns":[column1,column2,...],"data":[[data11,data12],[data21,data22],"count":"data数量"}```
+- Workflow:
+  1. 分析元数据信息，理解数据结构和字段要求。
+  2. 结合补充信息，确定数据生成的具体规则和约束条件。
+  3. 根据元数据和补充信息生成测试数据，并确保数据符合实际场景。
+  4. 将生成的数据以python dict格式组织和返回。```python\n{"table_name":"表名称","columns":[column1,column2,...],"data":[[data11,data12],[data21,data22]],"count":"data数量"}```
+  5. 不必解释
+# 元数据信息
+{{n_metadata}}
+## 补充信息
+{{other_information}}
+''')
+
+
+
+define('tpl_gen_data_2', '''
+- Role: 数据生成专家
+- Background: 用户需要根据特定的元数据信息和补充信息来生成测试数据，这些数据需要尽可能地符合实际场景，以便进行有效的测试和验证。
+- Profile: 你是一位经验丰富的数据生成专家，擅长根据元数据和补充信息构建符合实际场景的数据模型。
+- Skills: 你具备数据建模、编程和逻辑分析能力，能够理解元数据的结构和含义，以及如何根据补充信息生成真实感强的数据。
+- Goals: 生成符合元数据定义和补充信息要求的测试数据，并以JSON格式返回。
+- Constrains: 生成的数据必须符合元数据的结构，同时要考虑到数据的合理性和实际场景的适用性。
+- OutputFormat: 输出markdown内容,```json\n{"table_name":"表名称","columns":[column1,column2,...],"data":[[data11,data12],[data21,data22],"count":"data数量"}```
+- Workflow:
+  1. 分析元数据信息，理解数据结构和字段要求。
+  2. 结合补充信息，确定数据生成的具体规则和约束条件。
+  3. relationship_data 中 `type`=`OneToMany`,可以生成多条数据,若涉及个人信息字段需要保持一致,但on中的字段保持不变.
+  4. 根据元数据和补充信息生成测试数据，并确保数据符合实际场景。
+  5. 将生成的数据以python dict格式组织和返回。```python\n{"table_name":"表名称","columns":[column1,column2,...],"data":[[data11,data12],[data21,data22]],"count":"data数量"}```
+  6. 不必解释
+# 元数据信息
+{{Appl_Card_metadata}}
+## 补充信息
+relationship_data: {{n_relationship_data}}
+{{table_item}}
+{{Applicant_data.columns}}
+''')

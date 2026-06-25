@@ -1,0 +1,17 @@
+/*
+{
+	"title":"test demo tmp",
+	"description":"test demo tmp",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"客户问题\",\"type\":\"textarea\"}",
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"s",
+	"life":100,
+	"displayOrder":0,
+	"version":2
+}
+*/
+
+assign('parameter',"验证搜索结果页面内容是否包含与元")
+assign('userInput',"{{userInput}}")
+assign('parameter',"验证搜索结果页面内容是否包含与元")
+

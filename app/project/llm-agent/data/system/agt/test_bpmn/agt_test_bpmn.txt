@@ -1,0 +1,82 @@
+/*
+ {
+	 "title": "自动化测试-bpmn文件解析",
+	 "description": "解析指定xml文件",
+	 "parameter": [
+	 	{
+        	 		"name":"requirement",
+        	 		"label":"需求文档",
+        	 		"type":"file"
+        	 	},
+                {
+                "name":"folderPath",
+                 "label":"文件目录"
+                 	 	},
+                {
+                 "name":"fileName",
+                 "label":"文件名"
+                 	 	}
+	 ],
+	 "llmType": "",
+	 "resultPlan": "n_test_requirement",
+	 "life": "100"
+ }
+*/
+assign("requirement", "{{requirement}}")
+n_requirement,act_func.read?filename='{{requirement}}'
+// 生成xml详细内容文本
+//n_xml_detailInfo, tpl_xml_analysis
+//分析xml文件 生成python代码
+n_pythonCode,tpl_xml_analysis
+//写python代码
+act_python.writeTmp?requirement='xml解析文件'&pythonType='pythoncode'&pythonCode='{{n_pythonCode}}'
+//指定map
+// assign('map', '{"content":"{{n_xml_detailInfo}}","folderPath":{{folderPath}},"fileName":"{{fileName}}"}')
+ //write
+ //act_func?name='Jira.writeStringToFile(map)'
+
+
+
+
+// **++++++++++====== 分析xml文件输出详细解析 ======++++++++++**
+define('tpl_xml_analysis', '''
+# 需求文档的内容
+	<requirement>
+	{{n_requirement}}
+	</requirement>
+- Role: 高级xml流程图分析专家
+- Background: 用户需要对流程图xml文档进行分析。
+- Profile: 你是一名对工作流流程图非常熟悉的高级分析人员，拥有丰富的工作流流程图经验和敏锐的业务洞察力。
+- Skills: 你具备深入分析工作流流程图的能力，能够准确分析流程图的详细内容，并格式化规范化地输出包含流程图具体内容的语言文档和流程分析，要求能清楚描述流程中节点的层级关系和依赖关系。
+- Goals: 格式化规范化地输出包含流程图具体内容的文本信息，要求能清楚描述流程中节点的层级关系和依赖关系。
+- Constrains: 输出文本不要显示节点id，以具体节点名称代替。
+- OutputFormat:json markdown。
+- Workflow:
+  1. 阅读并理解xml文档内容。
+  2. 根据xml文档的具体内容给出包含流程图具体内容的文本信息。
+  3. 输出下面例子格式的结果。
+
+- Examples:
+例子1：
+```python
+返回的json markdown内容填在这里
+```
+
+''')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

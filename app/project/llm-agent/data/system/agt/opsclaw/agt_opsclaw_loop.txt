@@ -1,0 +1,86 @@
+/*
+{
+	"title": "OpsClaw LOOP",
+	"description": "OpsClaw LOOP - 执行 ReAct 循环：DECIDER 产出决策 → TOOL 执行 → Observation/Hint 更新，直至 FINISH 或被中止。",
+	"parameter": [
+		{"name":"userInput", "label":"用户输入", "required":true},
+		{"name":"loginUserName", "label":"登录用户名"},
+		{"name":"contextSystem", "label":"当前系统"},
+		{"name":"contextEnv", "label":"当前环境"},
+		{"name":"opsclaw_root", "label":"opsclaw 根目录"},
+		{"name":"allow_high_risk_action_safe", "label":"是否允许高风险动作"},
+		{"name":"react_max_steps", "label":"最大循环次数"},
+		{"name":"n_load_memory_result", "label":"记忆加载结果"},
+		{"name":"n_api_candidates", "label":"API 候选"},
+		{"name":"n_dynamic_toolset_guide", "label":"动态工具集说明"},
+		{"name":"n_tool_routing_guide", "label":"工具路由规则"},
+		{"name":"n_plan_tasks", "label":"规划结果(plan list)"}
+	],
+	"resultPlan": "n_loop_result",
+	"discoverable": false,
+	"tag": "opsclaw"
+}
+*/
+
+assign(
+	'react_status', 'running',
+	'react_last_observation', '',
+	'react_last_thought', '',
+	'react_memory_feedback', '',
+	'react_last_success', '',
+	'react_last_done', '',
+	'react_last_final_result', '',
+	'react_last_exit_reason', '',
+	'n_final_result', '')
+
+foreach('n_react_turn', 'react_status != "done" && n_react_turn.index < react_max_steps', {
+	assign('react_step_no', '{{n_react_turn.index + 1}}')
+
+	// 由决策器生成结构化决策，并完成 schema 校验
+	n_react_decision, agt_opsclaw_decider.opsclaw?\
+		userInput={{userInput}}&loginUserName={{loginUserName}}&contextSystem={{contextSystem}}&contextEnv={{contextEnv}}&\
+		allow_high_risk_action_safe={{allow_high_risk_action_safe}}&\
+		n_plan_tasks_summary={{n_plan_tasks.validSummary!}}&\
+		n_load_memory_result={{n_load_memory_result}}&n_api_candidates={{n_api_candidates}}&\
+		n_dynamic_toolset_guide={{n_dynamic_toolset_guide}}&n_tool_routing_guide={{n_tool_routing_guide}}&\
+		react_last_observation={{react_last_observation}}&react_last_thought={{react_last_thought}}&\
+		react_last_success={{react_last_success}}&react_last_done={{react_last_done}}&\
+		react_last_final_result={{react_last_final_result}}&react_last_exit_reason={{react_last_exit_reason}}
+
+	assign('react_last_thought', '{{fn.optional(n_react_decision.thought, "")}}')
+
+	when('n_react_decision.action == "FINISH"', {
+		//## 决策结果为 FINISH，提取最终回答
+		assign('n_final_result', '{{fn.optional(n_react_decision.answer, "")}}')
+		assign('react_status', 'done')
+	}, {
+		// 工具执行：统一走 opsclaw_tool（高风险确认/失败兜底/反馈格式化）
+		n_tool_call_result, agt_opsclaw_tool.opsclaw?\
+			userInput={{userInput}}&opsclaw_root={{opsclaw_root}}&allowHighRiskAction={{allow_high_risk_action_safe}}&\
+			action={{n_react_decision.action}}&toolType={{n_react_decision.toolType}}&toolCode={{n_react_decision.toolCode}}&\
+			parameters={{n_react_decision.parameters}}&riskLevel={{n_react_decision.riskLevel}}&stepNo={{react_step_no}}
+
+		assign('n_tool_result_map', '{{fn.map(n_tool_call_result)}}')
+		assign('react_last_observation', '{{n_tool_result_map.observation}}',
+			'react_memory_feedback', '{{n_tool_result_map.memoryFeedback}}',
+			'react_last_success', '{{n_tool_result_map.success}}',
+			'react_last_done', '{{n_tool_result_map.done}}',
+			'react_last_final_result', '{{n_tool_result_map.finalResult}}',
+			'react_last_exit_reason', '{{n_tool_result_map.exitReason}}')
+
+		log('[OPENCLAW_LOOP] 步骤{{react_step_no}} tool执行结果 n_tool_call_result={{n_tool_call_result}}')
+		log('[OPENCLAW_LOOP] 转换后 done={{react_last_done}}')
+		when('react_last_done == "true"', {
+			assign('n_final_result', '{{react_last_final_result}}')
+			assign('react_status', 'done')
+		})
+
+		// 每轮仅沉淀一条简要经验，供下一轮 thought 或后续任务复用。
+		when('fn.hasValue(react_memory_feedback)', {
+			// 将本轮执行经验写入 Agent 记忆（用于后续决策参考）
+			act_memory.addAgentHint?feedback='{{react_memory_feedback}}'
+		})
+	})
+})
+
+assign('n_loop_result', '{{fn.json("n_final_result, n_final_result, react_status, react_status, react_last_observation, react_last_observation, react_last_thought, react_last_thought, react_last_success, react_last_success, react_last_done, react_last_done, react_last_final_result, react_last_final_result, react_last_exit_reason, react_last_exit_reason")}}')

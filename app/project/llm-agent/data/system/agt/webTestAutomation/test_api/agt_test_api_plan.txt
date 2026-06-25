@@ -1,0 +1,152 @@
+/*
+{
+	"title":"Execute API Test Case and Generate Report",
+	"description":"Execute API Test Case and Generate Report",
+	"resultPlan":"n_test_title,report",
+	"parameter":[
+		{
+			"name":"system",
+			"label":"System Name",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"task_name",
+			"label":"任务名称",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"base_url",
+			"label":"Base Url",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		},
+		{
+			"name":"data",
+			"label":"data",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		}
+	],
+	"tag":"Automated Testing",
+	"resultPlan":"n_test_title,report",
+	"displayOrder":73,
+	"version":2
+}
+*/
+// Get base url
+assign('n_base_url', '{{base_url}}')
+
+// Get task name
+assign("n_task_name", "{{task_name}}")
+
+// Get data
+n_datas,act_func?js='''
+	(function() {
+		return JSON.stringify({{data}});
+	})();
+'''
+
+// Get platform
+assign("n_platform", "{{system}}")
+
+// Get  all api
+n_all_api, act_func?script='''
+    def data = data
+    def result = data.collect { it.name }.join(",")
+    return result
+'''
+
+// Get hash suffix 
+n_suffix,act_func?js='''
+	(function() {
+		let str = '{{n_all_api}}'
+		let hash = 0;
+		for (let i = 0; i < str.length; i++) {
+			const char = str.charCodeAt(i);
+			hash = ((hash << 5) - hash) + char;
+			hash = hash & hash;
+		}
+		return Math.abs(hash).toString(16);
+	})();
+'''
+
+ 
+// 返回title_list
+n_test_title, act_func.run?script='''
+	def result = []
+	n_datas.each { item ->
+		if (item.function_data) {
+			def item_list = fn.list(item.function_data)
+          	item_list.each{dict_data->
+              def bb = dict_data.title
+          		result << bb
+            }
+		}
+	}
+	return result
+'''
+ 
+
+
+// Do Execute: url, name, method, description, para, verify
+n_result_data, act_api.doExecuteDynamic?name="api_test_0725"&dynamicParamData='{{fn.json("task, n_task_name, url, n_base_url, datas, n_datas")}}'
+n_result_data_map, act_func?script='''
+	return fn.map(n_result_data)
+'''
+
+// Write test report
+when('n_result_data_map.success == "true"',{
+	n_data,act_func?script='''
+		def result_data = n_result_data_map
+		return result_data.data
+	'''
+	n_current_timestamp,act_func?script='''
+		def now = new Date()
+		def millis = now.time % 1000
+
+		def timestamp = String.format(
+			"%04d%02d%02d%02d%02d%02d%03d",
+			now.year + 1900,
+			now.month + 1,
+			now.date,
+			now.hours,
+			now.minutes,
+			now.seconds,
+			millis
+		)
+		return timestamp
+	'''
+	assign('report_file', 'appdata/api_report/{{n_platform}}/{{task_name}}_{{n_current_timestamp}}_{{n_suffix}}.html')
+	act_func.write?filename='{{report_file}}'&data='{{n_data}}'&syncKbs=true
+
+	// Time sleep
+	act_flow.wait?second=3
+
+	// select Knowledge dic_id
+	n_knowledge_data,act_kb.selectBy?sql="select * from kb_spaces_folder_knowledge where store_uri = '{{report_file}}';"
+	// get dic_id
+	n_dic_id,act_func?script=''' n_knowledge_data[0].kb_spaces_folder_id '''
+
+	assign('report_file_name', '{{task_name}}_{{n_current_timestamp}}_{{n_suffix}}.html')
+    // Test Result
+	assign('report', 'API test completed, report file: <a href="/chat-knowledge-base?dic_id={{n_dic_id}}">{{report_file}}')
+},
+{
+    n_msg,act_func?script='''
+		def result_data = n_result_data_map
+		return result_data.data
+	'''
+    // Test Result
+    assign('report', '{{n_msg}}')
+
+})

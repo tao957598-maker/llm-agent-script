@@ -1,0 +1,164 @@
+/*
+{
+	"title":"Save selenium script",
+	"description":"Save seleniumn for test requirement",
+	"parameter":[
+		{
+			"name":"test_no",
+			"label":"测试编号",
+			"type":"textarea"
+		},
+		{
+			"name":"current_step",
+			"label":"当前验证步骤",
+			"type":"textarea"
+		},
+		{
+			"name":"sourceCode",
+			"label":"源代码",
+			"type":"textarea"
+		},
+		{
+			"name":"parameters",
+			"label":"参数",
+			"type":"textarea"
+		},
+		{
+			"name":"is_page_code",
+			"label":"是否为页面代码",
+			"type":"textarea"
+		}
+	],
+	"tag":"test",
+	"resultPlan":"n_python_file",
+	"life":50,
+	"version":2
+}
+*/
+// get n_global variable
+n_global_variable, act_memory.retrieve?var=global_variable&global=true
+n_global_variable_page_code_info, act_memory.retrieve?var=global_variable_page_code_info&global=true
+n_page_info,act_memory.retrieve?var=current_page_path_info&global=true
+
+assign("code","{{sourceCode}}")
+assign("test_no","{{n_global_variable.test_no}}")
+assign("system","{{n_global_variable.system}}")
+assign("version","{{n_global_variable.version}}")
+when('fn.hasValue(is_page_code) & is_page_code=="false"', {
+	// **Log** ✅ not page code
+	assign("no_page_code","not page code")
+	// Write step code script 
+	n_python_file,act_python.write?path={{n_global_variable.script_subfolder}}&requirement={{current_step}}&sourceCode={{sourceCode}}&parameters={{parameters}}
+	act_kb.merge?name='kb_testcase_step'&columnValues='{"script_path":"{{n_python_file.kbspath}}"}'&where='{{fn.json("test_no,test_no,application,system,version,version,step,current_step")}}'
+
+},{
+	// **Log** ✅ is page code
+	assign("page_code","is page code")
+	// get method name
+	n_data,tpl_get_method_name,psr_json
+	// Write step code script 
+	n_python_file,act_python.write?path={{n_global_variable.script_subfolder}}&requirement={{current_step}}&sourceCode={{sourceCode}}&method={{n_data.function_name}}&parameters={{parameters}}
+	act_kb.merge?name='kb_testcase_step'&columnValues='{"script_path":"{{n_python_file.kbspath}}"}'&where='{{fn.json("test_no,test_no,application,system,version,version,step,current_step")}}'
+	assign("code_path","{{n_python_file.kbspath}}")
+
+	// {"url": "http://172.18.2.14:5171/login", "path": "/login", "clean_path": "login", "module_name": "login", "is_root": false, "page_status": "complete"}
+	assign("page_code_file_name","{{n_page_info[0].module_name}}{{n_global_variable.file_type}}")
+
+
+	assign("page_subfolder","/{{n_global_variable.system}}/{{n_global_variable.programming_language}}/pages/{{n_page_info[0].clean_path}}")
+	// n_page_code_info_datan_page_code_info_data
+	n_page_code_info_data,act_func.run?script='''
+	def myDict = [
+	type: n_global_variable.programming_language,
+	requirement: current_step,
+	application: n_global_variable.system,
+	code_path: code_path,
+	filename: page_code_file_name,
+	subfolder: page_subfolder,
+	is_page_code: n_data.is_page_code
+		]
+		n_global_variable_page_code_info.add(myDict)
+		return n_global_variable_page_code_info
+	'''
+	act_memory.assign?var=global_variable_page_code_info&value={{n_page_code_info_data}}&global=true
+})
+// Result
+assign('result', '{{n_python_file.kbspath}}')
+
+define("tpl_get_method_name",'''
+# 函数命名规范
+✅ **策略**：
+- 函数名必须**语义清晰 + 唯一标识操作目标**。
+- 避免仅用通用名如 `input()`、`click()`，而应结合**操作类型 + 元素语义**。
+- 可通过以下方式保证唯一性：
+  - 根据`current step`使用元素的业务语义（如 `username`, `password`, `login_button`）
+  - 若同一元素有多种操作（如清空+输入），可加前缀/后缀（如 `clear_and_input_username`）
+
+> 💡 **经验法则**：看到函数名就能知道“对哪个元素做了什么”。
+
+---
+
+###   函数名称应基于：“操作 + 元素语义”
+
+✅ **推荐命名规范**：
+```text
+{verb}_{element_semantic}
+```
+
+| 操作类型       | 动词建议                     | 示例                              | Page 级别 |
+|----------------|------------------------------|-----------------------------------|-----------|
+| 打开网页/导航  | `open_`, `goto_`, `navigate_to_` | `open_baidu_homepage`, `goto_login_page`, `navigate_to_dashboard` | 1         |
+| 输入           | `input_`, `type_`            | `input_username`                  | 1        |
+| 点击           | `click_`                     | `click_login_button`              | 1        |
+| 选择           | `select_`                    | `select_role_admin`               | 1        |
+| 清空           | `clear_`                     | `clear_password_field`            | 1        |
+| 悬停           | `hover_`                     | `hover_over_profile_icon`         | 1        |
+| 右键点击       | `right_click_`               | `right_click_context_menu`        | 1        |
+| 拖拽           | `drag_and_drop_`             | `drag_and_drop_item_to_cart`      | 1        |
+| 滚动           | `scroll_to_`                 | `scroll_to_bottom`                | 0        |
+| 上传文件       | `upload_`                    | `upload_profile_picture`          | 1        |
+| 切换 iframe    | `switch_to_frame_`           | `switch_to_payment_iframe`        | 0        |
+| 切换窗口/标签页| `switch_to_window_`          | `switch_to_new_tab`               |  0       |
+| 获取文本       | `get_`                       | `get_error_message`               | 0        |
+| 获取属性       | `get_`                       | `get_element_attribute`           | 0        |
+| 验证/断言      | `assert_`, `verify_`         | `assert_login_success`            | 0        |
+| 等待（条件）   | `wait_for_`                  | `wait_for_page_load_complete`     | 0        |
+| 比较           | `compare_`                   | `compare_actual_vs_expected_title`| 0        |
+| 获取状态/属性  | `is_`, `has_`                | `is_user_logged_in`               | 0        |
+| 获取状态/属性  | `is_`, `has_`                | `has_error_banner`                | 0        |
+| 日志/报告      | `log_`, `record_`            | `log_test_step`                   | 0        |
+| 数据准备       | `prepare_`, `load_`          | `load_test_user_data`             | 0        |
+| 导航判断       | `should_redirect_to_`        | `should_redirect_to_dashboard`    | 0        |
+| 截图           | `take_screenshot`            | `take_screenshot_on_failure`      | 0        |
+| 权限校验       | `check_permission_`          | `check_permission_to_edit_profile`| 0        |
+
+
+> ✅ **元素语义**应来自业务`current step`含义（如 `username`），而非技术 ID（如 `id_3042563435`）。  
+> 如果无法获取语义名，可临时用 `field_1`，但应尽快映射为语义名（通过配置表或元素库）。
+# 要求
+1.根据函数命名规范，为`input code`生成唯一的函数名。
+2.函数名必须语义清晰，能够准确描述操作目标。
+3.以json格式返回函数名。例如：
+```json
+{
+    "function_name": "input_username"
+	"is_page_code": "1"
+}
+```
+**`is_page_code`**：是否为Page级别代码。1表示是，0表示否。
+### 判断原则（供参考）：
+- ✅ **Page 级别 = 是**：**直接操作 DOM 元素**（点击、输入、选择、滚动、清空等），不包含判断或预期。
+- ❌ **Page 级别 = 否**：包含以下任一特征：
+  - 包含**断言/验证**逻辑；
+  - 返回**布尔值或比较结果**用于判断；
+  - 属于**测试流程控制**（如日志、截图、数据加载）；
+  - 表达**业务规则或预期行为**而非具体操作。
+
+# current step: 
+{{current_step}}
+# input code
+```
+{{code}}
+```
+
+''')

@@ -1,0 +1,75 @@
+/*
+{
+	"title":"single Test Steps",
+	"description":"读取测试步骤并根据步骤生成规范化的测试数据，非输入项自动设置为null，便于数据存储和可视化展示",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"输入需要生成测试数据的测试步骤说明",
+			"type":"textarea"
+		},
+		{
+			"name":"outputTable",
+			"label":"指定生成的测试数据要保存的表名称",
+			"type":"input"
+		}
+	],
+	"life":100,
+	"version":1
+}
+*/
+/
+
+// 获取查询 SQL 并执行
+agt_auto_sql1?userInput='{{userInput}}'
+n_kb_data, act_kb.selectBy?sql='{{sys_last_result}}'
+assign("n_result_data", "{{n_kb_data}}")
+
+// 数据处理
+n_test_data,act_func?script='''
+  def result = [steps: "",test_no: n_result_data[0].test_no]
+  for (item in n_result_data) {
+    result.steps += item.step
+  }
+  return result
+'''
+
+// 数据输出
+assign("case_item", "{{n_test_data}}")
+
+n_final_data, tpl_all_in_one
+
+// 返回整体输出结果
+assign("generated_data", "{{n_final_data}}")
+
+// 保存到数据库
+assign("newTableName", "{{outputTable}}")
+act_kb.defineAndImportData?tableName='{{newTableName}}'&data='{{n_final_data}}'
+
+// 判断每步是否为输入项，并生成测试数据矩阵
+define("tpl_all_in_one", '''
+你是一位测试专家，请根据以下按编号列出的操作步骤内容，为每一步生成标准化的测试数据。
+
+请遵循以下规则：
+
+1. 每步操作如果是“输入”类操作（如“输入xxx到yyy字段”、“Type xxx into yyy”等），请提取字段含义，并为该字段生成多组高质量测试值，包括但不限于：正常值、空值、边界值、特殊字符等；
+2. 如果所有操作均为“非输入类”（如“点击按钮”、“跳转页面”、“选择项”等），请将 `data` 字段直接返回为空数组 `[]`；
+3. 同时包含“输入类”和“非输入类”的操作，“非输入类”请填入标准 JSON 中的 `null` 值占位（注意是小写 null，且不要省略），确保每组测试数据中字段位置不变、维度固定；
+4. 即使是连续多个非输入操作，也必须保留对应位置的 `null`，不要自动删除或合并，确保每组数据数组长度与操作步骤数量完全一致；
+5. 返回格式为标准 JSON 对象，字段包括：
+   - `test_no`: 取测试编号test_no，不需要自动生成
+   - `data`: 字符串形式的 JSON 数组数组（注意是 JSON 字符串），
+
+最终输出json结构数据,可直接保存数据库,示例如下：
+
+[{
+  "test_no": "1.0",
+  "data": "[[null, \"admin\", \"123456\"], [null, \"\", \"abc!@#\"], [null, \"测试\", \"特殊字符\"]]"
+}]
+
+以下是操作步骤内容：
+{{case_item.steps}}
+
+以下是测试编号test_no：
+{{case_item.test_no}}
+''')

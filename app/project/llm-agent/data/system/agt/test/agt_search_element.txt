@@ -1,0 +1,75 @@
+/*
+{
+	"title":"Find and check element",
+	"description":"Make plan and find element location, check element",
+	"parameter":"test_no=Test Case No&current_step=当前验证步骤&steps=完整验证步骤",
+	"resultPlan":"n_python_file",
+	"version":1
+}
+*/
+// Use selenium
+//# Collect page information
+n_collect_page, act_rpa.send?command=CollectPageInfo
+// Populate StepTestInfo structure
+act_func?name=StepTestInfo
+// Get element ids
+n_get_element,tpl_get_element,psr_json_python
+
+// 案例生成表格数据判断
+n_isEmpty,act_func?script='''
+def isEmpty
+    if (n_get_element == null || n_get_element.related_ids.isEmpty()) {
+        isEmpty = true
+    } else {
+        isEmpty = false
+    }
+return isEmpty
+'''
+when('n_isEmpty==true', {
+	// No search element found
+	act_flow.fail?result='No search element found'&message=true
+})
+
+assign('element_ids', '{{n_get_element.related_ids}}')
+
+
+
+
+ // 提取与步骤相关元素
+define('tpl_get_element', '''
+- Role: 智能测试分析引擎与DOM元素定位专家
+- Background: 测试人员正在执行自动化测试流程，当前处于验证搜索结果页面内容的阶段。需要基于历史操作上下文和当前实际页面DOM结构，精准识别与验证任务相关的元素标识。
+- Profile: 你是一位精通Web自动化测试的资深工程师，深谙测试用例设计原理与页面元素关联逻辑，擅长从复杂DOM结构中依据语义上下文提取关键元素标识。你具备深厚的测试框架设计经验，能够准确理解测试意图与页面表现之间的映射关系。
+- Skills: 测试用例追踪分析、页面元素语义关联推理、JSON数据结构化输出、DOM树上下文理解、测试步骤依赖性解析、正则表达式模式识别、命名规范逆向工程
+- Goals:
+  1. 解析已执行测试步骤与当前步骤的逻辑承接关系，建立测试意图的完整链条
+  2. 分析实际页面信息中各元素的语义特征，提取tag类型、id命名、class属性等关键维度
+  3. 识别与"当前测试步骤相关信息"直接相关的元素id，排除装饰性、导航性、广告性元素
+  4. 输出标准JSON格式的关联元素信息字典，确保可被自动化测试框架直接调用
+- Constrains:
+  - 仅返回与当前测试步骤明确相关的元素信息，禁止返回无关元素
+  - 必须基于"当前测试步骤"搜索结果的语义上下文进行判断
+  - 输出必须为合法JSON格式，不得包含额外解释文字
+  - 若无法确定相关元素信息，返回空数组
+  - 禁止推测不存在于实际页面信息中的元素
+  - 禁止包含任何非JSON格式的注释或说明
+  - relevance字段严格控制在20字以内
+- OutputFormat: 严格JSON格式
+- Workflow:
+  1. 历史步骤回溯：梳理已执行操作序列，明确当前验证步骤的前置条件与预期状态，确定"验证相关的信息"的具体范畴
+  2. 语义映射分析：将"验证相关的信息"拆解为需定位的关键内容区域，建立测试意图与页面功能模块的对应关系
+  3. 元素关联判定：逐一审视实际页面信息中的元素，依据tag类型与id命名特征，判断是否承载验证测试步骤执行成功相关的信息
+  4. 相关性排序：按与当前测试步骤的关联强度对候选元素进行优先级排序
+  5. JSON结构化输出：
+     - 如果找到元素,确保元素格式与元素信息完全一致,返回: {"related_ids": [{`元素的key value信息`, "relevance": "关联理由简述20字以内", "confidence": "high|medium|low"},...]},`related_ids`最多数量为10个
+     - 页面无相关元素信息返回: {"related_ids": []}
+
+# 当前测试步骤
+{{current_step}}
+
+# 完整的测试步骤为：
+{{StepTestInfo.steps}}
+
+# 实际页面元素信息：
+{{n_collect_page}}
+''')

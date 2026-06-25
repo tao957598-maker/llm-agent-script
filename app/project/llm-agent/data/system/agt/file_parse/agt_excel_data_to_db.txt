@@ -1,0 +1,132 @@
+
+/*
+{
+	"title": "excel data to db",
+	"description": "将excel数据写入数据库",
+	"parameter":[{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"type":"knowledge_space"
+		},
+    {
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		}],
+	"tag":"OCR, Image Processing",
+	"uiEntrance": "ocr_image_form",
+	"life":5000,
+	"version": "1"
+}
+*/
+//# documentId
+assign("documentId", "{{kbSpaceFileId}}")
+n_file_infos, act_kb.selectBy?sql='select id as document_id,knowledge_name as document_name,extension as document_type,store_uri as source_path from kb_spaces_folder_knowledge where id="{{documentId}}" '
+n_file_info,act_func?script='''
+return n_file_infos[0]
+'''
+
+// 获取file_name
+assign('n_file_name', '{{n_file_info.source_path}}')
+"""
+// 处理file_name，去掉第一个/后的kbs部分
+n_file_name,act_func?script='''
+		def processedFileName = file_name
+		if (file_name && file_name.contains('/')) {
+			def parts = file_name.split('/')
+			if (parts.length >= 3) {
+				// 重建路径，去掉第二个部分（kbs）
+				processedFileName = parts[2..-1].join('/')
+			}
+		}
+	return processedFileName
+	'''
+"""
+
+when('!fn.hasValue(Pages)', {
+// kbs_doc_page_parse all Pages
+n_kb_data,act_kb.selectBy?sql='SELECT * FROM kbs_doc_page_parse WHERE documentId = {{documentId}}'
+},{
+  // kbs_doc_page_parse with Pages
+  n_kb_data,act_kb.selectBy?sql='SELECT * FROM kbs_doc_page_parse WHERE documentId = {{documentId}} and page in ({{Pages}}) '
+})
+assign('resultList', '[]')
+// foreach循环示例代码
+foreach('db_data', 'n_kb_data', {
+    // 在循环内部可以访问循环变量
+    assign('current_index', '{{db_data.index}}')
+    assign('current_item', '{{db_data.item}}')
+	assign('by_index_json', '{{current_item.by_index_json}}')
+	assign('table_data', '{{by_index_json.table_data}}')
+
+    foreach('table_data_item', 'table_data', {
+		// table_data_map
+    	assign('table_data_map', '{{table_data_item.item}}')
+	    assign('data_row', '{{table_data_map}}')
+		//  取8条数据
+		n_data_row,act_func?script='''return table_data_map.data.take(8)'''
+		assign('data_fields', '{{table_data_map.fields}}')
+		n_get_field_comment,tpl_get_field_comment
+		// 处理每个数据项
+		n_table_data_map,act_func?script='''
+				table_data_map.fileName = n_file_name
+				table_data_map.dataStartRow = n_get_field_comment.data_start_row
+				table_data_map.fields = n_get_field_comment.fields
+				resultList.add(table_data_map)
+				return  [table_data_map]
+				'''
+		// paramsparams
+		assign('params', "{{fn.json('documents,n_table_data_map')}}")
+		// insert DB action 
+		n_api_data,act_api.doExecuteDynamic?name='report_data_batch_save'&dynamicParamData={{params}}
+		log("The result of insert DB action:{{n_api_data}}")
+    })
+
+})
+assign('resultListresultList', '{{resultList}}')
+
+// Set to json
+assign('params', "{{fn.json('documents,resultListresultList')}}")
+
+
+
+
+
+define('tpl_get_field_comment','''
+- Role: 数据分析与字段重命名专家
+- Background: 用户需要处理包含特定字段的数据集，要求先确定数据的起始行及其具体内容，然后根据这些数据解释字段的含义，并对以“column_”开头的字段进行重新命名，以使其更具描述性。
+- Profile: 你是一位在数据分析和数据处理领域具有丰富经验的专家，能够高效地识别数据结构，解释字段含义，并根据数据内容对字段进行合理的重命名。
+- Skills: 精通数据处理、数据分析、数据清洗以及字段重命名等技能，能够快速定位有效数据并进行准确的字段描述和重命名。
+- Goals:
+  - 准确确定数据从哪一行开始，并提供该行的具体数据内容。
+  - 根据数据内容对每个字段进行详细解释，并给出简洁的描述。
+  - 对以“column_”开头的字段进行重新命名，使其更具描述性。
+  - 将结果以Markdown格式的JSON数据结构返回。
+
+Task（任务）:
+用户提供一组字段名列表和若干行原始数据记录。你需要：
+1. 判断有效数据起始行：识别哪一行开始包含真实的观测值（而非标题、说明、字段类型标识等元信息），并明确指出该行序号（从1开始计数）及该行具体内容特征；
+2. 解释每个字段含义：基于有效数据行及其上下文（尤其是前几行的辅助说明），为每个原始字段提供简洁、准确的业务描述；
+3. *重命名 column_ 字段：对于以 column_ 开头的字段，必须根据其实际承载的数据内容（如收益率、CDS基点等）赋予具有明确业务含义的新名称（使用下划线分隔的大写英文缩写或全称），并在 fields 映射中用新名称作为键。
+
+Output（输出格式）:
+1.说明 “数据从第 N 行开始”，
+2.说明第 N 行每个字段数据类型；
+3.*重命名 column_ 字段：对于以 column_ 开头的字段
+4.每个字段数据类型,数据的实际语义和后续使用需求。准确识别字段的业务逻辑类型（日期、数值、分类文本等）比识别其原始文本格式更为重要。
+5.必须基于**数据起始行**的数据内容来重新定义字段含义和MongoDB字段类型(分隔符`||`),然后严格输出一个 Markdown 代码块包裹的 JSON 对象，结构如下：
+json
+{
+"fields": {
+"(原始or重命名) 字段": "根据数据起始行生成简洁的中文业务描述,描述应避免冗余，聚焦核心业务含义。|| MongoDB字段类型",
+...
+},
+"data_start_row": N
+}
+
+# 用户提供的字段:
+{{data_fields}}
+# 用户提供的数据:
+{{n_data_row}}
+''')
+
+

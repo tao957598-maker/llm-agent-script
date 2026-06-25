@@ -1,0 +1,49 @@
+/*
+{
+	"title":"单元测试：ChatDoc功能测试",
+	"description":"这是个ChatDoc的单元测试AGT",
+	"parameter":"userInput=用户输入",
+	"resultPlan":"n_tpl_chat",
+	"version":1
+}
+*/
+/
+
+//#$ 欢迎语，欢迎使用单元测试的ChatDoc
+assign("n_plans_list", '[\"aaa\", \"bbb\", \"ccc\", \"ddd\"]')
+
+//# 正在生成TODO List
+assign("n_plans_list", '[\"aaa\", \"bbb\"]')
+
+// 测试Python脚本
+tpl_python_dev, psr_python
+
+// 循环执行计划
+foreach('n_test_step', 'n_plans_list', {
+  //## 这是一条测试步骤
+  log('{{n_test_step.item}}')
+  
+  //## 正在阅读知识空间{{bookName}}
+  n_test_multistep, tpl_foreach_chat, psr_all, act_flow.changeView?field=isFullScreen&value=true
+})
+
+//## 最后的聊天结果
+n_tpl_chat, tpl_chat, psr_all
+
+//# 调用其他agt: agt_junittest_sleep_other
+agt_junittest_sleep_other
+
+
+define('tpl_chat', '''
+	{{userInput}}
+''')
+
+
+define('tpl_foreach_chat', '''
+	测试输入文本如下：
+	{{n_test_step.item}}
+''')
+
+define('tpl_python_dev', '''
+	请帮我生成Python代码：计算两个整数相加，并打印结果
+''')

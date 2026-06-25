@@ -1,0 +1,99 @@
+/*
+{
+  "title": "文档节点处理",
+  "description": "根据documentid查询文档信息并生成Neo4j节点",
+  "parameter": [
+    {
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+	},
+    {
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		}
+  ],
+  "uiEntrance": "",
+  "version": 1
+}
+*/
+
+ 
+// 1. 读取数据库信息
+assign('kbSpaceFileId', '{{kbSpaceFileId}}')
+assign('pages', '{{pages}}')
+when('!fn.hasValue(pages)', {
+//# 取数据 排除空内容
+n_kb_data,act_kb.selectBy?sql='''select
+    *
+from
+    (SELECT
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS analysis_content
+FROM
+    kbs_doc_page_parse
+WHERE
+    documentId = "{{kbSpaceFileId}}"
+ORDER BY
+    CAST(page AS SIGNED) ASC) as a where a.analysis_content is not null'''
+},{
+n_kb_data,act_kb.selectBy?sql='''select
+    *
+from
+    (SELECT
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS analysis_content
+FROM
+    kbs_doc_page_parse
+WHERE
+    documentId = "{{kbSpaceFileId}}"
+    and page in ({{pages}})
+ORDER BY
+    CAST(page AS SIGNED) ASC) as a where a.analysis_content is not null '''
+})
+tpl_neo4j_node,psr_cypher
+// 定义生成Neo4j节点的提示词
+define('tpl_neo4j_node', '''
+- Role: 数据库架构师和Cypher查询专家
+- Background: 用户需要将文档信息转换为Neo4j数据库中的节点，并通过Cypher查询语句实现。用户提供了详细的文档信息，包括文件属性、最大页数和摘要信息，需要将这些信息整合到一个Cypher查询语句中，以创建一个标记为“Document”的节点。
+- Profile: 你是一位资深的数据库架构师，精通Neo4j图数据库的架构设计和Cypher查询语言。你擅长将复杂的数据结构转化为高效的数据库模型，并能够通过精确的查询语句实现数据的存储和管理。
+- Skills: 你具备深入的Neo4j数据库知识，熟练掌握Cypher查询语言，能够根据提供的数据结构生成准确的节点创建语句。你还具备数据建模和信息整合的能力，确保节点的属性完整且符合数据库设计规范。
+- Goals: 根据用户提供的文档信息，生成一个Cypher查询语句，用于在Neo4j中创建一个标记为“Document”的节点，并将文档的各个属性作为节点的属性。
+- Constrains: 
+1.根据每页原始摘要信息,生成当前文件简短的`summary`(字符串),必须保持与原始摘要信息一致的语言风格
+2.生成的Cypher查询语句必须符合Neo4j的语法规范，确保节点的属性完整且准确。节点标签必须为“Document”，并且节点的属性必须与用户提供的文档信息一致。。
+| 节点类型 | Label      | 主要字段都是字符串类型                                                            | 说明            |
+| ---- | ---------- | ----------------------------------------------------------------- | ------------- |
+| 章节   | `Section`  | `section_id`, `section_title`, `level`, `section_path`, `text`    | 逻辑结构划分（标题、层级） |
+| 实体    | `Entity`    | `entity_id`, `entity_name`, `entity_type`, `description` | “交易请求”、“授权响应”等                         |
+| 概念    | `Concept`   | `concept_id`, `concept_name`, `definition`, `category`   | “余额查询”、“报文字段”                          |
+| 属性项   | `Attribute` | `attr_id`, `attr_name`, `attr_value_type`, `attr_desc`   | “Field 37: Retrieval Reference Number” |
+| 规则/约束 | `Rule`      | `rule_id`, `rule_name`, `rule_logic`, `rule_type`        | “响应码必须存在”                              |
+
+| 关系类型            | 起点 → 终点              | 含义        |
+| --------------- | -------------------- | --------- |
+| `MENTIONS`      | `Section → Concept`  | 某章节提到某概念  |
+| `DESCRIBES`     | `Section → Entity`   | 某章节描述实体   |
+| `HAS_ATTRIBUTE` | `Entity → Attribute` | 实体拥有属性    |
+| `HAS_RULE`      | `Entity → Rule`      | 实体关联约束或逻辑 |
+| `RELATES_TO`    | `Concept ↔ Concept`  | 概念之间的语义关联 |
+
+
+3. neo4j使用MERGE + SET语句创建或更新节点
+- OutputFormat: Cypher查询语句
+- Workflow:
+  1. 解析用户提供的文档信息，提取文件的各个属性。
+  2. 根据文档信息生成节点的属性列表。
+  3. 构造符合Neo4j语法的Cypher查询语句，创建标记为“Document”的节点。
+
+# 文档信息：
+{{n_kb_data}}
+
+
+''')

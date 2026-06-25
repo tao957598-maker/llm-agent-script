@@ -1,0 +1,68 @@
+/*
+{
+	"title":"agt_bug_test_api_fmk",
+	"description":"测试API动态参数特殊参数freemark解析-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"llmType":"Qwen/Qwen2.5-72B-Instruct",
+	"resultPlan":"n_api_data",
+	"displayOrder":0,
+	"version":1
+}
+*/
+assign('content_list', '''
+ [{"update_time":"2025-08-19 09:12:40","page":"1","document_id":"252455730839191552","folder_id":252455713598504960,"content":"BEA One stop KYC Platform (‘OKP’)\nFunctional Specification Document for Phase 1B\r\n\r\nGienTech\nfor\nThe Bank of East Asia, Limited","status":"0"},{"update_time":"2025-08-19 09:12:40","page":"2","document_id":"252455730839191552","folder_id":252455713598504960,"status":"0"},{"update_time":"2025-08-19 09:12:40","page":"3","document_id":"252455730839191552","folder_id":252455713598504960,"status":"0"},{"update_time":"2025-08-19 09:12:40","page":"4","document_id":"252455730839191552","folder_id":252455713598504960,"status":"0"},{"update_time":"2025-08-19 09:12:40","page":"5","document_id":"252455730839191552","folder_id":252455713598504960,"content":"1\nIntroduction\r\n\r\nHelp meet regulatory obligations, make informed decisions, and prevent business from being\nused to launder the proceeds of financial crime or associated with corrupt practices.\r\n\r\nOne-stop KYC Platform which can help financial institutions to comply with mandatory KYC,\nanti-money laundering, countering the financing of terrorism, anti-bribery and corruption, and\nassociated legislation.\r\n\r\nThis document outlines the specifications for Phase 1B of the OKP project, building upon the\nfoundational work completed in Phase 1A. Phase 1B focuses on enhancing the platform's\ncapabilities to further support KYC,\r\n\r\nThe key development in Phase 1B is the introduction of an all-in-one system that integrates\nessential KYC functions into a unified platform, offering enhanced features for NSS,\nCompany search, Transaction Review, and Customer Profile. These features are designed to\nstreamline compliance processes, reduce operational risk, and improve efficiency by\nconsolidating previously separate tasks into a single, cohesive solution.\r\n\r\n2\nPurpose\r\n\r\n2.1\nBackground\r\n\r\nKYC (Know Your Customer) is today a significant element in the fight against financial\ncrime and money laundering, and is part of the Customer Due Diligence (CDD) process that\nhelp identify and verify client’s identity.\r\n\r\nHong Kong enacted the Anti-Money Laundering and Counter-Terrorist Financing Ordinance\n(“AMLO”), CAP. 615 on March 1, 2018. This law makes KYC and CDD a statutory\nrequirement for Designated Non-Financial Businesses and Professionals (DNFBP) and\nregistered Trust or Company Service Providers (TCSP).\r\n\r\nThis process involves many different things, like checking personal and business information\nto determine if the client has any negative hits like fraud, bad credit standing, being a\nPolitically Exposed Person (PEP), and other sanctioned lists.\r\n\r\nOne-stop KYC Platform which can give BEA all the tools to verify and onboard customer\nwith better support KYC processes.","status":"0"},{"update_time":"2025-08-19 09:12:40","page":"6","document_id":"252455730839191552","folder_id":252455713598504960,"content":"Building upon the foundation established in Phase 1A, which focused on the basic structure\nof the OKP platform and initial compliance tools, Phase 1B extends the platform's\nfunctionality to meet the evolving needs of financial institutions in a rapidly changing\nregulatory landscape.\nIn Hong Kong, the Anti-Money Laundering and Counter-Terrorist Financing Ordinance\n(AMLO) (Cap. 615) mandates the implementation of Customer Due Diligence (CDD) and\nKYC processes for Designated Non-Financial Businesses and Professionals (DNFBPs), as\nwell as Trust and Company Service Providers (TCSPs). These legal obligations require\norganizations to not only verify customer identities but also screen for potential risks,\nincluding those related to national security, criminal activities, and political exposure.\nPhase 1B addresses these needs by introducing a comprehensive set of tools that allow for\nseamless integration of essential checks and reviews. The NSS feature allows organizations\nto screen individuals and entities against national and international watchlists, sanction lists,\nand politically exposed persons (PEPs). The Transaction Review module helps institutions\nmonitor financial transactions for signs of suspicious activity, facilitating timely reporting of\npotential money laundering or terrorism financing. Additionally, Customer Profile enables a\nmore holistic view of customer data, ensuring that institutions can easily access and review\nrelevant information to meet compliance requirements. Company Search feature allows to\nsearch and analyse a ownership structure and organization structure, providing insights into\nkey stakeholders, directors, beneficial owners, and management for enhanced due diligence\nand regulatory compliance.\r\n\r\n2.2\nScope for Phase 1B\r\n\r\n2.3\nDefinitions and Acronyms\r\n\r\n| Abbreviation | Full Name | Remark |\n| --- | --- | --- |\n| KYC | Know Your Customer |  |\n| CRA | Customer AML Risk Assessment System |  |\n| CMP | Case Management Platform |  |\n| AML | Anti-Money Laundering |  |\n| AMS | Anti-Money Laundering Monitoring System |  |\n| EDD | Enhanced Due Diligence |  |\n| STR | Suspicious Transaction Report |  |\n| CARA | Customer AML Risk Assessment |  |\n| NSS | Name Screening System | NSS, World check, Googlesearch |\n| MLRO | Money Laundering Reporting Officer |  |\n| Ongoing | Ongoing Customer Due Diligence |  |","status":"0"},{"update_time":"2025-08-19 09:12:40","page":"7","document_id":"252455730839191552","folder_id":252455713598504960,"content":"| CDD |  |  |\n| --- | --- | --- |\n| RCRAF | Request of Customer Risk Assessment byFCCD |  |\n| TXN | Transaction |  |\n| SLA | Service Level Agreement |  |\n| COMD | Compliance Division |  |\n| SDN | Sanction | Sanctions |\r\n\r\n3\nDetailed Functional Description\r\n\r\n3.1\nOKP Group ID Maintenance\r\n\r\n3.1.1\nFunction Overview\r\n\r\nThe Group ID Maintenance feature is designed to group a customer’s internal No. for ongoing\nCDD case enquiry and allocation. It ensures that the same maker and checker handle cases for\nconsistency and efficiency.\nScope for all Customer Type: Individual, Non-Individual, Individual (PB), Non-Individual\n(PB), FI","status":"0"},{"update_time":"2025-08-19 09:12:40","page":"8","document_id":"252455730839191552","folder_id":252455713598504960,"content":"3.1.2. ### System Flow and User Scenario \nflowchart TD\n\n%% --- OKP Group Management ---\nsubgraph OKP_Group_Management[OKP Group Management]\n    GAOD1[GAOD Admin] --> CDG[Create / Delete Group]\n    GAOD2[GAOD Admin] --> ADM[Add / Delete Member (Customer Internal No) into Group]\nend\n\n%% --- Ongoing CDD Case Enquiry ---\nsubgraph Ongoing_CDD_Case_Enquiry[Ongoing CDD Case Enquiry]\n    Enquiry[Ongoing CDD Case Enquiry] --> Search[Search OKP Group name]\n    Search --> Display[Display case with OKP Group name in search result]\nend\n\n%% --- Ongoing CDD Case Creation ---\nsubgraph Ongoing_CDD_Case_Creation[Ongoing CDD Case Creation]\n    Creation[Ongoing CDD Case Creation] --> Allocation[Auto Allocation]\n    Allocation --> AssignCheck[Auto assign same maker and check for same group member]\nend\n","status":"0"},{"update_time":"2025-08-19 09:12:40","page":"9","document_id":"252455730839191552","folder_id":252455713598504960,"content":" 3.1.3. ### Prototype \n\nAdd Group\n\n\n<!-- 搜索区域 -->\n<div style=\"display: flex; gap: 10px; margin-bottom: 20px;\">\n  <input type=\"text\" placeholder=\"OKP Group name\" />\n  <input type=\"text\" placeholder=\"Group Create Date\" />\n  <button>Search</button>\n  <button>Export</button>\n</div>\n\n<!-- 分组列表区域 -->\n<table border=\"1\" cellspacing=\"0\" cellpadding=\"8\">\n  <thead>\n    <tr>\n      <th>OKP Group Name</th>\n      <th>Group Create Date</th>\n      <th>Action</th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr>\n      <td><input type=\"checkbox\" /> Lee Family</td>\n      <td>05-Dec-2025</td>\n      <td>\n        <button>Group Member</button>\n        <button>Delete</button>\n      </td>\n    </tr>\n  </tbody>\n</table>\n\nAdd Group Member (Customer Internal No.)into group\n<!-- 显示当前组名 -->\n<p><strong>OKP Group name：</strong> Lee Family</p >\n\n<!-- 添加组成员区域 -->\n<div style=\"display: flex; gap: 10px; align-items: center; margin-bottom: 20px;\">\n  <input type=\"text\" placeholder=\"Customer Internal No\" />\n  <input type=\"text\" placeholder=\"Customer Name\" />\n  <button>Add</button>\n</div>\n\n<!-- 成员列表表格 -->\n<table border=\"1\" cellspacing=\"0\" cellpadding=\"8\">\n  <thead>\n    <tr>\n      <th>Customer Internal No</th>\n      <th>Customer Name</th>\n      <th>Group Member Create Date</th>\n      <th>Action</th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr>\n      <td>00000001</td>\n      <td>Lee One</td>\n      <td>05-Dec-2025</td>\n      <td><button>Delete</button></td>\n    </tr>\n    <tr>\n      <td>00000002</td>\n      <td>Lee Two</td>\n      <td>05-Dec-2025</td>\n      <td><button>Delete</button></td>\n    </tr>\n  </tbody>\n</table>\n","status":"0"},{"update_time":"2025-08-19 09:12:40","page":"10","document_id":"252455730839191552","folder_id":252455713598504960,"content":"3.1.4\nFunctional Requirement\r\n\r\n3.1.4.1\nRequirement ID: FR-31010\r\n\r\n| Function | Group Management - Create / Delete Group |\n| --- | --- |\n| Description | 1. Allow creation and deletion of groups.2. Support paging |\n| Validation | 1. Validate group name is unique. |\r\n\r\n3.1.4.2\nRequirement ID: FR-31011\r\n\r\n| Function | Group Management - Create / Delete Member |\n| --- | --- |\n| Description | 1. Add/Delete group members using Customer Internal No. Input fieldsinclude Customer Internal No. and Customer Name.2. Support paging |\n| Validation | 1. Alnova Validate that Customer Internal No. exists and matches the2. Customer Name. Ensure one group member belongs to only one group. |\r\n\r\n3.1.4.3\nRequirement ID: FR-31012\r\n\r\n| Function | Group Management - Export |\n| --- | --- |\n| Description | 1. Export Group and Group member together in one excel2. Fields: OKP Group Name, OKP Group Create Date, Customer InternalNo., Customer Name, OKP Group Member Create Date, |\n| Validation |  |\r\n\r\n3.1.4.4\nRequirement ID: FR-31020\r\n\r\n| Function | Auto Allocation Rule and Re-Allocation Rule |\n| --- | --- |\n| Description | 1. Static allocation rule no need config in allocation rule.2. Assigns maker/checker based on group name with the last notcompleted case. (order by create date descending order) excluded ,completed cancel, deleted3.If no prior case exists, follow existing allocation rules. |\n| Validation | 1. Overrides capacity constraints. |\r\n\r\n3.1.4.5\nRequirement ID: FR-31030\r\n\r\n| Function | Ongoing CDD Enquiry |\n| --- | --- |\n| Description | 1. Add search criterion: OKP Group Name in Ongoing CDD enquiry.2. OKP group Name is Free-Text3. Display OKP Group Name in search results. |\n| Validation |  |","status":"0"}]
+''')  
+assign('chunks_config', '''
+{"repeat_rate":"0.2","chunks_type":"chunk_by_page","chunks_num":"512"}
+''')  
+// 测试content_list是数组，且有转义字符报错的问题。前提form_data要页面配置{{fn.str(content_list)}}
+//n_api_data, act_api.doExecuteDynamic?name="file_parse_chunks"&dynamicParamData='{"content_list":{{content_list}},"chunks_config":{{chunks_config}}}'
+
+
+// 测试fields、datas数组的情况
+assign("params",'{"fileName":"/kbs/a/b/c/测试文件1.txt","title":"1\nIntroduction\r\n\r\n测试table1","fields":["测试field1","测试field2"],"datas":[{"测试field1":"测试testcon11-111","测试field2":"测试testcon11-22"},{"测试field1":"测试testcon22-111","测试field2 ":"测试testcon22-22"}]}')
+// n_api_data,act_api.doExecuteDynamic?name='report_data_save'&dynamicParamData={{params}}
+
+// 测试API动态参数特殊参数 url有动态变量
+// n_api_tmp_data,act_api.doExecuteDynamic?name='get_api_tool_detail_by_id'&dynamicParamData='{"id":"267025650448531456"}'
+
+// assign("img_file","C:\\Users\\Administrator\\Pictures\\Screenshots\\屏幕截图 2025-05-18 101532.png")
+// 测试接口
+// n_api_data,act_api.doExecuteDynamic?name='rag_img_parse'&// dynamicParamData='{"img_file":"{{img_file}}","img_base64":""}'
+
+// 测试search_web
+assign("userInput","您好")
+assign('link', 'https://www.baidu.com/s?wd={{userInput}}')
+assign('params', "{{fn.json('url,link')}}")
+// n_api_data,act_api.doExecuteDynamic?name='search_web'&dynamicParamData={{fn.str(params)}}
+
+
+// {
+//	"enable": true,
+//	"name": "{{name}}",
+//	"testType": "{{testType}}",
+//	"testEnv": "{{testEnv}}",
+//	"testMode": "{{testMode}}",
+//	"description": "{{description}}",
+//	"cases": [
+//	<#list cases as item>
+//	  {
+//		"testData": "${item.testData}",
+//		"testNo": "${item.testNo}",
+//		"expectedResult": "${item.expectedResult}",
+//		"moduleName": "${item.moduleName}",
+//		"caseName": "${item.caseName}",
+//		"kbData": "${item.kbData}",
+//		"id": ${item.id},
+//		"steps": "${item.steps}",
+//		"platform": "${item.platform}"
+//	  }<#if item_has_next>,</#if>
+//	</#list>
+//	]
+}
+// 1. n_api_params 是数组时，报错
+act_api.doExecuteDynamic?name="fats_create_plan_and_run"&dynamicParamData='{{n_api_params}}'
+
+// 2. n_api_params 是数组时，报错
+//n.result_data, act_api.doExecuteDynamic?name="api_test_0725"&dynamicParamData='{{fn.json("task, n task name, url, n. base url, datas, n datas")}}'

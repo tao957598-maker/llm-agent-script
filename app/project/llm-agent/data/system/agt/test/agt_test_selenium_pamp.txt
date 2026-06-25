@@ -1,0 +1,381 @@
+/*{
+  "title": "Selenium Python 代码生成",
+  "description": "根据局部测试步骤与 PAMP（Page Action Minimum Preconditions，页面动作最小前置条件）模型，生成满足前置条件的 Selenium Python 代码",
+  "parameter": [
+    {"name":"current_step","label":"当前步骤","required":true},
+    {"name":"envinfo","label":"环境信息","required":false},
+    {"name":"system","label":"系统名称","required":false}
+  ],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+// get current url
+n_get_page_path_info, act_rpa.send?command=GetPageInfo
+act_memory.assign?var=current_page_path_info&value={{n_get_page_path_info}}&global=true
+
+
+// Try to run existed code
+agt_test_run_exist_code?test_no={{test_no}}&step_index={{step_index}}&current_step={{current_step}}&steps={{steps}}&system={{system}}&envinfo={{envinfo}}
+
+// Run code successfully, go to end
+act_flow.go?plan=end
+
+// Try to use the standard analysis procedure
+on_failure({
+	// Force to success status
+	act_flow.success
+})
+
+
+
+// 检索全局变量 global_variable
+n_global_variable, act_memory.retrieve?var=global_variable&global=true
+//# Collect page information
+n_collect_page, act_rpa.send?command=CollectPageInfo,act_func?name=StepTestInfo
+
+assign('version', '{{n_global_variable.version}}')
+// 读取必传入参 current_step
+assign('step_text', '{{current_step}}')
+// 读取可选入参 envinfo
+assign('env_text', '{{envinfo}}')
+// 读取可选入参 system，未传或空时置为空串便于 hasValue 判断
+assign('system', '{{fn.optional(system, "")}}')
+// 仅当入参未提供系统名时，从全局 memory 的 global_variable 补齐 system
+when('{{!fn.hasValue(system)}}', {
+
+// 使用全局中的 system 字段作为当前系统名
+assign('system', '{{n_global_variable.system}}')
+})
+
+
+// 获取当前页面路径信息，用于后续页面动作前置条件检索
+n_get_page_path_info, act_rpa.send?command=GetPageInfo
+// 从页面信息中提取 path 并赋值到 page_url
+assign('page_url', '{{n_get_page_path_info[0].path}}')
+// 基于 application/system/page_url 查询当前页面可执行动作及最小前置条件
+n_action_metadata,act_kb.select?name='kb_page_action_min_preconditions'&schema='auto_test'&column='action_id,action_name,action_type,preconditions'&where='{{fn.json("application,system,page_url,page_url")}}'
+// 当知识库未返回动作元数据（空值或空列表）时，调用表单构建 Agent 兜底生成动作数据
+when('!fn.hasValue(n_action_metadata) || n_action_metadata.size()==0', {
+// 调用 agt_form_data_build.test_form 生成动作元数据
+n_action_metadata_fallback,agt_form_data_build.test_form?application={{system}}&version={{version}}
+// 将兜底生成结果回写到 n_action_metadata，供后续链路统一使用
+assign('n_action_metadata', '{{n_action_metadata_fallback}}')
+})
+
+// 这里增加LLM 判断PAMP信息是否可用 可用的`n_action_metadata`下标是什么   根据下表取数据 重新赋值给n_action_metadata
+// 让 LLM 从候选 PAMP 信息中判断是否有匹配，并返回可用下标列表
+n_pamp_pick_index,tpl_pick_pamp_index,psr_json
+// 当存在匹配项且下标列表非空时，按下标列表筛选并回写 metadata
+when('fn.bool(n_pamp_pick_index.matched) && fn.hasValue(n_pamp_pick_index.index_list[0])', {
+// 根据 index_list 从候选 metadata 中提取多条可用项
+n_action_metadata_selected,act_func?script='''
+def metadata = {{n_action_metadata}}
+def indexList = {{n_pamp_pick_index.index_list}}
+def picked = []
+indexList.each { idx ->
+    if (idx != null && idx >= 0 && idx < metadata.size()) {
+        picked << metadata[idx]
+    }
+}
+return picked
+'''
+// 将筛选后的结果重新赋值给 n_action_metadata
+assign('n_action_metadata', '{{n_action_metadata_selected}}')
+})
+
+
+// 主结果链路：生成 Python Selenium 代码并输出原始文本
+n_pamp_data,tpl_gen_selenium_py,psr_json_python
+
+when('!fn.hasValue(n_pamp_data) ', {
+		assign('result','false')
+    // No python code, announce task failure 
+		act_flow.fail?result={{fn.json("failure_count, sys_run_count, error_info, sys_hint_agt")}}
+}, {
+  // python code
+  assign('python_code','{{n_pamp_data}}')
+  assign('result','true')
+})
+
+
+// Write temporary selenium script
+n_python_file_2, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{python_code}}
+assign('python_file', '{{n_python_file_2.kbspath}}')
+assign('python_code', '{{n_python_file_2.sourceCode}}')
+
+//# Run selenium script through RPA client
+n_rpa_test,act_rpa.send?name={{python_file}}
+act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,sys_last_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+act_memory.assign?var=ACExecuteCodeResult&value={{n_rpa_test}}&global=true
+// time sleep 3 seconds
+act_flow.wait?second=3
+
+//# Collect page information again
+n_collect_page_again, act_rpa.send?command=CollectPageInfo
+assign('new_collect_page', '{{n_collect_page_again}}')
+n_result,agt_test_action_type?current_step={{current_step}}&StepTestInfo={{StepTestInfo}}&new_collect_page={{new_collect_page}}
+
+
+n_cmp1,tpl_cmp_pageresult, vrf_flag?value='fn.str(sys_last_result.thought.re_reasoning)=="false" || sys_last_result.hasDialog',\
+agt_save_explorer?columns='page_change,tpl_cmp_pageresult.thought.change,reasoning,tpl_cmp_pageresult.thought.reasoning'
+
+// Check if page doesnot change
+when('fn.not(n_cmp1.run_success)', {
+	// Show warning information
+	// log('Failed to verify page result', true)
+	
+	// Proceed to error handling process
+	act_flow.go?plan=n_fail_rpa_coll
+}, {
+	// change_element
+	assign('change_element', '{{n_cmp1.change_element}}')
+	// change_behavior
+	assign('change_behavior', '{{n_cmp1.change_behavior}}')
+
+	// tpl_task_element_infotpl_task_element_info
+	assign('tpl_task_element_infotpl_task_element_info', '{{tpl_task_element_info}}')
+	// 无论n_cmp1的新界面还是tpl_task_element_info的原有界面都没有对话框时 <== 对话框的开关，通常不会有基础元素的变化
+	// When the page changes and no dialog appears
+	when('fn.hasValue(n_cmp1.change_element) && n_cmp1.change_behavior=="add" && !fn.bool(n_cmp1.hasDialog) && !fn.bool(tpl_task_element_info.hasDialog)', {
+		// Add page verify element
+		tpl_self_add_wait, psr_python, act_memory.assign?var=python_code
+		assign('python_code', "{{sys_last_result}}")
+		n_python_file_3, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{sys_last_result}}
+		assign('python_code', '{{n_python_file_3.sourceCode}}')
+		assign('python_file', '{{n_python_file_3.kbspath}}')
+	})
+	when('fn.hasValue(n_cmp1.change_element) && n_cmp1.change_behavior=="remove" && !fn.bool(n_cmp1.hasDialog) && !fn.bool(tpl_task_element_info.hasDialog)', {
+		// Remove page verify element
+		tpl_self_remove_wait, psr_python, act_memory.assign?var=python_code
+		assign('python_code', "{{sys_last_result}}")
+		n_python_file_4, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{sys_last_result}}
+		assign('python_code', '{{n_python_file_4.sourceCode}}')
+		assign('python_file', '{{n_python_file_4.kbspath}}')
+	})
+})
+
+// Write python script to new path
+agt_test_save_file?current_step={{current_step}}&test_no={{test_no}}&sourceCode={{python_code}}
+
+// Check if dialog exists
+when('n_cmp1.hasDialog', {
+
+
+	// 考虑用tpl自动检测：n_test_step.nextItem
+	// Add new step
+	n_need_close, tpl_check_hasDialog
+	// n_result_n_result n_result_n_result
+	assign('need_close_need_close_need_close', '{{n_need_close}}')
+	when('n_need_close.need_close', {
+		n_plan_result, act_plan.add?agent=agt_test_steps_run&var=n_test_step&plan='Click the button to close the pop-up window_{{step_index+1}}'
+	
+		// Save to KB
+		when('n_plan_result.success', {
+			// Clean old plan and save new plan to KB
+			act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'
+			n_map_list,act_kb.convert?data={{steps}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'
+			act_kb.importData?name=kb_testcase_step&data={{n_map_list}}
+		})
+	})
+})
+
+// Try to fix script error
+on_failure({
+	
+		// No python code, announce task failure 
+		act_flow.fail?result={{fn.json("failure_count, sys_run_count, error_info, sys_hint_agt")}}
+
+})
+
+// Return result
+assign('result', '{{fn.json("hasDialog, n_cmp1.hasDialog, python_file, n_python_file")}}')
+
+// Save explorer
+agent('agt_save_explorer', {
+	// Save to kb_testcase_step_explorer
+	act_kb.merge?name=kb_testcase_step_explorer&columnValues='''
+			{{fn.json(columns)}}
+		'''&where='''
+			{{fn.json("test_no, test_no, step, StepTestInfo.current_step")}}
+		'''
+})
+
+
+// result 
+assign('result','{{fn.json("result,result,python_code,python_code")}}')
+
+// 定义生成 Selenium Python 代码的提示模板
+define('tpl_gen_selenium_py', '''
+- Role: Python自动化测试脚本开发专家
+- Background: 用户需要一个Python函数`run(browser)`，该函数将被主模块以`module.run(browser)`的方式调用，用于实现特定的自动化测试步骤。用户提供了详细的测试脚本要求、实际页面元素信息以及来自`autotest`库的可调用函数列表。用户希望对代码进行审查，以确定是否存在需要替换的元素，并根据审查结果返回特定的JSON格式结果。此外，用户还要求`局部测试步骤`依赖于`主模块涉及的测试步骤`的前序步骤，这些前序步骤环境和条件已经准备好，根据分析结果，返回`局部测试步骤`目的，生成`局部测试步骤`的代码。
+- Profile: 你是一位精通Python编程和自动化测试的专家，对自动化测试框架有深入的理解和丰富的实践经验。你熟悉JSON格式的数据处理，能够准确地分析代码逻辑，并根据实际页面元素信息生成符合要求的测试脚本。
+- Skills: 你具备Python编程能力、自动化测试脚本开发能力、JSON数据处理能力以及逻辑分析能力。你能够熟练使用用户提供封装的方法进行元素定位和操作，并且能够根据实际页面元素信息生成准确的测试脚本。
+- Goals: 
+    1. 分析`局部测试步骤`依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤分析结果，返回前序步骤已经完成的操作. 
+    3. 审查`run(browser)`函数代码，确定是否存在需要替换的元素。
+    4. 根据审查结果，按照指定的JSON格式返回结果。
+    5. 根据JSON格式结果和`局部测试步骤`目的,决定是否生成符合局部测试步骤要求的Python代码。
+- Constrains: 
+  1.优先使用`autotest`库中封装的方法:
+	- clickElementByItem(browser, item, waitSecond, disableLog), 用于元素点击. 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False.
+  - sendKeysToElementByItem(browser, item, keys),用于文字输入. 基于item查询对应的xpath,并基于xpath定位元素,输入keys所代表的字符.成功返回True,否则返回False.
+  - selectByItem(browser, item, condition), 可以直接作用于要选择的选项元素,item 参数应该直接指向可选择的选项元素,condition是选项名称; 
+    
+	
+
+  2.生成的Python代码要求:
+    - 代码第二行需要标注`run function dynamic parameters:`: 例如输入用户名字 {"user":"tester"}
+    - 代码注释必须要用英文
+    - 生成的代码应仅包含局部测试步骤，不补充前面步骤或提前实现后面步骤的代码。
+  
+  3.run函数必须传入参数:
+    - 第一个参数必须是browser浏览器实例 例如 `def run(browser):` 
+    - 其它传入参数根据步骤自己定义参数名称
+  4.分析是否有需要替换的元素的情况，review该python函数并用独立的JSON格式返回结果：
+    - 代码中的元素有些不是来自"实际页面元素"，并且可找到具体的修正方案，那么：
+	用JSON格式返回：{"type":"verifyResult_2","thought":"{"reasoning":"补充思考","suggest":"建议修正方法XXXX"}"},不需要生成Python代码
+	- 代码中的元素有些不是来自"实际页面元素"，需要重新收集页面元素，进行二次替换。那么，切换plan为n_collect_page。不需要生成Python代码
+	用JSON格式返回：{"type":"verifyResult_1","plan":"n_collect_page","thought":"{"reasoning":"假设的元素XXX，或者需要替换的元素XXX","suggest":"建议修正方法XXXX"}"}
+	- 代码中的元素都是来自"实际页面元素", 或者是首个步骤无需给出元素列表，可进入下一个流程。
+	用JSON格式返回：{"type":"verifyResult_1","plan":"next"}。则生成对应的Python代码
+
+- OutputFormat: 
+    1.`局部测试步骤`位置及依赖的前序步骤
+    2.结合`补充解释`和`局部测试步骤` 返回精准指令
+    3.JSON格式的审查结果。
+    4.JSON格式结果,决定是否生成符合局部测试步骤要求的Python代码。
+- Workflow:
+    1. 分析`局部测试步骤`位置及依赖的前序步骤，确保环境和条件已经准备好。
+    2. 根据步骤分析结果，返回前序步骤已经完成的操作. 
+    3. 由于未收集到实际页面元素信息，结合`补充解释`是否可以完成本次`局部测试步骤`指令。
+    4. 根据分析结果，生成符合要求的JSON格式审查结果。
+    5. 若JSON格式是{"type":"verifyResult_1","plan":"next"},则生成对应的Python代码,代码注释必须要用英文。
+- Examples:
+  - 例子1：打开网页。
+    ```json
+    {
+      "type": "verifyResult_1",
+      "plan": "next"
+    }
+    ```
+```python
+# -*- coding: utf-8 -*-
+# run function dynamic parameters:
+'{"system_name":"system_name","url":"http://xxxxx"}'
+from autotest import *
+
+def run(browser,system_name = "system_name", url = "http://xxxxx"):
+	try:
+		success = gotoPage(browser, system_name, url)
+		if not success:
+		writeResult(False, "Failed to navigate to the specified URL: " + url)
+		return
+		writeResult(success, "Step Success Description xxxx")
+	except Exception as e:
+		writeResult(False, "An error occurred during the test: " + str(e))
+```
+
+输入信息：
+- 当前步骤（必有）：
+{{step_text}}
+
+- 环境信息（可能为空）：
+{{env_text}}
+
+- 系统名称（可能为空，缺省时来自全局 global_variable）：
+{{system}}
+
+- PAMP信息（可能为空）：
+{{n_action_metadata}}
+
+''')
+
+// 选择当前步骤最可用的 PAMP metadata 下标
+define('tpl_pick_pamp_index', '''
+你是自动化测试数据筛选助手。请基于“当前步骤”和“PAMP候选信息”判断是否存在可用项，并仅返回 JSON。
+
+要求：
+1) 输出严格为 JSON，不要额外解释
+2) 若有可用项，返回全部可用下标列表（从 0 开始）
+3) 若都不可用，matched=false 且 index_list 为空数组
+
+返回格式：
+{
+  "matched": true,
+  "index_list": [0, 2],
+  "reason": "简短说明选择依据"
+}
+
+输入信息：
+- 当前步骤：
+{{current_step}}
+
+- PAMP候选信息（数组）：
+{{n_action_metadata}}
+''')
+
+// 修改代码添加检测
+define('tpl_self_add_wait', '''
+	/*{
+		 "llmType":"alias.code"
+	 }*/
+	你是熟悉selenium 4的从事银行业务的高级测试，请基于下面的python代码需求，完成run函数。
+    # python函数：run(browser)
+	它将被主模块用run(browser)的方式调用。
+	{{python_code}}
+	
+	# python代码需求
+	在run的结尾，添加：waitElement(browser, item, '{{change_behavior}}') 等待页面的加载完成，item为下面的待检测元素
+
+	# 待检测的元素：
+	{{change_element}}
+	
+	# 其中来自autotest的可调用函数（通过from autotest import waitElement 补充导入函数）：
+	参数item是来自弹窗的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	参数browser是已经构建好的webdriver.Chrome实例
+	1. waitElement(browser, item, type),等待item所指向的元素出现/消失/改变,取决于type类型(add/remove/update)
+''')
+
+
+
+
+// 结果比较
+define('tpl_cmp_pageresult','''
+	/*{
+		 "llmType":"alias.highquality"
+	 }*/
+	你是Web测试专家，请分析进行了局部测试前后的页面元素的数据及结构，（json格式：[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, value: 表单元素的值, children:[子元素信息]}...]），请分析前后变化情况，判断局部测试步骤是否执行成功，用JSON给出结果。
+	{
+		"thought": {
+			"change": "前后页面元素的变化情况总结",
+			"reasoning":["结合局部测试步骤在主流程中的位置,结合下一步验证的界面需要,判断是否执行成功.进行3步以上的推理"],
+			"criticism":"推理结果是否符合change的总结",
+			"re_reasoning":"true/false"		// true表示: 推理过程有错误，需要重新推理.  false表示：无需重新推理
+		},
+		"change_element": {"name":xxx, "id":xxx}, // 如果有chang发生, 给出一个变化的元素用于识别标记。否则为{}。
+		"change_behavior": "add/remove/update/other",		// 如果有chang发生, 该变化的元素是发生了什么类型的变化. add表示新出现，remove表示消失，update表示属性或状态有变化，other表示其他类型的变化
+		"run_success":"true/false", 	// 根据推理的结果，判断局部测试步骤是否执行成功.
+										// 如果页面出现新弹窗，可由下一步继续处理. 可认为当前步骤执行成功
+										// 初始数据已经满足局部测试步骤的目标状态，无需change，可认为当前步骤执行成功
+		"vote": "1或者2",					// run_success为true时为1, run_success为false时为2
+		"hasDialog": "true/false",		// 是否存在弹窗
+		"elements"：'[{"name":xxx, "id":xxx}...]		// hasDialog为true时，需要给出弹窗按钮信息。否则为[]
+	}
+	补充说明：change_element中的id和name在前后页面元素数据中只能出现一次
+
+
+	{{sys_hint}}
+	
+	# 局部测试步骤为(括号内容为步骤提示信息)：
+	{{StepTestInfo.current_step}}
+	
+	# 主流程涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+	
+	# 初始页面元素结构为：
+	{{StepTestInfo.simplepageinfo}}
+	
+	# 局部测试执行之后的元素结构为：
+	{{new_collect_page}}
+''')

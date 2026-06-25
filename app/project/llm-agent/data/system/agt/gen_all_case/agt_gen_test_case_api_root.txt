@@ -1,0 +1,181 @@
+/*{
+	"title":"API Test Case Root",
+	"description":"Run unified root with source_type=api (same three tables, api rows)",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		},
+		{
+			"name":"resumeMode",
+			"label":"Resume Mode",
+			"type":"select",
+			"defaultValue":"full",
+			"args":[
+				{"label":"Full","value":"full"},
+				{"label":"From Step2","value":"from_step2"},
+				{"label":"From Step3","value":"from_step3"}
+			]
+		},
+		{
+			"name":"resumeSubmoduleName",
+			"label":"Resume Submodule Name"
+		}
+	],
+	"resultPlan":"n_doc_mind_map",
+	"version":3
+}*/
+// [API-ROOT] 本文件仅封装 source_type=api 的直达 root；业务主链仍以 agt_gen_test_case_entry 为准
+assign("status", "Agent is running")
+when('!fn.hasValue(resumeMode)', {
+n_api_root_err_rm,act_func?script='throw new RuntimeException("【API-ROOT】resumeMode 为空")'
+})
+when('!fn.hasValue(version)', {
+n_api_root_err_ver,act_func?script='throw new RuntimeException("【API-ROOT】version 不能为空")'
+})
+when('!fn.hasValue(kbSpaceFileId)', {
+n_api_root_err_kb,act_func?script='throw new RuntimeException("【API-ROOT】kbSpaceFileId 不能为空")'
+})
+// [API-ROOT] 子调 root：source_type 固定 api；resumeSubmoduleName 无值=全步骤
+n_api_result,agt_gen_test_case_root?kbSpaceFileId={{kbSpaceFileId}}&pages={{pages}}&version={{version}}&source_type=api&resumeMode={{resumeMode}}&resumeSubmoduleName={{fn.optional(resumeSubmoduleName, "")}}
+// [API-ROOT] 禁止 assign("{{n_api_result.n_combined_result}}")：模板点号在子返回体上常解析失败并回落成上一次任务结果（与 ENTRY 曾遇问题相同）
+n_api_root_unpack,act_func?script='''
+    def toCamel = { String s ->
+        if (s == null || s.length() == 0) return s
+        def p = s.split("_")
+        def sb = new StringBuilder(p[0])
+        for (int i = 1; i < p.length; i++) {
+            if (p[i].length() > 0) sb.append(p[i].substring(0, 1).toUpperCase()).append(p[i].substring(1))
+        }
+        return sb.toString()
+    }
+    def wrapKeys = ["value", "result", "data", "output", "outputs", "results", "agentResult", "returnValue", "payload", "planResult", "response", "body", "extra", "context", "bindings", "ret"]
+    def deepPick
+    deepPick = { obj, String key, int depth ->
+        if (depth > 12 || obj == null) return null
+        def keysTry = [key, toCamel(key)]
+        if (obj instanceof Map) {
+            def m = obj as Map
+            for (def kk : keysTry) {
+                if (kk != null && m.containsKey(kk)) return m.get(kk)
+            }
+            for (def w : wrapKeys) {
+                if (!m.containsKey(w)) continue
+                def inner = deepPick(m.get(w), key, depth + 1)
+                if (inner != null) return inner
+            }
+            for (def e : m.entrySet()) {
+                def inner = deepPick(e.value, key, depth + 1)
+                if (inner != null) return inner
+            }
+        }
+        if (obj instanceof List) {
+            for (def it : (obj as List)) {
+                def inner = deepPick(it, key, depth + 1)
+                if (inner != null) return inner
+            }
+        }
+        return null
+    }
+    def shallowPick = { raw, String k ->
+        try {
+            if (raw instanceof Map) {
+                if (raw.containsKey(k)) return raw.get(k)
+                def ck = toCamel(k)
+                if (raw.containsKey(ck)) return raw.get(ck)
+                for (def alt : wrapKeys) {
+                    def inner = raw.get(alt)
+                    if (inner instanceof Map) {
+                        if (inner.containsKey(k)) return inner.get(k)
+                        if (inner.containsKey(ck)) return inner.get(ck)
+                    }
+                }
+            }
+            if (raw != null && !(raw instanceof Map)) {
+                try { return raw."${k}" } catch (Throwable ignore0) {}
+                try {
+                    def cap = k.length() > 0 ? k.substring(0, 1).toUpperCase() + k.substring(1) : k
+                    def m = raw.getClass().getMethod("get" + cap)
+                    return m.invoke(raw)
+                } catch (Throwable ignore1) {}
+            }
+        } catch (Throwable ignore2) {}
+        return null
+    }
+    def r = n_api_result
+    def idx = [status: 0, n_combined_result: 1, n_doc_mind_map: 2]
+    def pickOne = { String k ->
+        def v = shallowPick(r, k)
+        if (v != null) return v
+        v = deepPick(r, k, 0)
+        if (v != null) return v
+        if (r instanceof List && idx.containsKey(k)) {
+            def L = r as List
+            int i = idx.get(k)
+            if (L.size() > i) return L.get(i)
+        }
+        if (r instanceof Map) {
+            def innerList = r.get("resultPlanResults")
+            if (innerList == null) innerList = r.get("planResults")
+            if (innerList instanceof List && idx.containsKey(k)) {
+                def L = innerList as List
+                int i = idx.get(k)
+                if (L.size() > i) return L.get(i)
+            }
+        }
+        return null
+    }
+    def s = { x -> x == null ? "" : x.toString() }
+    fn.put("api_root_mmd_str", s(pickOne("n_doc_mind_map")))
+    return ""
+'''
+when('!fn.hasValue(fn.get("api_root_mmd_str"))', {
+    n_api_root_err_mmd,act_func?script='throw new RuntimeException("【API-ROOT】n_doc_mind_map 提取为空：请检查 n_api_result 返回体结构")'
+})
+n_doc_mind_map,act_memory.assign?value='''{{fn.get("api_root_mmd_str")}}'''&type=mmd
+
+define('tpl_api_root_mmd_passthrough', '''
+{{fn.get("api_root_mmd_str")}}
+''')
+
+define('tpl_txt_to_mermaid_api_root', '''
+这个markdown内容转化为mermaid 思维导图,语言格式不变.
+要求: 1.memaid内容中不要出现Mermaid 图表中的 CSS 类定义
+2.Mindmap 语法中，子项必须使用一致的缩进(通常2或4个空格)，且不能混合使用空格和制表符。
+3.Mindmap 解析器对特殊字符（如括号 ()）的处理可能比较严格,节点内容尽量不要用括号 ()
+mermaid参考格式:
+```mermaid
+mindmap
+  root((mindmap))
+    Origins
+      Long history
+      ::icon(fa fa-book)
+      Popularisation
+        British popular psychology author Tony Buzan
+    Research
+      On effectiveness<br/>and features
+      On Automatic creation
+        Uses
+            Creative techniques
+            Strategic planning
+            Argument mapping
+    Tools
+      Pen and paper
+      Mermaid
+```
+
+
+```markdown
+{{fn.get("api_root_combined_str")}}
+```
+''')

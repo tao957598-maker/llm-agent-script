@@ -1,0 +1,107 @@
+/*
+{
+	"title": "自动化测试-用例执行",
+	"description": "执行指定的测试用例",
+	"parameter": [
+	 	{
+	 		"name":"system",
+	 		"label":"系统名称"
+	 	},
+	 	{
+	 		"name":"test_no",
+	 		"label":"测试编号"
+	 	},
+	 	{
+	 		"name":"test_steps",
+	 		"label":"测试步骤"
+	 	},
+	 	{
+	 		"name":"explore_mode",
+	 		"label":"运行模式",
+	 		"type":"select",
+	 		"args":[
+	 			{
+	 				"label":"生产模式",
+	 				"value":"0"
+	 			},
+	 			{
+	 				"label":"开发模式",
+	 				"value":"1"
+	 			},
+	 			{
+	 				"label":"维护模式",
+	 				"value":"2"
+	 			}
+	 		]
+	 	}
+	 ],
+	"llmType": "alias.middelqulity",
+	"resultPlan": "n_test_step,n_python_file,n_report",
+	"life": "100"
+}
+*/
+
+
+
+when('!fn.hasValue(explore_mode)', {
+  // 如果 `explore_mode` 没有值，则将其默认值设置为 1
+  assign("explore_mode", "1")
+})
+
+
+when('fn.hasValue(test_steps)', {
+   // test_steps 参数有值
+  n_steps, act_kb.select?name=kb_testcase_step&column=step&where='{"test_no":"{{test_no}}"}'\
+  	act_func?name=SortPlan&plans={{sys_last_result}}
+})
+
+// 知识库查找相关系统信息 TODO 可以去掉
+n_envinfo, act_kb.select?name=kb_testcase_biz&column=envinfo&where='{"name":"{{system}}"}'
+
+
+when('!fn.hasValue(n_steps) && fn.hasValue(test_steps)', {
+  // 如果 n_steps 没有值且 test_steps 不为空，则调用 agt_test_steps 生成步骤
+  agt_test_steps?system="{{system}}"&steps="{{test_steps}}"&test_no="{{test_no}}"
+  // 从KB查询测试步骤
+  n_steps, act_kb.select?name=kb_testcase_step&column=step&where='{"test_no":"{{test_no}}"}'\
+    	act_func?name=SortPlan&plans={{sys_last_result}}
+})
+
+// 循环执行测试步骤
+foreach('n_test_step', 'n_steps', {
+	when('fn.equals(explore_mode, 0)', {
+		// TODO 生产模式执行
+		agt_test_step_run_prod?current_step={{n_test_step.item}}&test_no={{test_no}}&system={{system}}
+	}, {
+		// 非生产模式
+		agt_run_test_case?current_step={{n_test_step.item}}&steps={{n_test_step.items}}&disableRead={{disableRead!}}
+	})
+})
+
+// 更新结果到测试步骤
+act_kb.merge?name=kb_testcase&columnValues='{"test_result":"Pass"}'&where='{"test_no":"{{test_no}}"}'
+
+// 生成代码和执行相关
+agent('agt_run_test_case', {
+	// 根据步骤读取对应的代码
+	n_python_file, act_python.read?requirement={{current_step}}&disableRead={{disableRead}}
+
+    when("!n_python_file.hasFilename()", {
+	    // 不存在文件,执行自动化代码生成.
+	    n_selenium_result, agt_test_selenium?current_step={{current_step}}&steps={{steps}}&envinfo={{n_envinfo}}
+	    // n_selenium_resultn_selenium_resultn_selenium_result
+	    assign('n_selenium_resultn_selenium_result', '{{n_selenium_result}}')
+	
+	    // n_selenium_result, agt_test_check_action?current_step={{current_step}}&check_action={{n_selenium_result.check_action}}&envinfo={{n_envinfo}}
+
+    }, {
+        // 有文件名称 RPA执行python文件
+        n_python_result, act_rpa.send?name={{python_file}}&command=RunScript
+
+        // 保存执行结果到 KB
+        act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,n_python_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+
+    })
+
+})
+

@@ -1,0 +1,168 @@
+/*
+{
+	"title":"JSON Content Analysis",
+	"description":"Parse and interpret JSON content including data structures, schemas, and other structured information",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"file_parse",
+	"uiEntrance":"KBSAssign",
+	"version":1
+}
+*/
+// fileId
+when('!fn.hasValue(kbSpaceFileId)', {
+	assign("kbSpaceFileId", "247386787614785536")
+})
+
+//# documentId
+assign("documentId", "{{kbSpaceFileId}}")
+// 更新状态为：执行中
+act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"1","msg":""}'&where='{"id":{{documentId}}}'
+
+when('!fn.hasValue(Pages)', {
+// kbs_doc_page_parse without Pages
+n_kb_data,act_kb.selectBy?sql='SELECT * FROM kbs_doc_page_parse WHERE documentId = {{documentId}}'
+},{
+  // kbs_doc_page_parse with Pages
+  n_kb_data,act_kb.selectBy?sql='SELECT * FROM kbs_doc_page_parse WHERE documentId = {{documentId}} and page in ({{Pages}}) '
+})
+//# file
+assign("n_result_data", "{{n_kb_data}}")
+// 查询文档所有信息
+n_file_infos, act_kb.selectBy?sql='select id as document_id,knowledge_name as document_name,extension as document_type,store_uri as source_path from kb_spaces_folder_knowledge where id="{{documentId}}" '
+
+n_file_info,act_func?script='''
+return n_file_infos[0]
+'''
+assign('file_info', '{{n_file_info}}')
+when('file_info.document_type == "xlsx" || file_info.document_type == "xls" || file_info.document_type == "csv"', {
+    // excel数据导入DB
+    agt_excel_data_to_db?kbSpaceFileId={{kbSpaceFileId}}&pages={{pages}}
+    })
+// act_flow.go?plan=end
+
+when('!fn.hasValue(n_result_data)', {
+  // 分析失败，修改状态为：分析失败
+  act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"analysis failed, unable to find doc data that can be analysis"}'&where='{"id":{{documentId}}}'
+  //# Chunk Failed
+	act_flow.fail?result='analysis failed,unable to find doc data that can be analysis'
+},{
+  foreach('n_data', 'n_result_data', {
+    // item
+    assign('table_item', '{{n_data.item}}')
+
+    assign('parse_data', '[]')
+
+    //# by_index_json
+    assign("by_index_json", "{{table_item.by_index_json}}")
+
+    when('!fn.hasValue(by_index_json)', {
+      act_flow.fail?result='Parse Failed!'
+    })
+
+    // 执行解析by_index_json
+    foreach('json_data', 'by_index_json', {
+      // json_item
+      assign('json_item', '{{json_data.item}}')
+
+      when('{{json_item.type == "image"}}', {
+        // image_path
+        n_image_path,act_func?script='''
+          return table_item.imagePath.substring(0,table_item.imagePath.lastIndexOf("/") + 1) + json_item.img_path
+        '''
+
+        // result
+        n_final_data,agt_read_image?imagePath="{{n_image_path}}"&ocrContent="{{json_item.content}}"
+
+        // json_analysis
+        assign('json_analysis', "{{fn.json('content, n_final_data')}}")
+ 
+        // parse_data
+        act_func?script='''
+          parse_data.addAll(json_analysis.content)
+        '''
+      }, {
+          when('{{json_item.type == "html"}}',{
+        // parse HTML
+        assign("n_this_html", "{{json_item.content}}")
+        n_md_result,tpl_html_to_md,psr_ref
+        // parse_html_data
+        act_func?script='''
+          parse_data.addAll(n_md_result)
+        '''
+      },{
+          // not image or html +=content
+          act_func?script='''
+            parse_data.addAll(json_item.content)
+          '''
+        })
+      })
+    })
+
+    //# last_parse_data
+    n_last_parse_data,act_func?script='''
+      return parse_data.join("\\r\\n\\r\\n")
+    '''
+
+    //# Update
+    act_kb.update?name=kbs_doc_page_parse&columnValues={{fn.json('analysis_content, n_last_parse_data')}}&where='{"documentId":"{{documentId}}","page":"{{table_item.page}}"}'
+  })
+})
+
+
+
+
+// type = html
+define('tpl_html_to_md', '''
+  你是一位专业的 HTML 转 Markdown 转换助手, 转换后的内容不允许存在HTML格式的数据
+  以下 HTML 是经过对原HTML解析后生成的，只保留了标签 + 内容的形式 
+  要求： 
+  1、请内容转换为 Markdown 格式，并完整的输出 ，不允许省略内容输出
+  2、每一行的数据都是有用的，不允许因为页面不会展示出来或者无效的HTML就隐藏输出 HTML 
+  3、剔除掉标签、不允许对原文内容进行改动，
+  4、可以在必要时细微添加一些辅助文字，非必要不添加 
+  5、部分内容是分层级的，还有选项下拉框等，下拉框需要做一个标记，其他的请根据标签的语义尽可能的还原层级结构 
+  内容如下：
+  html代码: {{n_this_html}}
+
+''')
+
+
+// 重排序
+define('tpl_sort_json', '''
+下面为pdf的OCR的识别结果，但是index可能存在顺序错乱的情况（index为pdf的对象元素顺序），
+请根据ocr的识别结果及图片内容，按照最符合人类阅读习惯的顺序生成一个新的json, 不要输出content
+顺序错乱的可能原因：
+1、文本块顺序错乱，不同的文本块可能被组合到一起导致顺序错乱
+2、文本包含图片的情况，需要先将文本组合到一起，最后再排到图片
+
+最终输出例子：
+[
+    {
+        "type": "数据保持不变，如果没有则不要",
+        "page": 数据保持不变，如果没有则不要,
+        "index": 数据保持不变，如果没有则不要,
+        "new_index": 根据图片判断生成出新的顺序，同一个板块的数据尽可能相邻，必须要与原数据中的index一致用于映射content，如果没有index字段则不要
+    },
+]
+
+下面为OCR的结果：
+{{by_index_json}}
+
+{{fn.chatImageFlag('system_prompt', '', '', 'image_path', 1)}}
+''')

@@ -1,0 +1,47 @@
+/*
+{
+	"title":"agt_data_cs_ns_tsr_combine",
+	"parameter":[
+		{
+			"name":"caseId",
+			"label":"case Id",
+			"required":true,
+			"maxLength":5000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"text"
+		}
+	],
+	"tag":"All",
+	"displayOrder":0,
+	"version":6
+}
+*/
+assign("n_customer_profile","")
+assign("n_name_screening","")
+assign("n_transaction_review","")
+
+n_customer_profile,act_kb.selectBy?sql='select report_source as reportSource from kb_template_report_record where report_name="Okp_customer_profile_template" order by create_time desc limit 1 '
+log("n_customer_profile=={{n_customer_profile}}")
+
+n_name_screening,act_kb.selectBy?sql='select report_source as reportSource from kb_template_report_record where report_name="Okp_name_screening_template" order by create_time desc limit 1 '
+log("n_name_screening=={{n_name_screening}}")
+
+n_transaction_review,act_kb.selectBy?sql='select report_source as reportSource from kb_template_report_record where report_name="Okp_transaction_review_template" order by create_time desc limit 1 '
+log("n_transaction_review=={{n_transaction_review}}")
+
+
+n_result,act_func?script='''
+	def customer_profile=n_customer_profile
+	def name_screening=n_name_screening
+	def n_transaction_review=n_transaction_review
+  	def map =  [
+      'customer_profile': customer_profile,
+      'name_screening': name_screening,
+      'transaction_review': n_transaction_review
+      ]
+    return map
+'''
+
+// result
+assign('result','{{n_result}}')

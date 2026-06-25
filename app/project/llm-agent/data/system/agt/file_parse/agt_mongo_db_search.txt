@@ -1,0 +1,37 @@
+/*
+{
+	"title": "MongoDB Database Query",
+	"description": "Query MongoDB database documents based on kbSpaceFileId field",
+	"parameter": [
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
+			"type":"knowledge_space"
+		}
+	],
+	"tag":"Database",
+	"uiEntrance": "",
+  "resultPlan": "result",
+	"version": "1"
+}
+*/
+
+// 查询文件名
+n_file_infos, act_kb.selectBy?sql='select store_uri,extension from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}"'
+
+// fileName
+n_fileName,act_func?script='''
+  return n_file_infos[0]
+'''
+
+// 构建完整的MongoDB查询语句，查询所有字段
+n_query_mql,act_func?script='''
+  return 'db.report_data.find({ "fileName": ' + '"' + n_fileName.store_uri + '"' +' },{ "_id": 0 })'
+'''
+n_reportData, act_api.doExecuteDynamic?name=ReportDataSearch&dynamicParamData='{{fn.json("searchMQL, n_query_mql", true)}}'
+
+// data
+assign("result", '{{n_reportData.data}}')

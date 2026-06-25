@@ -1,0 +1,18 @@
+/*
+{
+	"title":"Database Query Executor",
+	"description":"Executes SQL queries on the database and returns the results",
+	"parameter":"{\"name\":\"SQL\",\"label\":\"SQL\",\"type\":\"textarea\"}",
+	"tag":"data-filter",
+	"life":100,
+	"version":1
+}
+*/
+/
+
+
+// Step 3: 从数据库读取原始数据
+n_raw_data,act_kb.selectBy?sql='{{SQL}}'
+
+// Step 4: 保存读取结果
+assign("raw_data", "{{n_raw_data}}")

@@ -1,0 +1,115 @@
+/*{
+	"title": "Auto Generator Agent Icon (Matplotlib)",
+	"description": "Automatically generate a high-quality 120x120 icon image based on the agent name and description using Matplotlib.",
+	"parameter": [
+		{
+			"name": "agentName",
+			"label": "Agent Name",
+			"type": "text"
+		},
+		{
+			"name": "agentDesc",
+			"label": "Agent Description",
+			"type": "textarea"
+		}
+	],
+	"version": 3
+}*/
+
+// Step 1: Define concept generation template (returns JSON)
+define('tpl_icon_concept', '''
+	You are an experienced icon designer.
+
+	Your task is to design a concept for an icon based on the following input:
+
+	Agent Name: {{agentName}}
+	Agent Description: {{agentDesc}}
+
+	You must output a JSON object describing the icon concept, wrapped in a ```json code block.
+
+	The JSON must include:
+	{
+	"theme": "brief summary of the icon theme",
+	"colors": ["main colors, e.g. blue, white, orange"],
+	"elements": ["main shapes or symbols to draw"],
+	"style": "style description, e.g. flat, minimal, gradient"
+	}
+
+	Output format (strictly):
+	```json
+	{
+	"theme": "...",
+	"colors": ["..."],
+	"elements": ["..."],
+	"style": "..."
+	}
+	Do not include any other text or explanations.
+''')
+
+// Step 2: Generate icon concept (structured)
+n_icon_concept, tpl_icon_concept, psr_json
+log('🎨 Icon design concept generated: {{n_icon_concept}}')
+
+// Step 3: Define Python code generator template (Matplotlib version)
+define('tpl_icon_python_code', '''
+	You are a Python graphic designer.
+
+	Based on the following icon concept, generate **pure executable Python code** (no markdown, no explanations).
+
+	Agent Name: {{agentName}}
+	Agent Description: {{agentDesc}}
+	Design Concept: {{n_icon_concept}}
+
+	Requirements:
+	- Use only Matplotlib (no Pillow)
+	- Import the required libraries:
+	  import matplotlib.pyplot as plt
+	  import matplotlib.patches as patches
+	- Image size: 120x120 pixels (use figsize=(1.2,1.2), dpi=100)
+	- Background color should match the concept's main color or theme
+	- Use geometric elements like circles, rectangles, polygons according to "elements"
+	- Include short text (like agent initials or keyword) in the icon center
+	- Enable anti-aliasing and clean edges
+	- Transparent background if appropriate
+	- Save as 'generated_icon.png' with:
+	  plt.savefig('generated_icon.png', dpi=300, bbox_inches='tight', pad_inches=0, transparent=True)
+	- Close the plot with plt.close()
+
+	Output must be **only valid Python code**, no markdown, no JSON, no ``` wrappers.
+	The code must be directly executable.
+''')
+
+// Step 4: Generate Python code (free-form text)
+n_python_code, tpl_icon_python_code, psr_all
+log('Python code generated successfully:\n{{n_python_code}}')
+
+// Step 5: Write the code to a temporary .py file
+n_file_info, act_python.writeTmp?pythonCode='{{n_python_code}}'
+log('Python file written: {{n_file_info.filename}}')
+
+
+// Step 6: Execute the Python file
+n_execution_result, act_python.run?filename='{{n_file_info.filename}}'
+log('Execution result: {{n_execution_result}}')
+
+
+// Step 7: Read the generated icon
+n_icon_data, act_func.read?filename='generated_icon.png'
+
+// Step 8: Build return message
+when('fn.hasValue(n_icon_data)', {
+	assign('result', '✅ Icon generated successfully using Matplotlib. Theme: {{n_icon_concept.theme}}')
+}, {
+	assign('result', '❌ Icon generation failed. Please check LLM output or Python error logs.')
+})
+
+// Step 9: Log summary
+log('Icon generation complete for agent: {{agentName}} | Concept: {{n_icon_concept.theme}}')
+log('Saved file: generated_icon.png')
+log('Python execution result: {{n_execution_result}}')
+
+// Step 10: Error handling
+on_failure({
+	assign('result', '❌ Icon generation failed: {{sys_last_error}}')
+	log('Error occurred: {{sys_last_error}}')
+})

@@ -1,0 +1,27 @@
+/*
+{
+	"title":"知识空间文件查询Agent",
+	"description":"根据文件ID查询知识空间文件内容",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"knowledge_space\"}",
+	"tag":"Knowledge Space Query",
+	"version":1
+}
+*/
+
+// 构建SQL查询条件
+assign("sqlCondition", '')
+
+// 执行SQL查询
+n_queryResult, act_kb.selectBy?sql='SELECT fileName, page, COALESCE(analysis_content, content) AS content FROM kbs_doc_page_parse WHERE documentId IN ({{kbSpaceFileId}})'
+when('!fn.hasValue(n_queryResult)', {
+	// 无查询结果的情况
+	n_file_name, act_kb.selectBy?sql='select  file_name,store_uri  from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}" '
+	n_file_data,act_func.read?filename="{{n_file_name[0].store_uri}}"
+	assign("queryResult", '{"file_name":"{{n_file_name[0].file_name}}","file_content":"{{n_file_data}}"}')
+},{
+	// 有查询结果的情况
+	assign("queryResult", '{"file_name":"{{n_queryResult[0].fileName}}","file_content":"{{n_queryResult[0].content}}"}')
+}
+)
+// 返回查询结果
+assign("result", '{{queryResult}}')

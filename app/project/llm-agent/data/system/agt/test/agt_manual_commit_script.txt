@@ -1,0 +1,38 @@
+/*
+{
+	"title":"Test Step Generation and Run",
+	"description":"Generate test steps and scripts",
+	"parameter":[
+		{
+			"name":"step",
+			"label":"step_name",
+			"required":true
+		},
+		{
+			"name":"planRequestId",
+			"label":"requirement item",
+			"required":true
+		},
+		{
+			"name":"success",
+			"label":"是否保存正式代码",
+			"required":true
+		}
+	],
+	"tag":"Automated Testing",
+	"uiEntrance":"?isFullScreen=true",
+	"version": 1
+}
+*/
+
+// test
+assign("newPath", "appdata/ac_script/KYC/xxx/xxx.py")
+
+assign('sql',"""
+SELECT t.*
+           FROM llm_agent.llm_agent_result t
+           WHERE request_id='{{planRequestId}}' and result_type='2' and step_name='{{step}}'
+           ORDER BY create_time DESC limit 1
+""")
+// n_file_name, act_kb.selectBy?sql={{sql}}
+

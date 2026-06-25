@@ -1,0 +1,156 @@
+/*
+{
+	"title":"Answer user question by mongo query",
+	"description":"Answer user question",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+        {
+            "name":"kbSpaceId",
+            "label":"Folder ID",
+            "type":"knowledge_space"
+        }
+	],
+	"uiEntrance":"chatdoc_QA",
+	"version":1
+}
+*/
+
+// 预置空答案
+assign("n_answer", "[]")
+
+
+
+when('fn.hasValue(kbSpaceId)',{
+    n_space_ids,act_func?script='''
+        def data = kbSpaceId
+        return data.split(',')
+    '''
+    // 根据id拿到对应的full path
+    assign('dir_list', '[]')
+    foreach('n_item', 'n_space_ids',{
+        assign('space_id', '{{n_item.item}}')
+        // 文件夹拿出full path
+        n_store_uri,act_kb.selectBy?sql='select store_uri from kb_spaces_folder_knowledge where kb_spaces_folder_id = "{{space_id}}"'
+        // 文件拿出full path
+        when('!fn.hasValue(n_store_uri)',{
+            n_store_uri,act_kb.selectBy?sql='select store_uri from kb_spaces_folder_knowledge where id = "{{space_id}}"'
+        })
+        when('fn.hasValue(n_store_uri)',{
+            n_dir_data,act_func?script='''
+                def data = n_store_uri
+                def new_data = [:]
+                new_data['id'] = space_id
+                new_data['path_name'] = data[0].store_uri.replace('/kbs/','')
+                data[0].id = space_id
+                dir_list.addAll(new_data)
+            '''
+        })
+    })
+
+
+
+    foreach('n_json', 'dir_list',{
+        assign('n_folder','{{n_json.item}}')
+
+        assign("path_name", "{{n_folder.path_name}}")
+
+        // Set mql for userInput
+        n_query_mql,agt_text_to_mongoql.report?kbsFileName={{path_name}}&indicatorDesc={{userInput}}
+
+        // Get query answer for userInput
+        n_answer_tmp, act_api.doExecuteDynamic?name=ReportDataSearch&dynamicParamData='{{fn.json("searchMQL, n_query_mql", true)}}'
+
+        //  Get query answer
+        n_result, act_func?script='''
+            def json_data = n_answer_tmp
+            n_answer.addAll(json_data.data)
+            return n_answer
+        '''
+        // Get query answer
+        assign('n_answer', "{{n_result}}")
+
+    })
+
+})
+
+"""
+when('fn.hasValue(kbSpaceFileId)',{
+    // Get file store uri
+
+    n_file_infos, act_kb.selectBy?sql='select store_uri from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}" '
+
+    n_store_uri,act_func?script='''return n_file_infos[0].store_uri'''
+
+    // 处理file_name，去掉第一个/后的kbs部分
+    n_file_name,act_func?script='''
+        def processedFileName = n_store_uri
+        if (n_store_uri && n_store_uri.contains('/')) {
+            def parts = n_store_uri.split('/')
+            if (parts.length >= 3) {
+                // 重建路径，去掉第二个部分（kbs）
+                processedFileName = '/' + parts[2..-1].join('/')
+            }
+        }
+        return processedFileName
+    '''
+
+    // Set mql for userInput
+    n_query_mql,agt_text_to_mongoql.report?kbsFileName={{n_file_name}}&indicatorDesc={{userInput}}
+
+    // Get query answer for userInput
+    n_answer_tmp, act_api.doExecuteDynamic?name=ReportDataSearch&dynamicParamData='{{fn.json("searchMQL, n_query_mql", true)}}'
+
+    //  Get query answer
+    n_answer, act_func?script='''
+        def json_data = n_answer_tmp
+        return json_data.data
+    '''
+   
+})
+"""
+
+assign("tmp_value", '{{n_answer}}')
+when('n_answer?size > 0',{
+    // Extract answer fot MongoDB
+    n_answer,tpl_extract_answer,psr_all
+})
+
+
+// The finally result of mongo query
+assign("mongodb_query_answer", '{{tmp_value}}')
+
+
+define('tpl_extract_answer', '''
+/*{
+  "enableThinking":"false"
+}*/
+<nothink>
+你是一名结构化数据答案提取助手。  
+你将收到两部分内容：一段结构化的 JSON 数组数据（称为“数据信息”）和一个明确的问题。  
+
+你的任务是：  
+- 精确理解问题的查询目标；  
+- 仅在提供的“数据信息”中查找与问题最匹配的记录；  
+- 不得引入任何外部知识、不得推理、猜测或补充说明；  
+- 仅返回与问题直接相关的字段；  
+- 输出必须是合法的 JSON 数组，且仅包含以下内容：  
+　　• 能唯一标识对象的字段（如 指數名稱、指數名稱_1 等）；  
+　　• 问题所询问的目标字段。  
+
+严格遵守以下规则：  
+- 如果数据中没有匹配项，返回空数组 []；  
+- 不添加任何解释、注释、格式标记（如 ```json 或 ```）；  
+- 输出必须以 [ 开头、以 ] 结尾，中间为符合 JSON 语法的对象数组；  
+- 禁止输出任何非 JSON 内容，包括空格、换行以外的文本。
+
+数据信息：  
+{{n_answer}}
+
+问题：  
+{{userInput}}
+</nothink>
+''')

@@ -1,0 +1,17 @@
+/*
+{
+	"title":"test demo tmp",
+	"description":"test demo tmp",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"客户问题\",\"type\":\"textarea\"}",
+	"tag":"chatdoc_QA",
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"n_chatdoc_answer",
+	"life":100,
+	"displayOrder":0,
+	"version":1
+}
+*/
+// test demo tmp
+assign('questipn', '{{userInput}}')
+assign('plan_agent', 'agt_test_demo_tmp.chatdoc_AQ')
+act_plan.runPlan?executor={{plan_agent}}&parameters='uInput={{questipn}}'

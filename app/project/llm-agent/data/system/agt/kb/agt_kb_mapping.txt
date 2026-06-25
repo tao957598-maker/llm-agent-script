@@ -1,0 +1,21 @@
+/*  
+{
+    "title": "返回知识库字段名映射关系",
+	"parameter": "excelColumns=Excel文件字段名&columns=知识库源数据字段名",
+	"description": "返回知识库字段名映射关系",
+	"category": "知识库"
+}   
+*/
+
+tpl_excel_column_mapping
+
+define('tpl_excel_column_mapping', '''
+    请基于excel字段名和源数据字段名，请给出excel与源数据字段名匹配关系，请严格按照源数据字段名最多只能匹配一个excel字段名，匹配不上设置为""，请输出json格式，请去掉任何//以及//之后的内容，json格式返回:{'源数据字段名':'excel字段名'}。
+	
+	# excel字段名为：
+	{{excelColumns}}
+	
+    # 源数据字段名为: 
+    {{columns}}
+    
+''')

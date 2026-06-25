@@ -1,0 +1,31 @@
+/*
+{
+	"title":"test demo tmp",
+	"description":"test demo tmp",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"客户问题\",\"type\":\"textarea\"}",
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"chatdoc_answer,n_combined_result",
+	"life":100,
+	"displayOrder":0,
+	"version":2
+}
+*/
+// test demo tmp
+assign('system_prompt',"/kbs/check_recognition/image_marked_20251229170149.jpg")
+
+
+
+//## Generate report: Display indicator {{varName}} chart.
+act_memory.assign?var='n_chart_absolute_path'&value='{{system_prompt}}'&type='image'
+//## Generate report: Display indicator {{varName}} chart.
+assign('chatdoc_answer1','''
+# 公网图片
+![图像描述](http://172.18.2.14:5171/assets/aiBtn-Drv4kxTw.png)
+# 知识空间图片路径
+
+![图像描述]({{n_chart_absolute_path}})
+''') 
+n_combined_result,act_memory.assign?value='''{{chatdoc_answer1}}'''&type=md
+
+assign('chatdoc_answer1','''{{n_combined_result}}''') 
+

@@ -1,0 +1,187 @@
+/*
+{
+  "title": "Claude Cloud CLI Assistant",
+  "description": "Claude Cloud CLI 助手，支持发送消息并在异步时轮询结果",
+  "parameter": [
+    {
+      "name": "userInput",
+      "label": "用户输入",
+      "required": true
+    },
+    {
+      "name": "contextEnv",
+      "label": "目标环境，可选，云端时用于匹配 server_id"
+    },
+    {
+      "name": "wait",
+      "label": "是否同步等待，默认 false"
+    }
+  ],
+  "resultPlan": "n_final_result",
+  "uiEntrance": "chatDoc",
+  "discoverable": true,
+  "tag": "assistant",
+  "life": "100"
+}
+*/
+
+//# 初始化变量
+assign('n_final_result', '')
+assign('n_wait_safe', '{{fn.optional(wait, "false")}}')
+assign('n_need_poll', 'false')
+assign('n_session_id', '')
+assign('n_container_id', '')
+assign('n_poll_result_text', '')
+assign('n_response_text', '')
+assign('n_status_text', '')
+assign('n_send_result_text', '')
+
+//# 构造 Claude 启动命令
+assign('json', "docker run -d --name claude-code --network host -w /workspace --env ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic --env ANTHROPIC_AUTH_TOKEN=sk-3b7cbafda9de45c095927122e13deb74 --env ANTHROPIC_MODEL=deepseek-v4-pro --env ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro --env ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-pro --env ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash --env CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash --env CLAUDE_CODE_EFFORT_LEVEL=max -v /mnt/d/app/data/test_api_codex:/workspace -v /home/claude/.claude -v /home/claude/.gstack -v /home/claude/.ssh:ro -v /home/claude/.gitconfig:ro -v /home/claude/.claude.json -i -t docker-optimized-claude-runtime claude")
+assign('startup_command', '{{fn.jsonObj("startup_command, json")}}')
+
+//# 发送 Claude 消息
+assign('n_claude_message', '{{userInput}}')
+//## 调用 Claude Cloud 创建会话
+n_send_result, act_api.doExecuteDynamic?name="claude_sessions_create"&dynamicParamData={{startup_command}}
+log("[CLAUDE] claude_sessions_create result={{n_send_result}}")
+assign('n_send_result_text', '{{n_send_result}}')
+
+//## 解析 claude_sessions_create 返回，提取 session_id / container_id / status
+act_func?script='''
+  def payload = n_send_result?.data
+  def sessionId = ""
+  def containerId = ""
+  def status = ""
+
+  def readField = { obj, names ->
+    if (!(obj instanceof Map)) return ""
+    for (def name : names) {
+      def value = obj.get(name)
+      if (value != null && value.toString().trim() != "") {
+        return value.toString()
+      }
+    }
+    return ""
+  }
+
+  if (payload instanceof Map) {
+    sessionId = readField(payload, ["session_id"])
+    containerId = readField(payload, ["container_id"])
+    status = readField(payload, ["status", "state"])
+  } else if (payload != null) {
+    def raw = payload.toString()
+    def sessionMatcher = raw =~ /"session_id"\s*:\s*"([^"]+)"/
+    if (sessionMatcher.find()) sessionId = sessionMatcher.group(1)
+    def containerMatcher = raw =~ /"container_id"\s*:\s*"([^"]+)"/
+    if (containerMatcher.find()) containerId = containerMatcher.group(1)
+    def statusMatcher = raw =~ /"status"\s*:\s*"([^"]+)"/
+    if (statusMatcher.find()) status = statusMatcher.group(1)
+  }
+
+  fn.put("n_session_id", sessionId)
+  fn.put("n_container_id", containerId)
+  fn.put("n_status_text", status)
+
+  def waitFlag = (n_wait_safe ?: "false").toString().equalsIgnoreCase("true")
+  def needPoll = sessionId ? true : false
+  fn.put("n_need_poll", needPoll ? "true" : "false")
+'''
+
+//# 轮询获取 Claude 结果
+when('n_need_poll == "true" && fn.hasValue(n_session_id)', {
+  n_index_list, act_plan.parse?task='''
+- [ ] poll_01
+- [ ] poll_02
+- [ ] poll_03
+- [ ] poll_04
+- [ ] poll_05
+- [ ] poll_06
+- [ ] poll_07
+- [ ] poll_08
+- [ ] poll_09
+- [ ] poll_10
+- [ ] poll_11
+- [ ] poll_12
+'''
+
+  assign('n_poll_index', '0')
+  foreach('n_poll_item', 'n_index_list', {
+    when('!fn.hasValue(n_poll_result_text)', {
+      act_func?script='''
+        def index = (n_poll_index ?: "0") as int
+        def waitSeconds = 5 * (Math.pow(2, index) as int)
+        fn.put("n_wait_seconds", waitSeconds)
+        fn.put("n_poll_index", index + 1)
+      '''
+      log("[POLL] poll={{n_poll_index}}, wait={{n_wait_seconds}}s before next request")
+      act_flow.wait?second={{n_wait_seconds}}
+      //## 获取 Claude 输出结果
+      n_get_result, act_api.doExecuteDynamic?name="claude_output"&dynamicParamData={{n_session_id}}
+      log("[POLL] claude_output result={{n_get_result}}")
+      act_func?script='''
+        def payload = n_get_result?.data
+        def outputText = ""
+        def status = ""
+
+        def readField = { obj, names ->
+          if (!(obj instanceof Map)) return ""
+          for (def name : names) {
+            def value = obj.get(name)
+            if (value != null && value.toString().trim() != "") {
+              return value.toString()
+            }
+          }
+          return ""
+        }
+
+        if (payload instanceof Map) {
+          outputText = readField(payload, ["output", "result", "message", "content", "answer"])
+          status = readField(payload, ["status", "state"])
+
+          if (!fn.hasValue(outputText)) {
+            def dataObj = payload.get("data")
+            if (dataObj instanceof Map) {
+              outputText = readField(dataObj, ["output", "result", "message", "content", "answer"])
+              if (!fn.hasValue(status)) {
+                status = readField(dataObj, ["status", "state"])
+              }
+            }
+          }
+        } else if (payload != null) {
+          def raw = payload.toString()
+          def outputMatcher = raw =~ /"output"\s*:\s*"([^"]*)"/
+          if (outputMatcher.find()) outputText = outputMatcher.group(1)
+          def statusMatcher = raw =~ /"status"\s*:\s*"([^"]+)"/
+          if (statusMatcher.find()) status = statusMatcher.group(1)
+        }
+
+        if (fn.hasValue(outputText)) {
+          fn.put("n_poll_result_text", outputText)
+        }
+        if (fn.hasValue(status)) {
+          fn.put("n_status_text", status)
+        }
+      '''
+    })
+  })
+})
+
+//## 统一返回结果
+when('fn.hasValue(n_poll_result_text)', {
+  assign('n_final_result', '{{n_poll_result_text}}')
+}, {
+  when('fn.hasValue(n_response_text)', {
+    assign('n_final_result', '{{n_response_text}}')
+  }, {
+    when('fn.hasValue(n_session_id)', {
+      assign('n_final_result', 'Claude 会话已创建，当前暂无最终结果。\n\nsession_id={{n_session_id}}\ncontainer_id={{n_container_id}}\nstatus={{n_status_text}}')
+    }, {
+      assign('n_final_result', '{{n_send_result_text}}')
+    })
+  })
+})
+
+on_failure({
+  assign('n_final_result', 'claude assistant 执行失败：{{sys_failure_task.result}}')
+})

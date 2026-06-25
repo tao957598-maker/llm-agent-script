@@ -1,0 +1,12 @@
+/*
+{
+	"title":"Verify result",
+	"description":"Verify test result",
+	"parameter":"test_no=Test Case No&current_step=当前验证步骤&steps=完整验证步骤&system=系统名称&envinfo=environment information",
+	"resultPlan":"n_python_file",
+	"version":1
+}
+*/
+/
+// Call agent to generate code for dynamic task
+agt_test_selenium?test_no={{test_no}}&current_step={{current_step}}&steps={{steps}}&system={{system}}&envinfo={{envinfo}}&taskType=DYNAMIC_SELECT_TASK

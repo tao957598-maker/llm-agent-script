@@ -1,0 +1,51 @@
+/*
+ {
+	 "title": "自动化测试-添加等待校验",
+	 "description": "检查特定的等待元素",
+	 "parameter": [
+	 	  {
+			  "name":"current_step",
+			  "label":"当前步骤"
+		  },
+		  {
+			  "name":"python_code",
+			  "label":"系统名称"
+		  },
+		  {
+			  "name":"change_behavior",
+			  "label":"改变行为"
+		  },
+		  {
+			  "name":"change_element",
+			  "label":"待检测的元素"
+		  }
+	  ]
+ }
+*/
+// Add page verify element
+tpl_self_add_wait, psr_python, act_memory.assign?var=python_code
+
+// Update selenium script to the artifact repository
+n_python_file_3, act_python.write?requirement={{current_step}}&application={{system}}
+
+// 修改代码添加检测
+define('tpl_self_add_wait', '''
+	/*{
+		 "llmType":"alias.code"
+	 }*/
+	你是熟悉selenium 4的从事银行业务的高级测试，请基于下面的python代码需求，完成run函数。
+    # python函数：run(browser)
+	它将被主模块用run(browser)的方式调用。
+	{{python_code}}
+	
+	# python代码需求
+	在run的结尾，添加：waitElement(browser, item, '{{change_behavior}}') 等待页面的加载完成，item为下面的待检测元素
+
+	# 待检测的元素：
+	{{change_element}}
+	
+	# 其中来自autotest的可调用函数（通过from autotest import waitElement 补充导入函数）：
+	参数item是来自弹窗的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	参数browser是已经构建好的webdriver.Chrome实例
+	1. waitElement(browser, item, type),等待item所指向的元素出现/消失/改变,取决于type类型(add/remove/update)
+''')

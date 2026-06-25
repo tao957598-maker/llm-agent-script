@@ -1,0 +1,320 @@
+/*
+{
+	"title": "Answer user question by vector query",
+	"description": "Answer user question",
+  "parameter": [
+    {
+      "name":"userInput",
+      "label":"客户问题",
+      "type":"textarea"
+    },
+    {
+      "name":"folderIds",
+      "label":"Folder ID",
+      "type":"textarea"
+    },
+    {
+      "name":"knowledgeIds",
+      "label":"File ID",
+      "type":"textarea"
+    },
+    {
+      "name":"kbData",
+      "label":"知识库数据",
+      "type":"textarea"
+    }
+    ],
+  "llmType": "",
+	"resultPlan":"vector_query_answer",
+
+} */
+
+// Set parameter
+assign('params','{"question":"{{userInput}}","folderIds":"{{folderIds!}}","knowledgeIds":"{{knowledgeIds!}}"}')
+
+// initialize variables for result
+assign('result_datas', '[]')
+
+// Execute vector query
+n_results,rag_kbs.searchQuestion?paramData='{{params}}'&similarity='0.01'
+
+// Analysis results
+when('n_results?size>0',{
+  assign('vector_list', '{{n_results}}')
+  // Get document id 
+  n_document_id,act_func?script='''return n_results[0].document_id'''
+
+  // Check the answer meets the question first
+  n_result, tpl_check_answer_new_v4,psr_json
+
+  when('n_result.isEnough==false',{
+    // isEnough is false
+    assign('needs_list', '{{n_result.needs}}')
+
+    foreach('need_info', 'needs_list',{
+      assign('need', '{{need_info.item}}')
+
+      assign('index', '{{need.id_index}}')
+      assign('n_up_num', '{{need.up}}')
+      assign('n_next_num', '{{need.next}}')
+      n_id, act_func?script='''return n_results[index].id'''
+
+      // Get the up vector content
+      when('{{n_up_num>0}}', {
+        n_up_data,act_kb.selectBy?sql='SELECT id,document_id,content FROM kb_spaces_knowledge_section WHERE document_id = {{n_document_id}} AND id < {{n_id}} ORDER BY id DESC LIMIT {{n_up_num}}'
+        when('n_up_data?size>0', {
+          foreach('data', 'n_up_data',{
+            assign('n_tmp_up_data', '{{data.item}}')
+            append('result_datas', '{{n_tmp_up_data}}')
+          })
+        })
+      })
+
+      // Get the current vector content
+      n_vector, act_func?script='''return n_results[index]'''
+      append('result_datas', '{{n_vector}}')
+
+		  // Get the next vector content
+      when('{{n_next_num>0}}', {
+        n_next_data,act_kb.selectBy?sql='SELECT id,document_id,content FROM kb_spaces_knowledge_section WHERE document_id = {{n_document_id}} AND id > {{n_id}} ORDER BY id ASC LIMIT {{n_next_num}}'
+        when('n_next_data?size>0', {
+          foreach('data', 'n_next_data',{
+            assign('n_tmp_next_data', '{{data.item}}')
+            append('result_datas', '{{n_tmp_next_data}}')
+          })
+        })
+      })
+    })
+
+  },
+  {
+    // isEnough is true
+    assign('id_list', '{{n_result.id_index}}')
+    foreach('id_info', 'id_list',{
+      
+      assign('index', '{{id_info.item}}')
+      n_vector, act_func?script='''return n_results[index]'''
+      append('result_datas', '{{n_vector}}')
+    })
+  })
+
+  // result datas
+	assign("result_datasresult_datas", '{{result_datas}}')
+
+	// Check the answer meets the question second
+	n_second_result, tpl_check_answer_new_v1,psr_json
+	when('n_second_result.isEnough==false',{
+
+		// The second vector query returned no results.
+		assign("n_answer", '[]')
+	},
+	{
+		// results of the second vector query
+		assign("n_answer", '{{n_second_result.content}}')
+	})
+
+},
+{
+  // The first vector query returned no results.
+  assign("n_answer", '[]')
+})
+
+
+
+// The finally result of vector query
+assign("vector_query_answer", '{{n_answer}}')
+
+
+// Check if the answer meets the question
+define('tpl_check_answer_new_v4', '''
+- Role: 你是一位“内容断分点定位与连续性推理专家”。
+- Goals：根据用户问题和提供的向量块序列，判断答案是否仅依赖当前块序列。若序列不连续，能基于页码等线索推断可能的信息缺口
+- Constrains:（必须严格遵守）：
+  1. 向量块字段说明
+   - serialNumber：序号，无意义，忽略  
+   - id：当前向量块唯一标识  
+   - document_id：文件标识
+   - content：包含  
+     - # page：此页码字段现在具有最高优先级，必须用于分析内容连续性。  
+     - 标题/关键句  
+     - 页面关键字（如有）  
+     - 页面描述（如有）  
+     - 上一个向量块尾部 20 % 的 token（“# Below is 20.0% of the tokens from the previous block.”）  
+     - 当前向量块真正内容（“# Now begins the content of this block.”之后）
+  2. 连续性推理原则（关键新增）：
+   - 必须检查# page字段显示的页码序列是否连续。
+   - 如果页码出现跳跃（例如，当前块序列有第2页，下一个块是第7页），则认定中间缺失了页面，这直接导致信息不完整。
+   - 必须评估这些缺失的页面是否可能包含回答问题所需的关键信息。评估依据包括：
+     - 当前块开头“上一个向量块20%内容”是否提及了在现有序列中未出现过的关键概念、条款编号或主语？
+     - 现有内容中是否有明确的引用指向缺失的页码（如“详见第五条”，但第五条不在当前序列中）？
+     - 缺失的页码范围是否覆盖了章节标题或逻辑上应存在的部分（如从“第二章”直接跳到“第十三条”，中间缺失了第三至十二章）？
+   - 触发扩展的条件：信息不完整可能由下列原因引起，均需在needs数组中指定扩展需求：
+     - 原因A（内容截断）：根据单个向量块内的句子在开头（“# Now begins...”之前）或结尾被截断，导致语义不完整。
+     - 原因B（页码跳跃）：相关向量块集合之间的页码不连续，导致中间缺失了整页内容。
+     - 原因C (满足回答问题)：根据单个向量块、相关向量块集合、以及用户问题，为了能够更好更全更准确的回答问题，分析判断其他向量块(向上/向下扩展)是否含有回答问题信息
+  3. 禁止编造已知缺失页面的具体内容，但必须基于上述原则推理其存在的可能性和必要性。
+  4. 禁止解释理由
+  5. 输出必须是合法JSON，不含多余字段或注释。
+
+
+- Workflow and OutputFormat (必须严格遵守):
+  1. 通读与连续性检查：通读全部向量块的 content，找出与问题相关的向量块集合（**相关向量块集合**）。同时分析页码序列，识别是否存在缺失的页码区间。
+  2. 完整性判断：
+   - 如果同时满足以下两个条件，则判定为 isEnough: true：
+     - 条件1：所有“相关向量块”自身内容完整（句子无截断）。
+     - 条件2：“相关向量块集合”的页码是连续的，且没有检测到可能包含关键信息的缺失页码区间。 
+   - 否则（即条件1或条件2任一不满足），则判定为isEnough: false。
+  3. 内容完整且无关键信息缺失，则输出  
+      ```json
+      {
+        "isEnough": true, 
+        "id_index": [...], 列出能一起**完整、准确、无需额外信息**地回答用户问题的向量块下标（从 0 开始）
+        "document_id": "文件标识",
+      }
+      ```
+  4. 内容不完整/截断或有关键信息缺失，则输出：
+    - 举例：相关向量集合为[0,1,3],其中下标为0的向量块需要向下扩展2；下标为1的向量块需要向上扩展1，向下扩展1；下标为3的向量块不需要扩展，
+    ```json 相关向量
+    {
+        "isEnough": false, 
+        "document_id": "文件标识",
+        "needs":[
+          {
+            # 下标为0的向量块需要向下扩展2
+            "id_index": 0, 
+            "up": 0,
+            "next": 2
+          },
+          {
+            # 下标为1的向量块需要向上扩展1，向下扩展1
+            "id_index": 1, 
+            "up": 1, 
+            "next": 1
+          }，
+          {
+            # 下标为3的向量块不需要扩展
+            "id_index": 3, 
+            "up": 0,
+            "next": 0
+          },
+        ]
+      }
+    ```
+
+# 当前问题:
+{{userInput}}
+
+# 当前向量块集合：:
+{{vector_list}}
+
+''')
+
+
+
+// Check if the answer meets the question
+define('tpl_check_answer_new_v1', '''
+- Role: 你是一位严谨的信息充分性判断专家  
+- Goals：是根据用户提出的问题，逐块评估已给定的向量块集合，判断当前已累积的向量块是否足以完整、准确地回答问题 
+
+- Constrains:（必须严格遵守）： 
+ 0. id去重规则：若出现完全相同的 id，只保留第一条；若 id 相同但 content 不同，视为不同块，全部保留。
+ 1. 向量块集合关键字段说明
+  - id：当前向量块唯一标识  
+  - content：包含  
+    - 页码  
+    - 标题/关键句  
+    - 页面关键字（如有）  
+    - 页面描述（如有）  
+    - 上一个向量块尾部 20 % 的 token（“# Below is 20.0% of the tokens from the previous block.”）  
+    - 当前向量块真正内容（“# Now begins the content of this block.”之后）
+ 2. 禁止一次性看完所有片段后再做整体判断；必须“增量式”判断。  
+ 3. 禁止在片段充足时继续追加后续片段。  
+ 4. 禁止推理、禁止外部知识、禁止解释、禁止引入片段之外的知识来“补足”答案。。
+ 5. 禁止出现“根据您提供的信息”“可能”“大概”等模糊表述。
+ 6. 完整性判断规则
+  a) 允许利用“上一块尾部 20 % 重叠区”与当前块头部进行拼接；
+  b) 拼接后若句子、单词、短语均完整，不再视为“中途截断”；
+  c) 禁止借助重叠区之外的外部知识补全。
+
+- Workflow:
+ 0. 按 **Constraints-0** 去除完全重复 id。
+ 1. 向量块将按顺序逐条提供，你需按顺序逐条累加评估。
+ 2. 每次基于“已累积块 + 当前块头部与上一块尾部拼接结果”判断是否完整、准确、无需额外信息地回答用户问题。
+ 3. 若拼接后可得到完整答案，立即返回；否则继续读取下一块，重复步骤 2-3。
+ 4. 当所有向量块都已评估完毕仍不足以回答问题，请返回
+
+
+- OutputFormat
+ - 若已足够：  
+  {  
+    "isEnough": true,  
+    "chunks_used": [id_1, id_2, …],          // 片段序号，从 1 开始，按顺序  
+    "content": [
+      {
+        "id":"document_id",
+        "block_id":"向量块id"
+        "page":"向量块中的页码",
+        "content":"当前向量块真正内容的全部",
+      },
+      {...}
+    ]
+  }  
+
+ - 若全部用完仍不足够：  
+  {  
+    "isEnough": false,  
+    "chunks_used": [],  
+    "content": []  
+  }  
+
+
+# 当前问题:
+{{userInput}}
+
+# 向量块集合:
+{{result_datas}}
+
+''')
+
+
+
+define('tpl_check_answer_old', '''
+- Role: 你是一位“信息充分度仲裁助手”。  
+- Goals：根据“用户提问”与“检索到的候选答案”，判断该答案是否完整、准确、可直接回答用户提问。 n 个“向量块”，逐块增量判断已有片段是否能“完整、准确、无需额外信息”地回答该问题。  
+
+- Constrains:（必须严格遵守）：  
+ 1. 初始已选片段集合为空。  
+ 2. 按顺序每次只增加一个向量块（第 1 块 → 第 1+2 块 → … → 全部 n 块）。  
+ 3. 每增加一块后，立即独立评估：  
+   a. 仅利用当前已选片段；  
+   b. 若你已能从这些片段中完整、准确地回答当前问题，则立刻停止，并按下方【OutputFormat】返回当前已选片段；  
+   c. 若仍缺失关键事实、数据、逻辑或背景，则继续追加下一块，重复评估。  
+ 4. 当且仅当遍历完所有 n 块后仍无法满足 3.b，则返回 false，表示信息不足。  
+ 5. 禁止一次性看完所有片段后再做整体判断；必须“增量式”判断。  
+ 6. 禁止在片段充足时继续追加后续片段。  
+ 7. 禁止编造、推理或引入片段之外的知识来“补足”答案。  
+ 8. 输出必须严格符合【OutputFormat】，不得添加任何解释或多余文字。  
+
+- OutputFormat
+ - 若已足够：  
+   {  
+     "isEnough": true,  
+     "chunks_used": [i_1, i_2, …],   // 片段序号，从 1 开始，按顺序  
+     "content": [向量块i_1, 向量块i_2, …]                // 仅拼接当前满足回答的向量块，不做改写  
+   }  
+
+ - 若全部用完仍不足够：  
+   {  
+     "isEnough": false,  
+     "chunks_used": [],  
+     "content": []  
+   }  
+
+
+# 当前问题:
+{{userInput}}
+
+# 向量块集合:
+{{n_results}}
+
+''')

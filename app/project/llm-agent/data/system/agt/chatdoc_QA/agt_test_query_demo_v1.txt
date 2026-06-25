@@ -1,0 +1,287 @@
+/*
+{
+	"title":"Answer user question",
+	"description":"Answer user question",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"客户问题",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceId",
+			"label":"目录ID（支持多个）",
+			"type":"textarea"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"seek_mode",
+			"label":"搜索模式",
+			"args":[
+				{
+					"label":"快速模式",
+					"value":"1"
+				},
+				{
+					"label":"深度模式",
+					"value":"0"
+				}
+			],
+			"required":true,
+			"defaultValue":"深度模式",
+			"type":"select"
+		}
+	],
+	"tag":"chatdoc_QA",
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"finally_answer",
+	"life":100,
+	"version":1
+}
+*/
+"""
+when('fn.hasValue(kbData)',{
+  //# Execute query from expert knowledge base
+  n_expert_query_answer, agt_test_query_expert_0?userInput={{userInput}}&kbData={{kbData}}
+  // Set answers for expert query
+  assign('n_answers', '{{n_expert_query_answer}}')
+},
+{
+  // Set answers to [] for expert query
+  assign('n_answers', '[]')
+})
+
+
+when('n_answers?size==0',{
+  //# Execute vector query
+  n_vector_query_answer, agt_test_query_vector_1?userInput={{userInput}}&folderIds={{kbSpaceId!}}&knowledgeIds={{kbSpaceFileId}}
+  // Set answers for vector query
+  assign('n_answers', '{{n_vector_query_answer}}')
+
+
+  // Check vector query answer
+  when('n_answers?size==0',{
+	  //# Execute document query
+	  n_documen_query_answer,agt_test_query_document_2?userInput={{userInput}}&kbSpaceFileId={{kbSpaceFileId}}
+	  // Set answers for document query
+	  assign('n_answers', '{{n_documen_query_answer}}')
+  })
+
+})
+"""
+
+// 定义异步结果收集器
+assign('async_list', '[]')
+
+// 问题优化
+n_userInput,tpl_userInput_Optimization,psr_all
+
+"""
+// 调用python分词接口,等开发接口
+// n_userInput_data, act_api.doExecuteDynamic?name="file_parse_chunks"&dynamicParamData='{"content_list":{{content_list}},"chunks_config":{{chunks_config}}}'
+"""
+
+// 设置问题集合
+assign("kb_list_data", '[]')
+append("kb_list_data", "{{n_userInput}}")
+
+// 异步查询
+foreach('n_question', 'kb_list_data', {
+  // 获取当前用户输入
+  assign('question', '{{n_question.item}}')
+
+  // 专家知识库查询
+  n_expert_query_answer, agt_test_query_expert_0?userInput={{question}}&async=true
+  n_expert_query_answer_temp,act_func?script='''
+    def expert = n_expert_query_answer
+    async_list.add(expert)
+    return expert
+  '''
+  // append("async_list", "{{n_expert_query_answer}}")
+  
+  when('fn.hasValue(kbSpaceFileId)',{
+    // 向量查询
+    n_vector_query_answer, agt_test_query_vector_1?userInput={{question}}&folderIds={{kbSpaceId!}}&knowledgeIds={{kbSpaceFileId}}&async=true
+    n_vector_query_answer_tmp,act_func?script='''
+      def vector =  n_vector_query_answer
+      async_list.add(vector)
+      return vector
+    '''
+    // append("async_list", "{{n_vector_query_answer}}")
+
+    // 文档查询
+    n_document_query_answer,agt_test_query_document_2?userInput={{question}}&kbSpaceFileId={{kbSpaceFileId}}&async=true
+    n_document_query_answer_tmp,act_func?script='''
+      def document = n_document_query_answer
+      async_list.add(document)
+      return document
+    '''
+    // append("async_list", "{{n_document_query_answer}}")
+
+  })
+})
+
+// 定义一个空 list
+assign('answer_summary_list', '[]')
+log("===========async_list==={{async_list}}")
+// 对查询结果进行循环处理并分类
+foreach('n_item', 'async_list', {
+  // 获取当前循环项的数据
+  assign('async_summary', '{{n_item.item}}')
+  // 当前异步结果
+  assign('answer_summary', '{{async_summary.value}}')
+  // 临时答案 
+  n_tmp_answer,act_func?script='''
+     def newList = answer_summary
+     answer_summary_list.addAll(newList)
+     return newList
+   '''
+
+  // // 判断是否结束查询
+  // when('seek_mode=="快速模式" && answer_summary_list?size>0',{
+  //   // 快速模式
+  //   act_flow.go?plan=break
+  // })
+
+})
+
+log("===========answer_summary_list==={{answer_summary_list}}")
+// 并发查询最终结果
+assign('n_answers', '{{answer_summary_list}}')
+
+// Extract answers from information blocks
+n_finally_result,tpl_extract_answer_v1,psr_all
+
+
+// Finally answer for query demo
+assign('finally_answer', '{{n_finally_result}}')
+
+
+// Problem Optimization
+define('tpl_userInput_Optimization','''
+- Role: 查询检索问句优化专家
+- Background: 用户会提供一个需要优化的问题，该问题将用于知识库的向量召回。为了提升语义匹配准确度，需要对原始问题进行 智能扩展（补全语义信息）或 智能压缩（提炼核心关键词），从而生成更明确、完整、适合嵌入模型的检索问句。优化目标仅针对语义清晰度，不允许杜撰事实或偏离原始意图。
+- Profile: 你是一位擅长语义优化、搜索检索、自然语言表达增强的专家，具备专业级别的语义解构、重组、噪声过滤能力，能够保持用户真实意图不变，同时将提问提升为更高质量的检索问句。
+- Skills: 你具备语义抽象与重构、关键实体、事件、条件、约束识别、问题聚焦与去噪、问题扩展(语义充分化与补全)、问题压缩(语义收敛与概念提纯)、构建适合 Embedding 的标准化问句、精准保持原意、不加入外部知识
+- Goals: 
+  1. 识别原问题的真实意图
+  2. 判断应进行“扩展”或“压缩”
+  3. 输出结构清晰、检索效果最优的问句
+  4. 不改变任何事实，不引入外部信息
+  5. 不输出解释，只输出优化后的问句
+
+- Constrains: 
+  1. 不允许引入外部知识或事实
+  2. 不允许补充原问题中没有的主观信息
+  3. 不允许改变用户原意
+  4. 扩展：只补足用户未说清的语义结构，不增加实际内容
+  5. 压缩：去除赘余背景、无效修饰、不改变核心问题
+  6. 始终产出一个标准化“单问句”
+  7. 不输出解释、分析、理由
+
+- Workflow: 
+  1. 问题解析，判断问题属于：
+    - 模糊/不完整 → 扩展
+    - 冗长/啰嗦/多余 → 压缩
+    - 清晰简洁 → 无需优化
+  2. 意图抽取
+    - 识别核心动作（询问目标）
+    - 识别关键实体
+    - 识别附带条件和范围
+    - 识别必须保留的限制项
+  3. 检索友好化，抽取核心组成：
+    - 主体
+    - 行为
+    - 对象
+    - 限定条件
+    - 语义必要补充
+    - 生成结构化、清晰表意的问句
+
+  4. 质量校验
+    - 不新增事实
+    - 不改变用户意图
+    - 不加入推测性语言
+    - 不分成多个问句
+    - 语义无歧义、可直接用于向量库 embedding
+
+  5. 输出
+    - 输出最终优化后的问句
+    - 不输出任何多余解释
+
+- OutputFormat:
+  - 需要优化的问题：
+    ```text
+    优化后的问题
+    ```
+
+  - 不需要优化的问题：
+    ```text
+    原问题
+    ```
+
+# 当前问题:
+{{userInput}}
+
+''')
+
+// Extract answers from information blocks
+define('tpl_extract_answer_v1', '''
+- Role: 信息提炼与合规文本处理专家
+- Background: 用户会提供一个问题，以及一个包含答案的集合，用户需要仅基于用户提供的集合内容，从中提炼出与问题相关的答案，不可引入任何外部知识，不可推理，不可补充常识。
+- Profile: 你是一位专注于文本信息提炼的专家，具备强大的内容识别、去重能力，熟悉法律规范类文本的严谨性要求，能够严格依照原文提取信息，保持内容准确、完整、不变形。
+- Skills: 你具备文本精确提取、向量块语义定位、页码JSON解析、重复内容识别与去重、法律规范类文本保持原文能力以及结构化输出能力
+- Goals: 
+  1. 从集合中提取与用户问题直接相关的内容
+  2. 过滤完全重复的内容
+  3. 如果内容属于法律规范类/法规/制度/条例，必须一字不改、原文输出
+  4. 输出结果清晰、结构化、无冗余、无猜测
+
+- Constrains: 
+  1. 集合中的数据格式说明：
+    - 纯文本内容
+    - 向量块数据（包含 page 标识、上文截断、当前内容）
+    - 页码JSON数据（包含 page、id、content 字段）
+  2. **允许的内容**：仅来自用户提供的集合内容、原文引用、精确摘录、完全客观的内容
+  3. **严格禁止**：推理、补充外部知识、总结/概括/改写、解释性语言、模糊表述(如：“根据您提供的信息”、“可能”、“大概”、“推测”、“结合常识”)
+  4. 如果识别到以下内容，需严格原文输出、字句不修改:
+    - 法律条文、法规、管理办法、行业标准、制度说明、条款内容
+
+- Workflow: 
+  1. 内容解析：
+    - 识别集合中包含的内容类型：文本 / 向量块 / 页码JSON
+    - 提取其中“content”字段或主体文字段
+  2. 问题匹配:
+    - 仅保留与用户问题直接相关的内容
+    - 不做延展、不做解释、不做补充
+  3. 重复过滤:
+    - 若集合中出现相同句子/段落，只保留一份原文
+  4. 法律条文、法规、管理办法、行业标准、制度说明、条款内容等条文识别
+    - 字句不修改，原样输出
+  5. 结果输出:
+    - 仅输出提炼后的有效内容
+    - 不添加任何解释、总结、推论或无关话语
+
+- OutputFormat:
+  ```text
+    输出的最终答案
+  ```
+# 输出规则补充说明：
+  - 若问题在集合中找不到对应答案，则输出：
+    ```text
+      没有找答案
+    ```
+  - 不输出任何额外解释
+  - 不允许对原文进行任何形式的改写
+  - 需要对**输出的最终答案**结构化排版与格式整理，使文本展示更加清晰、美观，便于阅读和引用
+
+# 当前问题:
+{{n_userInput}}
+
+# 信息列表:
+{{n_answers}}
+
+''')

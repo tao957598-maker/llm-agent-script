@@ -1,0 +1,214 @@
+/*
+ {
+	 "title": "自动化测试-录入执行",
+	 "description": "录入测试步骤并执行",
+	 "parameter": [
+	 	{
+	 		"name":"system",
+	 		"label":"系统名称"
+	 	},
+	 	{
+	 		"name":"test_no",
+	 		"label":"测试编号"
+	 	},
+	 	{
+	 		"name":"steps",
+	 		"label":"测试步骤",
+	 		"type": "textarea"
+	 	},
+	 	{
+	 		"name":"expected_result",
+	 		"label":"期望结果",
+	 		"type": "textarea"
+	 	},
+	 	{
+	 		"name":"explore_mode",
+	 		"label":"运行模式",
+	 		"type":"select",
+	 		"args":[
+	 			{
+	 				"label":"生产模式",
+	 				"value":"0"
+	 			},
+	 			{
+	 				"label":"开发模式",
+	 				"value":"1"
+	 			},
+	 			{
+	 				"label":"维护模式",
+	 				"value":"2"
+	 			}
+	 		]
+	 	}
+	 ],
+	 "llmType": "alias.middelqulity",
+	 "resultPlan": "input_steps,test_steps,result",
+	 "life": "100"
+ }
+*/
+// 执行agent: agt_test_steps
+assign('input_steps','{{steps}}')
+// 加载已存在的测试用例 system,test_no,expected_result 去重
+n_db_testcase, act_kb.select?name=kb_testcase&column='steps,expected_result'&where='{{fn.json("test_no,test_no,steps,steps,expected_result,expected_result")}}'\
+	act_func?name=SortPlan&plans={{sys_last_result}}
+
+
+when('n_db_testcase?size==0', {
+    // 若test case 无或者发生变化
+    assign('test_case','test case 无或者发生变化')
+    // 删除case数据
+    act_kb.delete?name=kb_testcase&where='{{fn.json("test_no,test_no,steps,steps,expected_result,expected_result")}}'
+	// 插入新的case数据
+	act_kb.importData?name=kb_testcase&data='{{fn.json("test_no,test_no,steps,steps,expected_result,expected_result,application,system")}}'&uniqueKey=test_no
+    // 删除步骤 kb_testcase_step
+	act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'
+
+})
+
+// Load existed test steps
+n_steps, act_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("test_no,test_no")}}'
+// n_stepsn_stepsn_steps
+assign('n_steps','{{n_steps}}')
+// Check existed test steps
+when('n_steps?size==0', {
+	// 加载知识库导入外部
+	n_envinfo, act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'
+
+	// 检测语言
+	tpl_language
+	
+	// Set the system language [] assign('language', '{{fn.str(n_envinfo, "language")}}')
+	assign('language', '{{tpl_language.data}}')
+
+
+	// gen test steps and Get test steps by sorting out requirements
+	n_test_requirement, tpl_format_requirement, vrf_tpl_check_requirement_format
+    // 调整步骤格式
+    assign('fix_steps_content', '{{n_test_requirement}}')
+    tpl_fix_update_requirement
+    assign('test_steps', '{{tpl_fix_update_requirement}}')
+	// Clean existed plan and save new plan to KB
+	act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'
+	// 组装数据插入kb
+    n_test_steps, act_kb.convert?data={{test_steps}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'
+	act_kb.importData?name=kb_testcase_step&data={{n_test_steps}}
+    assign('result','{{fn.json("test_no,test_no,test_steps,test_steps,system,system")}}')
+
+}, {
+    assign('test_steps', '{{n_steps}}')
+    assign('result','{{fn.json("test_no,test_no,test_steps,test_steps,system,system")}}')
+})
+
+
+
+
+define('tpl_language', '''
+	/*{
+	 "llmType":""
+	}*/
+	# 设定的系统信息
+    {{n_envinfo}}
+
+    # 待检测的测试任务步骤：
+    	{{steps}}
+
+    # 输出要求:
+    1. 如果设定的系统信息检测到使用的语言类型,优先使用该语言
+    2. 如果设定的系统信息为空, 使用测试任务步骤的语言.
+    3. 输出为json数据,不必解释. 例如: {"data":'中文'} 或 {"data":'English'}
+''')
+
+define('tpl_format_requirement', '''
+	/*{
+		"llm_type":""
+	}*/
+	你是一个熟悉selenium的具有国际化视野的高级测试工程师， 请按检查方案，给出调整后的步骤，不必解释直接返回用一维的makdown json数组格式： ["1.步骤1", "2.步骤2", ...]
+
+	# 检查方案：
+	1. 调整后的步骤保持原有的语言：{{fn.optional(language, '中文')}}
+	2. "期望结果"需要拆分和融合到前面的步骤中
+	3. 步骤应描述用户或系统的具体行为，且尽量拆分为带有序号的小步骤，包括页面导航步骤。
+	4. 步骤的序号不同才被认为是独立步骤
+	5. 拆分步骤时，确保每个步骤都对应一个明确的用户操作或系统响应，无需单独列出元素定位步骤，但描述中应隐含元素定位的信息。
+
+	6. 仅仅拆分或者合并步骤，不要随意加入新逻辑。
+	7. 将补充解释纳入到关联的步骤中，确保最终的步骤列表包含足够的信息。但注意，宁愿保持原有不清晰的描述，也不可加入猜测的信息。
+
+	8. 不会产生页面变化的操作，无需拆分。比如：单纯的验证步骤
+	9. 可能带来页面变动的操作，需要拆分到独立的步骤中。比如：点击按钮，点击菜单，链接，导航，切换选择，输入文本。
+
+	10. 点击或选择菜单的操作时，因为涉及到子菜单的显示隐藏，一个步骤中不可以有2个click动作，需要做拆分
+
+	{{sys_hint}}
+
+	# 待检测的测试任务步骤：
+	{{steps}}
+
+	## 期望结果
+	{{fn.when(expected_result, expected_result, '')}}
+
+
+	# 补充解释：
+	{{n_envinfo.envinfo}}
+''')
+
+
+
+
+define('tpl_fix_update_requirement', '''
+	/*{
+	 "llmType":""
+	}*/
+	# 原始需求
+	{{steps}}
+	# 步骤
+    {{fix_steps_content}}
+
+    # 输出要求:
+    1. 将步骤内容修改:
+       例如:
+       一:
+       修改之前: 在浏览器地址栏中输入链接http://172.18.32.231:5421并按下回车键，确保页面能正常打开
+       修改之后: 打开链接http://172.18.32.231:5421
+       二:
+       修改之前: ["1. 打开浏览器。","2. 打开链接47.115.38.250:51504","3. 按Enter键访问该URL。"]
+       修改之后: ["1.打开链接47.115.38.250:51504"]
+    2. 步骤中需要重新编排序号,并且去掉空格,例如:"1. xxx" 去掉空格之后: "1.xxx"
+    3. 调整后的步骤保持原有的语言：{{fn.optional(language, '中文')}}
+    4. 根据原始需求,补充一些动作 Input,Button,Menu,Link,dropdown等,如果需求中的步骤没有特别说明,该步骤指定为collectPageInfo.
+    例如:
+    修改之前: 原始需求为: collectPageInfo: Select “Primary” Account  步骤为: ['6.Select the 'Primary' account from the account dropdown']
+    修改之后: ['6.collectPageInfo:Select the 'Primary' account from the account dropdown']
+    修改之前: 原始步骤为: ['3. enter the password: `gientech`','4. Click the `Login` button','5. click on the `Case Management` option in the left menu']
+    根据步骤推测,修改之后: ['3.Input:enter the password: `gientech`','4.Button:Click the `Login` button','5.Menu:click on the `Case Management` option in the left menu']
+    5. 结合原始需求,将步骤中关键输入或名称用markdown语法中``框住:
+        例如:
+        修改之前: 原始需求为: Enter Amount $ “2580” 步骤为: ['16.Enter the amount '$2580' in the transfer amount field']
+        修改之后:['16.Input:Enter the amount $ `2580` in the transfer amount field']
+    6. 保持原有的语言：{{fn.optional(language, '中文')}}
+    7. 不能出现与原始需求无关的步骤
+    8. 输出为json list数据,不必解释
+''')
+
+define('tpl_check_requirement_format', '''
+	/*{
+		"llmType":"alias.middelqulity,alias.middelqulity"
+	}*/
+	请检查下面的"整理后的需求"是否符合"检查要求",并用json给出意见,若没什么重大问题,请回复1：
+	1. 没有明显的改进意见,JSON回复：{{fn.task().result('基本符合检查要求，没有改进意见').vote('1')}}
+	2. 发现需要改进的地方,给出简洁的意见,JSON回复：{{fn.task(false).result('suggestion: 1.XXX, 2.XXX ...').vote('2')}}
+	
+	# 检查要求
+	1. 步骤的序号不同才被认为是独立步骤
+	2. 不会产生页面变化的操作，可以放在一起。比如：单纯的字段验证步骤
+	3. 可能带来页面变动的操作，都需要拆分。比如：点击按钮，链接，导航，切换选择，输入文本，都处在独立的步骤中。
+	4. 点击或选择菜单的操作时，因为涉及到子菜单的显示隐藏，一个步骤中不可以有2个click动作，需要做拆分
+	
+	# 原始需求
+	{{steps}}
+	# 补充解释：
+	{{n_envinfo.envinfo}}
+	
+	# 整理后的需求
+	{{sys_last_result}}
+''')

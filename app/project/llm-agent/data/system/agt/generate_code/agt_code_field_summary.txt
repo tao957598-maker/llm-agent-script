@@ -1,0 +1,80 @@
+/*
+{
+	"title": "Generate a Java field summary via an agent.",
+	"description": "Automatically generate a Java field summary via an agent.",
+	"parameter": [
+         {
+            "name":"fileId",
+            "label":"class文件的id",
+            "type":"textarea"
+         },
+         {
+             "name":"dbSchema",
+             "label":"数据库schema",
+             "type":"textarea"
+          }
+	 ],
+    "uiEntrance": "gen_code",
+    "tag":"Testing Model",
+    "displayOrder":6,
+}
+*/
+
+when("!fn.hasValue(dbSchema)", {
+    assign('dbSchema', 'gen_code')
+})
+
+// 1.根据文件id，查询未进行注释的变量
+n_field_data,act_kb.selectBy?sql='select * from {{dbSchema}}.code_gen_model_field where file_id = ? and (field_summary is null or field_summary = '') order by id desc limit 1000'&parameters={{fileId}}
+// 2.查询文件所对应的summary
+n_class_data,act_kb.select?name='code_gen_file_structure'&column='id,file_path,class_name,file_summary'&maxSize=1&where='{"id":"{{fileId}}"}'
+
+// 3.循环生成变量的注释
+foreach('n_loop_data', 'n_field_data', {
+    // 4.变量赋值
+    assign('n_data', '{{n_loop_data.item}}')
+    assign('n_prompt_data', '{"id":"{{n_data.id}}","className":"{{n_class_data[0].class_name}}","classSummary":"{{n_class_data[0].file_summary}}","code":"{{n_data.definition_code}}","annotations":"{{n_data.annotations}}"}')
+
+    // 5.通过gpt，生成注释信息
+    n_result_data,tpl_code_filed_generate_agent
+
+    // 6.存储注释信息
+    act_kb.merge?name='code_gen_model_field'&columnValues='{"field_summary":"{{n_result_data.fieldSummary}}"}'&where='{"id":"{{n_data.id}}"}'&embedding=true
+
+    // 7.修改java原始代码，将注释信息写入
+    n_modify_data,act_code.modifyClassDocComment?classPath='{{n_class_data[0].file_path}}'&className='{{n_class_data[0].class_name}}'&name='{{n_data.field_name}}'&type='field'&docComment="{{n_result_data.fieldSummary}}"
+})
+
+define('tpl_code_filed_generate_agent', '''
+    你是一个高级JAVA代码开发工程师、需求分析师，请按以下属性的声明方式，分析出该属性的作用
+
+    案例如下：
+    [
+    	{
+    		"id":"10001",
+    		"className":"LLmTool.java",
+    		"classSummary":"这是一个大模型定义的工具类",
+    		"code":"public static final String LLM_TOOL_CONFIG_PATH = "llm.tool.config.path";",
+    		"summary":"LLM工具配置路径(默认值:llm.tool.config.path)",
+    		"annotations":""
+    	},
+    	{
+    		"id":"10002",
+    		"className":"StudentDTO",
+    		"classSummary":"这是一个学生类，保存学生的基本数据信息",
+    		"code":"private String toolName;",
+    		"summary":"工具名称",
+    		"annotations":""
+    	}
+    ]
+
+    请根据案例，分析一下代码;在分析的过程中，不需要考虑属性的修饰符，仅针对变量的对象类型、属性命名进行分析;如果有默认值也需要体现，用最简短的文字总结属性的命名，如果有注解那么需要结合注解分析，如果无法解析出对应的信息，那么summary可返回为"无法识别"
+    {{n_prompt_data}}
+
+    分析结果严格按json格式返回,格式如:
+    {
+    	"id":"10001",
+    	"code":"public static final String LLM_TOOL_CONFIG_PATH = "llm.tool.config.path";",
+    	"fieldSummary":"LLM工具配置路径(默认值:llm.tool.config.path)"
+    }
+''')

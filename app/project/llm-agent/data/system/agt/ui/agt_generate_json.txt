@@ -1,0 +1,42 @@
+/*
+{
+	"title": "Generate JSON Configuration",
+	"description": "Generate general JSON configuration based on user requirements",
+	"parameter": [
+		{
+			"name":"userInput",
+			"label":"JSON Configuration Requirements"
+		}
+	],
+	"uiEntrance": "",
+	"version": "1"
+}
+*/
+// user_input
+assign("user_input", '{{userInput}}')
+
+// Get system prompt from agt_fc_prompt
+n_system_prompt,agt_fc_prompt
+
+// Call the prompt to generate JSON
+n_json,tpl_generate_json,psr_json
+
+// Get the generated JSON result
+assign("result", "{{n_json}}")
+
+// Generate JSON prompt
+define('tpl_generate_json', '''
+  {{n_system_prompt}}
+
+  用户需要根据以下描述生成JSON配置：
+  {{user_input}}
+
+  请根据提供的系统提示词，分析用户需求并生成符合规范的JSON配置。
+  
+  生成规则：
+  1. 保持配置简洁明了，适合各种设备
+  2. 确保配置符合通用标准
+  3. 直接输出配置内容，不要添加额外的说明
+	4. 表单项可以控制在10个左右
+  5. 确保JSON格式正确，可直接使用
+''')

@@ -1,0 +1,11 @@
+/*
+{
+	"title":"Test call batch argus",
+	"parameter":"{\"required\":true,\"maxLength\":5000,\"hidden\":false,\"readOnly\":false}",
+	"tag":"all",
+	"displayOrder":0,
+	"version":1
+}
+*/
+n_kbs_result,agt_argus_kb_batch_qa.all
+log('n_kbs_result===={{n_kbs_result}}')

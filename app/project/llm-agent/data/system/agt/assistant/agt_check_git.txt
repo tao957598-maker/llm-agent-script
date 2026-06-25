@@ -1,0 +1,36 @@
+/*{
+  "title": "检查Git环境",
+  "description": "检查 Git 环境是否安装，如未安装则自动安装",
+  "parameter": [
+    {
+      "name": "os",
+      "label": "操作系统",
+      "required": true
+    },
+    {
+      "name": "server_id",
+      "label": "服务器ID"
+    }
+  ],
+  "resultPlan": "n_check_git_plan_result",
+  "discoverable": false,
+  "life": "100"
+}*/
+
+assign('n_log', '')
+
+// 检查 Git 版本
+n_git_check, agt_cmd_executor.assistant?cmd=git --version&cmd_executor_name="检查Git版本"&server_id={{server_id}}
+assign('n_git_installed', '{{fn.contains(n_git_check, "git version")}}')
+when('!fn.bool(n_git_installed)', {
+  // Git 未安装，自动安装
+  when('n_os == "windows"', {
+    n_git_install, agt_cmd_executor.assistant?cmd=winget install --id Git.Git -e --source winget&cmd_executor_name="安装Git"&server_id={{server_id}}
+  }, {
+    assign('n_git_install_cmd', 'sudo apt-get install -y git || sudo yum install -y git')
+    n_git_install, agt_cmd_executor.assistant?cmd={{n_git_install_cmd}}&cmd_executor_name="安装Git"&server_id={{server_id}}
+  })
+  assign('n_log', '{{n_log}}\n✓ Git 安装完成')
+})
+// 返回结果
+assign("n_check_git_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"false"}')

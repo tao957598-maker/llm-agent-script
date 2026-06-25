@@ -1,0 +1,445 @@
+/*
+{
+	"title":"agt_transaction_key_info_extractor",
+	"parameter":[
+		{
+			"name":"n_transactionHistory",
+			"required":true,
+			"maxLength":500000,
+			"hidden":false,
+			"readOnly":false,
+			"type":"textarea"
+		}
+	],
+	"tag":"all",
+	"displayOrder":0,
+	"version":17
+}
+*/
+// ---------- 初始化 ----------
+assign('n_agent_name', 'agt_transaction_key_info_extractor')
+assign('n_scene_name', 'Transaction Key Info Extractor')
+assign('n_result', '{}')
+assign('n_has_error', 'false')
+assign('n_error', '')
+
+when('{{!fn.hasValue(n_transactionHistory)}}', {
+    assign('n_has_error', 'true')
+    assign('n_error', 'n_transactionHistory不能为空')
+})
+
+// ---------- 异常直接返回 ----------
+when('{{n_has_error=="true"}}', {
+    n_result,act_func.run?script='''
+        def result = [
+            success: false,
+            agentName: 'agt_transaction_key_info_extractor',
+            errorMessage: n_error,
+            data: [
+                customerSummary: [:],
+                keyStats: [:],
+                keyJurisdictions: [],
+                keyChannels: [],
+                keyCounterparties: [],
+                keyTransactions: [],
+                keyRedFlags: []
+            ]
+        ]
+        return groovy.json.JsonOutput.toJson(result)
+    '''
+})
+
+// ---------- 主处理 ----------
+when('{{n_has_error!="true"}}', {
+    n_result,act_func.run?script='''
+        def root = [:]
+        def rows = []
+        def normalizedRows = []
+
+        def safeNum = { v ->
+            try{
+                if(v == null || String.valueOf(v).trim() == ''){
+                    return 0G
+                }
+                return new BigDecimal(String.valueOf(v))
+            }catch(Exception e){
+                return 0G
+            }
+        }
+
+        def safeStr = { v ->
+            try{
+                if(v == null){
+                    return ''
+                }
+                return String.valueOf(v).trim()
+            }catch(Exception e){
+                return ''
+            }
+        }
+
+        def upper = { v ->
+            try{
+                return safeStr(v).toUpperCase()
+            }catch(Exception e){
+                return ''
+            }
+        }
+
+        def directionOf = { code ->
+            def c = upper(code)
+            if(c == 'C'){
+                return 'CREDIT'
+            }
+            if(c == 'D'){
+                return 'DEBIT'
+            }
+            return 'UNKNOWN'
+        }
+
+        def pickCounterparty = { row ->
+            def v = safeStr(row.cptName)
+            if(v){ return v }
+            v = safeStr(row.secondaryAccountName)
+            if(v){ return v }
+            v = safeStr(row.secondaryAccountNumber)
+            if(v && v != 'UNKNOWN'){ return v }
+            v = safeStr(row.counterpartyAccountNumber)
+            if(v){ return v }
+            return ''
+        }
+
+        def pickCountry = { row ->
+            def v = safeStr(row.cptBankCountry)
+            if(v){ return v }
+            v = safeStr(row.countryName)
+            if(v){ return v }
+            return ''
+        }
+
+        try{
+            if(n_transactionHistory instanceof Map){
+                root = n_transactionHistory
+            }else if(n_transactionHistory instanceof String){
+                def s = String.valueOf(n_transactionHistory).trim()
+                if(s.startsWith('{')){
+                    root = fn.map(s)
+                }else{
+                    root = [:]
+                }
+            }else{
+                root = [:]
+            }
+        }catch(Exception e){
+            root = [:]
+        }
+
+        try{
+            if(root.containsKey('data') && root.data instanceof List){
+                rows = root.data
+            }else{
+                rows = []
+            }
+        }catch(Exception e){
+            rows = []
+        }
+
+        // ---------- 标准化 ----------
+        for(def row : rows){
+            def m = [:]
+            m.id = row.id
+            m.partyName = safeStr(row.partyName)
+            m.partyIdentificationId = safeStr(row.partyIdentificationId)
+            m.partyNumber = safeStr(row.partyNumber)
+            m.accountNumber = safeStr(row.accountNumber)
+            m.accountName = safeStr(row.accountName)
+            m.transDate = safeStr(row.transDate)
+            m.direction = directionOf(row.transactionCdiCode)
+            m.amount = safeNum(row.currencyAmount)
+            m.currencyCode = safeStr(row.currencyCode)
+            m.transactionReferenceNumber = safeStr(row.transactionReferenceNumber)
+            m.transactionDescription = safeStr(row.transactionDescription)
+            m.channel = safeStr(row.primaryMediumDesc)
+            m.subChannel = safeStr(row.secondaryMediumDesc)
+            m.mechanism = safeStr(row.mechanismDesc)
+            m.transType = safeStr(row.transType)
+            m.country = pickCountry(row)
+            m.counterpartyName = pickCounterparty(row)
+            m.branchName = safeStr(row.branchName)
+            m.accountBalance = safeNum(row.accountBalance)
+
+            m.cashFlag = (upper(row.primaryMediumDesc) == 'CASH')
+            m.chequeFlag = (upper(row.primaryMediumDesc) == 'CHEQUE')
+            m.transferFlag = (upper(row.primaryMediumDesc) == 'TRANSFER')
+            m.fpsFlag = (upper(row.transType) == 'FPS' || upper(row.secondaryMediumDesc).contains('FASTER PAYMENT'))
+
+            normalizedRows << m
+        }
+
+        // ---------- customerSummary ----------
+        def customerSummary = [:]
+        if(normalizedRows.size() > 0){
+            def first = normalizedRows[0]
+            customerSummary.partyName = first.partyName
+            customerSummary.partyIdentificationId = first.partyIdentificationId
+            customerSummary.partyNumber = first.partyNumber
+            customerSummary.accountName = first.accountName
+        }
+
+        def accountSet = [] as Set
+        def dateList = []
+        def totalCreditAmount = 0G
+        def totalDebitAmount = 0G
+        def creditCount = 0
+        def debitCount = 0
+        def cashTxnCount = 0
+        def cashTxnAmount = 0G
+        def maxTxnAmount = 0G
+
+        def countryMap = [:]
+        def channelMap = [:]
+        def counterpartyMap = [:]
+
+        for(def t : normalizedRows){
+            if(t.accountNumber){
+                accountSet << t.accountNumber
+            }
+            if(t.transDate){
+                dateList << t.transDate
+            }
+
+            if(t.direction == 'CREDIT'){
+                totalCreditAmount = totalCreditAmount + t.amount
+                creditCount = creditCount + 1
+            }
+            if(t.direction == 'DEBIT'){
+                totalDebitAmount = totalDebitAmount + t.amount
+                debitCount = debitCount + 1
+            }
+
+            if(t.cashFlag){
+                cashTxnCount = cashTxnCount + 1
+                cashTxnAmount = cashTxnAmount + t.amount
+            }
+
+            if(t.amount > maxTxnAmount){
+                maxTxnAmount = t.amount
+            }
+
+            if(t.country){
+                if(!countryMap.containsKey(t.country)){
+                    countryMap[t.country] = [
+                        country: t.country,
+                        count: 0,
+                        amount: 0G
+                    ]
+                }
+                countryMap[t.country].count = countryMap[t.country].count + 1
+                countryMap[t.country].amount = countryMap[t.country].amount + t.amount
+            }
+
+            if(t.channel){
+                def chKey = t.channel
+                if(t.transType){
+                    chKey = chKey + '|' + t.transType
+                }
+                if(!channelMap.containsKey(chKey)){
+                    channelMap[chKey] = [
+                        channel: t.channel,
+                        transType: t.transType,
+                        count: 0,
+                        amount: 0G
+                    ]
+                }
+                channelMap[chKey].count = channelMap[chKey].count + 1
+                channelMap[chKey].amount = channelMap[chKey].amount + t.amount
+            }
+
+            if(t.counterpartyName){
+                def cpKey = t.counterpartyName + '|' + t.direction
+                if(!counterpartyMap.containsKey(cpKey)){
+                    counterpartyMap[cpKey] = [
+                        name: t.counterpartyName,
+                        direction: t.direction,
+                        count: 0,
+                        amount: 0G,
+                        country: t.country
+                    ]
+                }
+                counterpartyMap[cpKey].count = counterpartyMap[cpKey].count + 1
+                counterpartyMap[cpKey].amount = counterpartyMap[cpKey].amount + t.amount
+            }
+        }
+
+        dateList = dateList.sort()
+
+        def keyStats = [
+            txnCount: normalizedRows.size(),
+            accountCount: accountSet.size(),
+            dateFrom: dateList.size() > 0 ? dateList[0] : '',
+            dateTo: dateList.size() > 0 ? dateList[dateList.size() - 1] : '',
+            totalCreditAmount: totalCreditAmount,
+            totalDebitAmount: totalDebitAmount,
+            creditCount: creditCount,
+            debitCount: debitCount,
+            cashTxnCount: cashTxnCount,
+            cashTxnAmount: cashTxnAmount,
+            maxTxnAmount: maxTxnAmount
+        ]
+
+        def keyJurisdictions = countryMap.values().toList().sort { a, b -> b.amount <=> a.amount }
+        def keyChannels = channelMap.values().toList().sort { a, b -> b.amount <=> a.amount }
+        def keyCounterparties = counterpartyMap.values().toList().sort { a, b -> b.amount <=> a.amount }
+
+        if(keyJurisdictions.size() > 10){
+            keyJurisdictions = keyJurisdictions.subList(0, 10)
+        }
+        if(keyChannels.size() > 10){
+            keyChannels = keyChannels.subList(0, 10)
+        }
+        if(keyCounterparties.size() > 10){
+            keyCounterparties = keyCounterparties.subList(0, 10)
+        }
+
+        // ---------- 代表性交易 ----------
+        def topAmountTransactions = normalizedRows.sort { a, b -> b.amount <=> a.amount }
+        if(topAmountTransactions.size() > 10){
+            topAmountTransactions = topAmountTransactions.subList(0, 10)
+        }
+
+        def recentTransactions = normalizedRows.sort { a, b ->
+            (b.transDate + ' ' + b.transactionReferenceNumber) <=> (a.transDate + ' ' + a.transactionReferenceNumber)
+        }
+        if(recentTransactions.size() > 10){
+            recentTransactions = recentTransactions.subList(0, 10)
+        }
+
+        def txMap = [:]
+        for(def t : topAmountTransactions){
+            def k = safeStr(t.transactionReferenceNumber)
+            if(!txMap.containsKey(k)){
+                txMap[k] = [
+                    transDate: t.transDate,
+                    direction: t.direction,
+                    amount: t.amount,
+                    currencyCode: t.currencyCode,
+                    channel: t.channel,
+                    transType: t.transType,
+                    country: t.country,
+                    counterpartyName: t.counterpartyName,
+                    transactionDescription: t.transactionDescription,
+                    transactionReferenceNumber: t.transactionReferenceNumber
+                ]
+            }
+        }
+        for(def t : recentTransactions){
+            def k = safeStr(t.transactionReferenceNumber)
+            if(!txMap.containsKey(k)){
+                txMap[k] = [
+                    transDate: t.transDate,
+                    direction: t.direction,
+                    amount: t.amount,
+                    currencyCode: t.currencyCode,
+                    channel: t.channel,
+                    transType: t.transType,
+                    country: t.country,
+                    counterpartyName: t.counterpartyName,
+                    transactionDescription: t.transactionDescription,
+                    transactionReferenceNumber: t.transactionReferenceNumber
+                ]
+            }
+        }
+
+        def keyTransactions = txMap.values().toList()
+        if(keyTransactions.size() > 15){
+            keyTransactions = keyTransactions.subList(0, 15)
+        }
+
+        // ---------- 红旗候选 ----------
+        def keyRedFlags = []
+        def sortOrder = 1
+
+        if(cashTxnAmount > 0G){
+            keyRedFlags << [
+                sortOrder: sortOrder++,
+                code: 'CASH_ACTIVITY',
+                evidence: 'Observed cash transactions, total amount=' + cashTxnAmount + ', count=' + cashTxnCount
+            ]
+        }
+
+        if(maxTxnAmount >= 500000G){
+            keyRedFlags << [
+                sortOrder: sortOrder++,
+                code: 'LARGE_SINGLE_TRANSACTION',
+                evidence: 'Largest single transaction amount=' + maxTxnAmount
+            ]
+        }
+
+        if(keyCounterparties.size() > 0){
+            def topCp = keyCounterparties[0]
+            if(topCp.amount >= 500000G){
+                keyRedFlags << [
+                    sortOrder: sortOrder++,
+                    code: 'COUNTERPARTY_CONCENTRATION',
+                    evidence: 'Top counterparty=' + topCp.name + ', amount=' + topCp.amount + ', direction=' + topCp.direction
+                ]
+            }
+        }
+
+        if(keyChannels.size() > 0){
+            def cashChannel = keyChannels.find { it.channel == 'CASH' }
+            if(cashChannel != null && cashChannel.amount >= 500000G){
+                keyRedFlags << [
+                    sortOrder: sortOrder++,
+                    code: 'HIGH_CASH_CHANNEL_USAGE',
+                    evidence: 'Cash channel amount=' + cashChannel.amount + ', count=' + cashChannel.count
+                ]
+            }
+        }
+
+        def reportJson = [:]
+
+        // 1. 先初始化根对象
+        reportJson.put("success", true)
+        reportJson.put("agentName", "agt_transaction_key_info_extractor")
+
+        // 2. 确保 data 存在
+        if(reportJson.data == null){
+            reportJson.data = [:]
+        }
+
+        // 3. 填充 data
+        reportJson.data.put("customerSummary", customerSummary != null ? customerSummary : [:])
+        reportJson.data.put("keyStats", keyStats != null ? keyStats : [:])
+        reportJson.data.put("keyJurisdictions", keyJurisdictions != null ? keyJurisdictions : [])
+        reportJson.data.put("keyChannels", keyChannels != null ? keyChannels : [])
+        reportJson.data.put("keyCounterparties", keyCounterparties != null ? keyCounterparties : [])
+        reportJson.data.put("keyTransactions", keyTransactions != null ? keyTransactions : [])
+        reportJson.data.put("keyRedFlags", keyRedFlags != null ? keyRedFlags : [])
+
+        // 4. 返回最终结果
+        return reportJson
+    '''
+})
+
+// ---------- 异常处理 ----------
+on_failure({
+    n_result,act_func.run?script='''
+        def result = [
+            success: false,
+            agentName: 'agt_transaction_key_info_extractor',
+            errorMessage: '提取交易分析关键信息失败',
+            data: [
+                customerSummary: [:],
+                keyStats: [:],
+                keyJurisdictions: [],
+                keyChannels: [],
+                keyCounterparties: [],
+                keyTransactions: [],
+                keyRedFlags: []
+            ]
+        ]
+        return result
+    '''
+    act_flow.go?plan=end
+})

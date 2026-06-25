@@ -1,0 +1,27 @@
+/*
+{
+	"title":"agt_math_test_hint_history",
+	"description":"测试hint-history-lj",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"textarea"
+		}
+	],
+	"tag":"lj",
+	"version":1
+}
+*/
+
+//#  fn.skill
+assign('skills_meta', '{{fn.skill("skill-writer")}}')
+
+//# querySkill
+assign('skills_meta', '{{fn.querySkill("想要制作Skills", 1, "public", 10)}}')
+
+//# querySkillMeta
+assign('skills_meta', '{{fn.querySkillMeta("想要制作Skills", 1, 10, null, "id,agent_id,plan_unique_name,task_target,agent_name,template_name,activation_rules")}}')
+
+//# getSkillMeta
+assign('skills_meta', '{{fn.getSkillMeta("skill-writer", "id,agent_id,plan_unique_name,task_target,agent_name,template_name,activation_rules")}}')

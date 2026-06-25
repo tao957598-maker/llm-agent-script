@@ -1,0 +1,51 @@
+/*
+{
+	"title": "BEA QA",
+	"description": "BEA QA",
+    "parameter": [
+        {
+        "name":"userInput",
+        "label":"客户问题",
+        "type":"textarea"
+        },
+        {
+        "name":"kbSpaceId",
+        "label":"Folder ID",
+        "type":"knowledge_fold"
+        },
+        {
+        "name":"kbSpaceFileId",
+        "label":"File",
+        "type":"knowledge_space"
+        }
+    ],
+	"tag":"chatdoc_QA",
+	"resultPlan":"n_results",
+	"displayOrder":99,
+	"version":1
+
+} */
+
+// 预先设置空结果
+when('fn.hasValue(kbSpaceFileId)',{
+	assign("n_answer", "[]")
+	n_kbSpaceFileId,act_func?script='''
+		def value = kbSpaceFileId
+		if (value == null || value == "undefined" || value == "null") {
+			return ''
+		}
+		return value.toString()
+	'''
+	assign('kbSpaceFileId', '{{n_kbSpaceFileId}}')
+})
+
+assign('kbSpaceFileId', '{{n_kbSpaceFileId}}')
+
+// Set parameter
+assign('params','{"question":"{{userInput}}","folderIds":"{{kbSpaceId!}}","knowledgeIds":"{{kbSpaceFileId!}}"}')
+
+// initialize variables for result
+assign('result_datas', '[]')
+
+// Execute vector query
+n_results,rag_kbs.searchQuestion?paramData='{{params}}'&similarity='0.01'&isRerank="true"&bm25Weight="0.3"&top="10"

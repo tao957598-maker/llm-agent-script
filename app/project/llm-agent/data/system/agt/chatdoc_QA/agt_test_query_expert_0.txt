@@ -1,0 +1,117 @@
+/*
+{
+	"title": "Answer user question by expert knowledge base",
+	"description": "expert knowledge base",
+	"parameter": [
+	{
+		"name":"userInput",
+		"label":"客户问题",
+		"type":"textarea"
+	}],
+	"llmType": "",
+  	"uiEntrance": "chatdoc_QA",
+	"life": "100",
+	"resultPlan":"expert_query_answer"
+} 
+*/
+
+// 当前问题
+assign('n_question','{{userInput}}')
+
+// 预先设置空结果
+assign("n_answer", "[]")
+
+// Search from expert knowledge base
+n_results,rag_kbs.searchFaq?question='{{n_question}}'&similarity='0.6'
+when('n_results?size>0',{
+	// 遍历answer
+	foreach('n_item', 'n_results', {
+		assign('answer_json', '{{n_item.item}}')
+		n_answer_flag, act_func?script='''return answer_json.containsKey("reference_answer")'''
+		when('n_answer_flag==true',{
+			n_tmp_answer, act_func?script='''
+				def json_data = answer_json
+				def result = [
+					id: json_data.id.toString(),
+					similarityScore: json_data.similarityScore,
+					sourceTable: json_data.sourceTable,
+					question: json_data.question,
+					reference_answer: json_data.reference_answer
+				]
+				return result
+			'''
+			append('answers', '{{n_tmp_answer}}')
+		})
+	})
+	// Match the query result by llm
+	n_isMatch,tpl_question_match,psr_json
+	when('n_isMatch.isMatch == "true"',{
+		// There is question matched 
+		n_answer,act_func?script='''return answers.find { it.id == n_isMatch.id }'''
+	})
+})
+
+
+// The finally result of expert query
+assign("expert_query_answer", '{{n_answer}}')
+
+
+
+define('tpl_question_match', '''
+/*{
+  "enable_thinking":"false",
+  "stream":"false"
+}*/
+- Role: 语义匹配判断模型，负责判断【用户问题】与【专家知识库中的问题】之间的语义匹配程度
+- Background: 用户会提供一个问题，以及一个包含答案的集合，用户需要仅基于用户提供的集合内容，从中提炼出与问题相关的答案，不可引入任何外部知识，不可推理，不可补充常识。
+- Profile: 你是一位专注于文本信息提炼的专家，具备强大的内容识别、去重能力，熟悉法律规范类文本的严谨性要求，能够严格依照原文提取信息，保持内容准确、完整、不变形。
+- Skills: 你具备文本精确提取、向量块语义定位、页码JSON解析、重复内容识别与去重、法律规范类文本保持原文能力以及结构化输出能力
+- Goals: 逐条对比【用户问题】与每一条【知识 question】的语义含义，判断是否存在高度语义匹配
+
+- Constrains: 
+  1. 输入说明：
+	- 用户问题：一条自然语言问题
+	- 知识列表：由多条 JSON 组成，每条包含以下字段：
+		id：知识唯一标识
+		question：该知识对应的问题
+		reference_answer：该知识的答案
+		similarityScore：相似度参考值（仅作辅助，不可作为唯一判断依据）
+		sourceTable：该知识存放的表格名称
+  2. 匹配判定标准（必须同时满足）：
+	- 用户问题与知识问题在核心意图上高度一致
+	- 所询问的对象、行为或规则基本相同
+	- 不要求表述完全一致，但语义应可直接复用该知识的答案
+
+- Workflow: 
+  1. 内容解析：
+    - 识别信息列表的内容结构：expert文本 / vector向量块 / document页码JSON
+	- 识别文本内容类型：是否为法律条文、法规、管理办法、行业标准、制度说明、条款内容等条文
+  2. 提炼答案：
+	- 根据**答案提炼规则**提炼答案
+  3. 结果输出:
+    - 仅输出提炼后的有效内容
+
+
+- OutputFormat:
+  - 若存在 任意一条 知识与用户问题语义高度匹配，则
+	{
+	  "isMatch": "true",
+	  "id": "对应知识的id"
+	}
+  
+  - 若所有知识均与用户问题语义不匹配，则返回：
+	{
+	  "isMatch": "false",
+	  "id": ""
+	}
+
+
+
+
+# 用户问题:
+{{userInput}}
+
+# 知识列表：
+{{answers}}
+
+''')

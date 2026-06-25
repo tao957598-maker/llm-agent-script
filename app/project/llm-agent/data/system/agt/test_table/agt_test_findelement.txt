@@ -1,0 +1,345 @@
+/*
+{
+	"title":"Find and check element",
+	"description":"Make plan and find element location, check element",
+	"parameter":"test_no=Test Case No&current_step=当前验证步骤&steps=完整验证步骤&envinfo=environment information",
+	"resultPlan":"n_python_file",
+	"version":1
+}
+*/
+/
+// Use selenium
+assign('pythonType', 'selenium', 'subfolder', '{{test_no}}', 'sys_hint_agt', '')
+
+//# Get the page information
+agt_collect_page
+
+// Record orignal page information
+assign('last_simplepageinfo', '{{StepTestInfo.simplepageinfo}}')
+
+// Determine whether the check element exists
+tpl_check_element_exists, vrf_flag?value='sys_last_result.thought.re_reasoning'&cmpValue=false
+
+// Check element exists flag
+when('tpl_check_element_exists.has_element', {
+	//# Call element check agent to verify element
+	agt_test_checkelement?test_no={{test_no}}&current_step={{current_step}}
+	
+	// Found target element
+	act_flow.go?plan=end
+})
+
+// ==== The analysis process officially begins ====
+//# Call agent to collect the new page information
+n_collect_page, agt_collect_page
+
+//# Make decision
+tpl_make_plan
+
+//# Call agent to verify decision
+agt_verify_plan
+
+// Handle possible error
+on_failure('agt_verify_plan', {
+	// Try it again from beginning
+	act_flow.go?plan=n_collect_page&hintError={{fn.not(code_error)}}
+})
+
+//# Final test - call agent to collect the new page information
+agt_collect_page
+
+//# Final test - Analyze and check if element exists
+tpl_check_element_exists, vrf_flag?value='sys_last_result.thought.re_reasoning'&cmpValue=false
+
+// Final test - Check flag
+when('fn.not(tpl_check_element_exists.has_element)', {
+	// Analyze the failure reason
+	tpl_cmp_pageresult
+	
+	// Try again from beginning
+	act_flow.go?plan=n_collect_page
+}, {	
+	//# Ouput the python script result
+	n_python_file, act_python.write?requirement={{current_step}}
+	
+	// Write execution result
+	act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,n_python_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+})
+
+// Verify plan through python code
+agent('agt_verify_plan', {
+	//# Analyse page elements
+	tpl_task_element_info, psr_json?filter=id&format='id_\\d+'
+	
+	//# Generate python code according to decision
+	tpl_generate_verify_script, psr_json_python, act_python.writeTmp?pythonCode={{sys_last_result}}
+		
+	//# Run selenium script through RPA client
+	n_python_result, act_rpa.send?name={{python_file}}
+	
+	// Handle the error
+	on_failure({
+		// Check hint condition
+		act_memory.canHint?hintCount=3
+		
+		// Call agent to fix python code
+		agt_fix_python_code?hint_info={{sys_hint_agt}}
+	})
+})
+
+// Fix python code
+agent('fix_python_code', {
+	// Check if code exists
+	act_memory.hasValue?name=python_code
+	
+	//# Try to fix python code
+	tpl_self_fix, psr_json_python
+	
+	// Check code error flag
+	when('sys_last_result=="NO_FIX"', {
+		// Update code error flag
+		assign('code_error', 'false')
+		
+		// Mark result as failed and prepare to try again
+		act_flow.fail
+	}, {
+		// Update code error flag
+		assign('code_error', 'true')
+		
+		// Generate temporary python code
+		act_python.writeTmp?pythonCode={{tpl_self_fix}}
+		
+		// Run fix script through RPA client
+		n_python_result, act_rpa.send?name={{python_file}}
+	})
+})
+
+// Collect page information
+agent('agt_collect_page', {
+	// Collect the new page information
+	act_rpa.send?command=CollectPageInfo
+		
+	// Populate StepTestInfo structure
+	act_func?name=StepTestInfo
+})
+
+define('tpl_check_element_exists', '''
+	/*{
+		 "llmType":"alias.highquality"
+	 }*/
+	结合“完整步骤”思考“本次局部操作步骤”的涉及的元素，判断当前的“页面元素”是否包含所要检查的元素，请仔细思考和分析后, 用JSON格式给出答案：
+	{
+		"thought": {
+			"keywords": "列出局部操作步骤中，检查条件的关键信息",
+			"reasoning":["推理的过程,3步以上"],
+			"criticism":"推理结果是否符合keywords,是否存在对基础数据的假设",
+			"re_reasoning":"true/false"		// 推理过程是否存在问题，需要重新推理(注：与has_element无关)
+		},
+		"has_element":"true/false",			// 结论：“页面元素”是否包含了：满足相关限定条件的，需要验证的元素
+		"vote": "1或者2",		// has_element为true时为1, has_element为false时为2
+		"elements":[{"name":xxx, "id":xxx}...]	// has_element为true时，列出"实际页面元素"中找到的一个或多个具体元素，否则保持为[]
+	}
+	
+	# 本次局部操作步骤：
+	{{StepTestInfo.current_step}}
+	
+	# 完整操作步骤：
+	{{StepTestInfo.steps}}
+	
+	# 补充信息:
+	1. 系统的数据都是真实数据，不存在假设性的错误，**特别注意：日期没有提供错，并且它是关键因素**
+	{{fn.when('false', '2. 今天是2024-10-03', '2. 今天是%{fn.today()}%')}}
+	
+	# 实际页面元素：(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, value:表单元素的值, id: 用于定位的元素id, children:[子元素信息]}...])：
+	{{StepTestInfo.simplepageinfo}}
+''')
+
+
+define('tpl_cmp_pageresult', '''
+	/*{
+		 "llmType":"alias.longtext"
+	 }*/
+	在进行了上次的尝试策略后，"局部操作步骤"中需要寻找的元素在当前页面依然不存在，请分析前后页面有什么不同，并分析尝试策略失败的原因，用JSON回复：
+	{"thought":{	
+		"title": "上一轮策略的页面结果分析",	// 固定的title值,不要调整
+		"text": "上次尝试策略的简洁的表述",
+		"page_change": "前后页面的变化",
+		"reasoning": ["策略失败的原因，3条左右", ...]
+	}}
+	
+	# 上次的尝试策略:
+	{{tpl_make_plan.next.detail}}
+	
+	# 历史经验的提示
+	1. 存在翻页时，可考虑增加查询条件以缩小筛选范围
+	
+	# 测试用例的局部操作步骤：
+	{{current_step}}
+	
+	# 测试用例的完整操作步骤：
+	{{steps}}
+	
+	# 初始页面元素结构为：(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, value:表单元素的值, id: 用于定位的元素id, children:[子元素信息]}...])：
+	{{last_simplepageinfo}}
+	
+	# 执行了尝试策略后的当前页面元素：
+	{{StepTestInfo.simplepageinfo}}
+''')
+
+define('tpl_make_plan', '''
+	/*{
+		 "llmType":"alias.highquality"
+	 }*/
+	"本次局部操作步骤"中需要寻找的元素在当前页面不存在，请分析当前页面的元素，并结合上一轮的思考（如果有），制定搜寻策略，用JSON格式给出回复：
+	{
+		"plan":["5种以上的搜寻策略，用序号标记"],
+		"criticism":"结合页面元素，分析每种plan的可执行性，需要的尝试次数",
+		"speak":"总结最优选择",
+		"next":"{\"plan_no\":\"1-5的某个序号\", \"detail\":\"包含关键元素信息的可执行的下一步行动方案\" }"
+	}
+
+	# 本次局部操作步骤：
+	{{current_step}}
+	
+	# 完整操作步骤：
+	{{steps}}
+	
+	# JSON回复的其他要求:
+	1. 系统的数据都是真实数据，不存在假设性的错误，**特别注意：日期没有提供错，并且它是关键因素**
+	2. 前面的分析已经确认过，当前界面元素中，没有需要寻找的元素。除非加入了查询操作，制定的plan，不应该在当前界面直接查找
+	{{fn.when('false', '3. 固定今天的日期为：2024-10-03，为避免混淆，next中不能再出现"今天","today"', '3. 今天的日期应使用python函数获取. 页面记录较多时，比如出现了分页，那么尽量考虑组合条件.比如：日期+数字')}}
+	
+	{{envinfo}}
+	
+	{{fn.buildHint('')}}
+	{{fn.title("# 结合上一轮的规划(参见'text')，调整新Plan:", tpl_cmp_pageresult!)}}
+	
+	# 当前页面的元素：(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, value:表单元素的值, id: 用于定位的元素id, children:[子元素信息]}...])：
+	{{StepTestInfo.simplepageinfo}}
+''')
+
+// 结合需求分析页面元素
+define('tpl_task_element_info', '''
+	你是测试专家，分析“本次局部测试步骤”中涉及的文本元素或动作元素，忽视元素的类型，找出可能的匹配的元素，按prefer/alternative/related分类后，直接用JSON格式返回引用的页面元素
+	
+	# 本次局部测试步骤：
+	{{tpl_make_plan.next.detail}}
+
+	# 实际页面元素(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, children:[子元素信息]}...])：
+	{{CollectPageInfo}}
+	
+	# JSON输出结果的结构为：
+	{
+		"type": "verifyResult_1或verifyResult_2"		// 参见下面的不同场景的介绍
+		"result":{
+			"prefer": [{"id":xxx,"name":"匹配的元素名","tag":"xxx","value":"xxx",remark:"可选的20字以内的备注"}...] 	// 有效的元素。没有元素时，为空
+			"alternative": [{"id":xxx,"name":"匹配的元素名","tag":"xxx","value":"xxx",remark:"可选的20字以内的备注"}...]		// 有问题的元素
+			"related": [{"id":xxx,"name":"关联的元素","tag":"xxx",remark:"可选的20字以内的备注"}]			// 本次局部测试中涉及的关联元素，比如局部测试步骤："填写托管人的其他身份證"，如果页面有"托管人"元素，那么它可作为关联元素输出
+			"hasDialog": true/false		// 页面是否存在弹窗
+		}
+	}
+	关于remark字段的说明：用于有多个同名的元素时，加上有业务含义的辅助的remark进行区别。用于表格字段时，备注表头和列
+		
+	# JSON结果中的alternative，来自下面文字中提及有问题的元素：
+	{{fn.removeHintFlag(sys_hint_agt)}}
+	
+	# 下面是不同场景的JSON回复参考，请输出最终JSON结果
+    情况1：result为[],回复：{{fn.task().result('无需进行元素定位')}}
+	情况2：result有数据。回复：{{fn.task().result('{"prefer": [有效的元素], "alternative": [有问题的元素]}')}}
+	情况3：“待测试的页面信息”显示服务器错误，说明服务器未能正常启动。回复：{{fn.task(false).thought("服务器页面加载错误")}}
+''')
+
+// 生成验证脚本
+define('tpl_generate_verify_script', '''
+	/*{
+		 "llmType":"alias.code"
+	 }*/
+	你是熟悉selenium 4的从事银行业务的高级测试，需要校验页面数据。请结合页面信息生成"测试步骤"中用于校验的python函数。接着，请review该python函数并返回最终的JSON格式的review result。
+	# python函数为：run(browser)
+	它将被主模块用module.run(browser)的方式调用，请确保生成的代码符合测试脚本要求。
+
+	# review该python函数的JSON格式：
+	1. 代码中的元素不是来自"实际页面元素",需要替换。
+	用JSON格式返回：{{fn.task(false).thought('假设的元素XXX，或者需要替换的元素XXX').suggest('建议修正方法XXXX')}}
+	2. 代码中的元素都是来自"实际页面元素",不用替换。
+	用JSON格式返回：{{fn.task().plan('next')}}。
+	
+	# 测试步骤为：
+	{{tpl_make_plan.next.detail}}
+
+	# 补充信息
+	当前界面为：列表界面
+	日期格式为: yyyy-MM-dd，今天的时间用代码动态获取：today = datetime.today().strftime("%Y-%m-%d")
+	
+	# 测试步骤涉及的实际页面元素(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, children:[子元素信息]}...])：
+	{{tpl_task_element_info}}
+	
+	# 完整的页面元素
+	{{CollectPageInfo}}
+	
+	{{sys_hint}}
+	
+	# 测试脚本要求：
+	1. 只可以使用“实际页面元素"中列出的元素，不要自己假设不存在的元素.
+	2. 没有搜索按钮元素，可以尝试对搜索的文本框输入回车，充当搜索点击功能。不要自己假设不存在的元素。
+	3. “实际页面元素”中的id是加密后的id, 因此, 不可使用find_element_by_id
+	4. “实际页面元素”没有提供xpath的信息, 可以使用autotest中的getXpathByItem获取到xpath后，再进行selenium 4的代码调用, 比如：browser.find_element(By.XPATH, 'xxx'), find_element(By.TAG_NAME, 'xxx')
+	5. 务必谨慎处理硬编码金额的期望值, 这些值在未来发生变化时可能会导致用例失败
+	6. 生成“局部测试步骤”的代码, 不要自主补充前面步骤已经完成过的代码
+	7. 涉及文本框输入，请注意判断是否要先清空原有文本框数据
+	8. 最后的断言，使用assert xxx 的相关代码，确保再次运行run时，"实际页面元素"依然符合测试要求
+	
+	# 补充信息:
+	{{envinfo}}
+
+	# 其中来自autotest的可调用函数（通过from autotest import getXpathByItem,clickElementByItem导入下面的函数）：
+	其中item来自实际的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	1. getXpathByItem(browser, item),基于item获取页面元素的xpath.参数browser是已经构建好的webdriver.Chrome实例,参数item来自实际的页面元素.
+	2. clickElementByItem(browser, item, waitSecond, disableLog), 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False
+''')
+
+
+define('tpl_self_fix', '''
+	你是一个熟悉selenium 4的高级测试工程师，现在有一个局部的测试用例，执行时报错，请判断错误是否为可修正，按返回格式的要求，返回结果：
+	
+	# 返回格式的要求：
+	1. python脚本的语法或引用错误，或凭借现有提供资料可直接修正，请返回修正的python代码.并用JSON返回：{{fn.task()}}
+	2. 修改的代码将被不懂代码的业务人员直接使用，因此宁愿不修正，也不要做任何假设
+	3. 其他错误，缺乏某些信息，不要进行修正，直接JSON返回：{{fn.task().result('NO_FIX')}}
+
+	# 测试步骤为：
+	{{tpl_make_plan.next.detail}}
+		
+	# 上次任务的代码：
+	{{python_code}}
+	
+	{{hint_info}}
+
+	# 其中来自autotest的可调用函数（通过from autotest import getXpathByItem,clickElementByItem导入下面的函数）：
+	其中item来自实际的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	1. getXpathByItem(browser, item),基于item获取页面元素的xpath.参数browser是已经构建好的webdriver.Chrome实例,参数item来自实际的页面元素.
+	2. clickElementByItem(browser, item, waitSecond, disableLog), 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False
+''')
+
+// 修改代码添加检测 - 未启用
+define('tpl_self_add_assert', '''
+	你是熟悉selenium 4的从事银行业务的高级测试，请基于下面的"python代码需求"，修改现有代码的run函数。
+    # python函数：run(browser)
+	它将被主模块用run(browser)的方式调用。
+
+	{{python_code}}
+	
+	# 测试步骤为：
+	{{tpl_make_plan.next.detail}}
+	
+	# 待检测的元素：
+	{{tpl_task_element_info}}
+	
+	# python代码需求
+	在run的结尾，添加：assert xxx 的相关代码，使得"待检测的元素"符合测试要求
+	
+	# 其中来自autotest的可调用函数（通过from autotest import getXpathByItem,clickElementByItem导入下面的函数）：
+	其中item来自实际的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	1. getXpathByItem(browser, item),基于item获取页面元素的xpath.参数browser是已经构建好的webdriver.Chrome实例,参数item来自实际的页面元素.
+	2. clickElementByItem(browser, item, waitSecond, disableLog), 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False
+''')

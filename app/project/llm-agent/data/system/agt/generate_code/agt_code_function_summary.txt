@@ -1,0 +1,93 @@
+/*
+{
+	"title": "Generate a Java function summary via an agent.",
+	"description": "Automatically generate a Java function summary via an agent.",
+	"parameter": [
+         {
+            "name":"fileId",
+            "label":"class文件的id",
+            "type":"textarea"
+         },
+         {
+             "name":"dbSchema",
+             "label":"数据库schema",
+             "type":"textarea"
+          }
+	 ],
+    "uiEntrance": "gen_code",
+    "tag":"Testing Model",
+    "displayOrder":7,
+}
+*/
+
+when("!fn.hasValue(dbSchema)", {
+    assign('dbSchema', 'gen_code')
+})
+
+// 1.根据文件id，查询未进行注释的函数
+n_function_data,act_kb.selectBy?sql='select * from {{dbSchema}}.code_gen_function_definition where file_id = ? and (function_summary is null or function_summary = '') order by id desc limit 1000'&parameters={{fileId}}
+
+// 2.查询文件所对应的summary
+n_class_data,act_kb.select?name='code_gen_file_structure'&column='id,file_path,class_name,file_summary'&maxSize=1&where='{"id":"{{fileId}}"}'
+
+// 3.循环生成变量的注释
+foreach('n_loop_data', 'n_function_data', {
+    assign('n_data', '{{n_loop_data.item}}')
+    assign('n_function_body', '{{n_data.signature}}{{n_data.body}}')
+    // 4.提取出函数中外部引用对象
+    n_extract_data,tpl_code_function_extract_obj
+
+    // 5.生成函数prompt
+    n_prompt_data,act_code.generateFunctionPrompt?extractItems='{{n_extract_data}}'&fileId={{n_data.file_id}}
+    n_prompt_data,act_func?script='''
+                                n_prompt_data.functionBody = n_function_body
+                                n_prompt_data.id = n_data.id
+                                n_prompt_data.functionName = n_data.function_name
+                                return n_prompt_data
+                            '''
+    // 5.通过gpt，生成注释信息
+    n_result_data,tpl_code_function_generate_summary_agent
+
+    // 6.存储注释信息
+    act_kb.merge?name='code_gen_function_definition'&columnValues='{"function_summary":"{{n_result_data.functionSummary}}"}'&where='{"id":"{{n_data.id}}"}'&embedding=true
+
+    // 7.修改java原始代码，将注释信息写入
+    n_modify_data,act_code.modifyClassDocComment?classPath='{{n_class_data[0].file_path}}'&className='{{n_class_data[0].class_name}}'&name='{{n_data.function_name}}'&type='function'&docComment="{{n_result_data.functionSummary}}"&parameters='{{n_data.parameters}}'
+})
+
+define('tpl_code_function_generate_summary_agent', '''
+    你是一个高级JAVA代码开发工程师、需求分析师，请根据参数属性解析说明，根据对应文件属性、导入的文件配置，分析出该函数的作用,精简回答
+    参数属性说明如下：
+    	className:类名
+    	classSummary:类的注释信息
+    	filedName:属性名称
+    	definitionCode:属性定义代码
+    	package:包名
+    	functionName:函数名称
+    	signature:函数签名
+    	parameters:参数信息
+    	returnType:返回类型
+    	functionSummary:函数注释信息
+    	functionBody:函数代码
+
+    {{n_prompt_data}}
+
+    分析结果严格按json格式返回,格式如:
+    {
+        "id":"10001",
+        "functionName":"getXX",
+        "functionSummary":"获取工具总结"
+    }
+''')
+
+define('tpl_code_function_extract_obj', '''
+    请帮忙提取java函数中，函数所涉及到的外部引用对象及方法及参数个数,Java标准库中的类不在此范围
+    代码如下：
+    {{n_data.signature}}
+    {{n_data.body}}
+
+    返回格式如下：
+    [
+    	{"field_name":"llmToolService","function_name":"getToolPath","parameter_size":1}
+    ]
+''')

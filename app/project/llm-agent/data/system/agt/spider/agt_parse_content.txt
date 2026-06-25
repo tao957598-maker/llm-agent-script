@@ -1,0 +1,63 @@
+/*
+{
+	"title":"Cookie Page Auth Probe",
+	"description":"Cookie Page Auth Probe",
+	"parameter":[
+		{
+			"name":"system_name",
+			"label":"系统名称",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
+	"tag":"spider",
+	"uiEntrance":"graph",
+	"displayOrder":3,
+	"version":1
+}
+*/
+// get n_kb_spiderdeep_content_data
+n_kb_spiderdeep_content_data, act_kb.selectBy?sql='SELECT id, current_uri, text_data, collect_data FROM kb_spiderdeep_content WHERE system_name = "{{system_name}}" and COALESCE(analysis_content, "") = ""'
+
+
+foreach('n_content_data', 'n_kb_spiderdeep_content_data', {
+		// 待解析内容
+		assign('n_content_item', '{{n_content_data.item}}')
+		n_analysis_content, tpl_parse_content, psr_all
+
+		n_param,act_func?script='''
+			def v = []
+			v << fn.str(n_analysis_content)
+		'''
+		// 找到任务表并更新任务表状态
+		act_kb.selectBy?sql='UPDATE kb_spiderdeep_content SET analysis_content = ? WHERE id = "{{n_content_item.id}}"'&parameters={{n_param}}
+	}
+)
+
+define('tpl_parse_content', '''
+请根据以下输入信息，对当前后台页面进行「结构化功能总结」，输出用于向量检索的 Markdown 文档。
+要求：
+1、尽可能以人类视觉的视角来完整描述这个页面的结构，无论是否可见
+2、不允许出现"等等"、"..." 这种省略输出内容，尽量完整、详细的描述出来
+3、不需要输出具体的位置、坐标、是否可见，排版尽可能从上到下，从左到右进行描述
+4、对于元素的信息如选项等，尽可能与原文保持一致，减少对元素内容进行修改
+5、实际输出时，按照 页面路由、页面用途、页面描述 这三点直接用换行拼接并输出，不允许设置这几个结构
+
+请从页面中识别并总结以下内容
+# 下面为输出结构模板(仅供参考， 根据实际信息补充或者删减，如果没有则不要)
+	- 页面路由（直接输出内容，不设置结构）
+	- 页面用途（直接输出内容，不设置结构）	如："这是一个登录页面，用于登录功能 / 注册账号"
+	- 页面描述（直接输出内容，不设置结构）	尽可能以人类视觉的视角来完整描述这个页面的结构
+
+### 输入信息
+**页面路由：**
+{{n_content_item.current_uri}}
+
+**页面纯文本内容：**
+{{n_content_item.text_data}}
+
+**Spider 采集的页面元素（JSON）：**
+{{n_content_item.collect_data}}
+
+''')

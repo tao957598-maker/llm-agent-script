@@ -1,0 +1,214 @@
+/*
+{
+	"title":"Gen testcase by KB",
+	"description":"Read requirement document to generate test cases",
+	"parameter": [
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"llmType":"alias.highquality",
+	"resultPlan":"status,design_flattened_data_one",
+	"life":10000,
+	"version":1
+}
+*/
+//# Agent status
+assign("status", 'Agent is running')
+// Document ID
+assign("documentId", '{{kbSpaceFileId}}')
+
+n_test_module, act_kb.selectBy?sql='SELECT * FROM kb_gen_test_module WHERE documentId ="{{documentId}}" and version ="{{version}}"'
+
+
+
+// 按子模块行逐条生成设计、展平并入库（与主流程第二步一致，无固定条数切块）
+// 先删除旧数据（已移除仅取首行的 n_first_item，避免跨 act_func 变量未绑定报错）
+// [二步单跑][风险点] 此处是全量重建模式，会清空当前版本+文档的第二步设计表；仅用于 full/重跑
+n_test_module_design_delete_rows,act_kb.selectBy?sql='select distinct documentId as doc_id from kb_gen_test_module_design where version = "{{version}}" and documentId in ("{{documentId}}","{{kbSpaceFileId}}")'
+foreach('n_test_module_design_delete_row', 'n_test_module_design_delete_rows', {
+	act_kb.delete?name=kb_gen_test_module_design&where='{"version":"{{version}}","documentId":"{{n_test_module_design_delete_row.item.doc_id}}"}'&maxSize=1000
+	on_failure({
+		// Force to success status
+		act_flow.success
+	})
+})
+n_step2_init_design_memory,act_func?script='''
+    fn.put('design_flattened_seen_keys', new LinkedHashSet())
+    fn.put('design_flattened_data', [])
+    fn.put('design_flattened_data_one', [])
+    fn.put('result_list_design', [])
+'''
+foreach('n_test_module_content', 'n_test_module', {
+    assign('test_module_content', '{{n_test_module_content.item}}')
+    // [二步单跑][风险点] 单子模块生成结果可能很大；若这里超时或返回过大，后续导入也会受影响
+    n_design,agt_test_doc_design?input_data='{{test_module_content}}'&documentId='{{documentId}}'&async=false
+    n_flat_one_batch,act_func?script='''
+        def safeDocId = "{{documentId}}"
+        def ver = "{{version}}"
+
+        def nonEmptyData = { mm ->
+            if (mm == null || !(mm instanceof Map)) return false
+            def x = mm.get("data")
+            if (x instanceof List) return (x as List).size() > 0
+            if (x instanceof Map) return true
+            return false
+        }
+        def normalizeRoot = { raw ->
+            if (raw == null) return null
+            if (raw instanceof Map) return raw as Map
+            if (raw instanceof List && (raw as List).size() > 0) {
+                def z = (raw as List)[0]
+                if (z instanceof Map) return z as Map
+            }
+            return null
+        }
+        def findMapWithData
+        findMapWithData = { obj, depth ->
+            if (depth > 8 || obj == null) return null
+            if (obj instanceof Map) {
+                def mm = obj as Map
+                if (nonEmptyData(mm)) return mm
+                for (def e : mm.entrySet()) {
+                    def r = findMapWithData(e.value, depth + 1)
+                    if (r != null) return r
+                }
+            }
+            if (obj instanceof List) {
+                for (def el : (obj as List)) {
+                    def r = findMapWithData(el, depth + 1)
+                    if (r != null) return r
+                }
+            }
+            return null
+        }
+        def unwrapPayload = { raw ->
+            def m = normalizeRoot(raw)
+            if (m == null) return null
+            if (nonEmptyData(m)) return m
+            def inner = m
+            if (inner.get("value") instanceof Map) inner = inner.get("value") as Map
+            if (nonEmptyData(inner)) return inner
+            if (inner.get("final_design_result") instanceof Map) inner = inner.get("final_design_result") as Map
+            if (nonEmptyData(inner)) return inner
+            if (inner.get("final_result") instanceof Map) inner = inner.get("final_result") as Map
+            if (nonEmptyData(inner)) return inner
+            if (inner.get("design_input_data") instanceof Map) inner = inner.get("design_input_data") as Map
+            if (nonEmptyData(inner)) return inner
+            def deep = findMapWithData(raw, 0)
+            return deep != null ? deep : inner
+        }
+        def dataRows = { m ->
+            if (m == null) return []
+            def data = m.get("data")
+            if (data instanceof List) return data as List
+            if (data instanceof Map) return [data]
+            return []
+        }
+        def h = n_design
+        def rawList = []
+        if (h != null) {
+            def v = null
+            try {
+                if (h instanceof Map) {
+                    v = h.get("value")
+                    if (v == null) v = h
+                } else {
+                    v = h
+                }
+            } catch (Exception ignore) {
+                v = h
+            }
+            if (v != null) rawList.add(v)
+        }
+        def out = []
+        rawList.each { raw ->
+            def d = unwrapPayload(raw)
+            if (d == null) return
+            def rows = dataRows(d)
+            rows.each { row ->
+                if (!(row instanceof Map)) return
+                def de = (row.get("design_element") ?: row.get("DesignElement") ?: "").toString()
+                def items = row.get("test_content")
+                if (items == null) items = row.get("TestContent")
+                items = items instanceof List ? (items as List) : []
+                items.each { tcRaw ->
+                    def tc = tcRaw
+                    if (tcRaw instanceof List && tcRaw.size() >= 2) {
+                        tc = [sub_category: tcRaw[0] != null ? tcRaw[0].toString() : "", sub_id: tcRaw[1] != null ? tcRaw[1].toString() : ""]
+                    }
+                    if (!(tc instanceof Map)) return
+                    def sid = (tc.get("sub_id") ?: tc.get("Sub_id") ?: "").toString().trim()
+                    if (!sid) return
+                    out.add([
+                        design_element: de,
+                        sub_category: (tc.get("sub_category") ?: tc.get("Sub_category") ?: "").toString(),
+                        sub_id: sid,
+                        platform: d.get("platform"),
+                        main_module_name: d.get("main_module_name"),
+                        main_module_source: d.get("main_module_source"),
+                        submodule_name: d.get("submodule_name"),
+                        submodule_description: d.get("submodule_description"),
+                        submodule_source: d.get("submodule_source"),
+                        documentId: safeDocId,
+                        version: ver
+                    ])
+                }
+            }
+        }
+        def seen = fn.get('design_flattened_seen_keys')
+        if (seen == null || !(seen instanceof Set)) seen = new LinkedHashSet()
+        def acc = fn.get('design_flattened_data')
+        if (acc == null || !(acc instanceof List)) acc = []
+        def batchDedup = []
+        out.each { m ->
+            if (m == null || !(m instanceof Map)) return
+            def k = [
+                (m.get("submodule_name") ?: "").toString(),
+                (m.get("design_element") ?: "").toString(),
+                (m.get("sub_id") ?: "").toString()
+            ].join("||")
+            if (!seen.contains(k)) {
+                seen.add(k)
+                acc.add(m)
+                batchDedup.add(m)
+            }
+        }
+        fn.put('design_flattened_seen_keys', seen)
+        fn.put('design_flattened_data', acc)
+        fn.put('design_flattened_data_one', acc)
+        fn.put('result_list_design', acc)
+        return batchDedup
+    '''
+    // [二步单跑][风险点] 单个 submodule 结果可能过大，这里固定按 20 条切片导入，降低 payload 溢出风险
+    n_step2_import_chunks,act_func?script='''
+        def full = n_flat_one_batch
+        if (full == null || !(full instanceof List)) full = []
+        int batchSize = 20
+        def chunks = []
+        for (int i = 0; i < full.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, full.size())
+            def part = new ArrayList()
+            for (int j = i; j < end; j++) part.add(full.get(j))
+            chunks.add(part)
+        }
+        return chunks
+    '''
+    foreach('n_step2_import_chunk', 'n_step2_import_chunks', {
+        act_kb.defineAndImportData?tableName='kb_gen_test_module_design'&data='{{n_step2_import_chunk.item}}'
+        on_failure({
+            act_flow.success
+        })
+    })
+})
+//# kb_gen_test_module_design
+assign('kb_gen_test_module_design', 'Download <a href="/knowledge-base/retrieval?title=knowledgeBaseList/knowledgeRetrieval/kb_gen_test_module_design&tableName=kb_gen_test_module_design&schema=llm_agent" target="_blank">kb_gen_test_module_design</a>')
+
+// 返回全量第二步结果（design_flattened_data_one 已在展平 act_func 中 fn.put）

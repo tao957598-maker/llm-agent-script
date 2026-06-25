@@ -1,0 +1,195 @@
+/*
+{
+	"title":"Gen testcase by KB",
+	"description":"Read requirement document to generate test cases",
+	"parameter":[
+		{
+			"name":"input_data",
+			"label":"json"
+		},
+		{
+			"name":"documentId",
+			"label":"documentId"
+		}
+	],
+	"llmType":"alias.highquality",
+	"resultPlan":"final_design_result",
+	"life":10000,
+	"version":1
+}
+*/
+
+
+
+assign('design_input_data', '{{input_data}}')
+when('fn.hasValue(input_data)', {
+    n_pages,agt_get_page_data?page={{input_data.submodule_source}}&documentId="{{documentId}}"
+    // 查询kb_okp_page_data表，按page字段升序排序，筛选system_name='OKP'且page等于提取的数字的数据
+    n_pages_data, act_kb.selectBy?sql='''
+    select 
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS content
+    from kbs_doc_page_parse 
+    where documentId="{{documentId}}" and page in {{n_pages.pages}} order by page asc'''
+
+    n_get_design,tpl_get_design2
+    tpl_design_rm
+    // 获取大模型处理结果
+    assign('processed_data', '{{tpl_design_rm.data}}')
+    assign('processed_data_list', '[]')
+    foreach('n_data', 'processed_data', {
+        assign('value', '{{n_data.item}}')
+        n_c_map_list,act_func?script='''
+        def result = []
+        if(value.test_content instanceof List) {
+            def contentList = value.test_content as List
+            contentList.each { item ->
+                if(item instanceof List) {
+                    def itemList = item as List
+                    if(itemList.size() >= 2) {
+                        result.add([
+                            "sub_category": itemList[0]?.toString() ?: '',
+                            "sub_id": itemList[1]?.toString() ?: ''
+                        ])
+                    }
+                }
+            }
+        }
+        value.test_content = result
+        return value
+        '''
+        act_func?script='''processed_data_list.add(value)'''
+    })
+    // 将结果存入input_data
+    act_func?script="design_input_data.put('data', processed_data_list)"
+    assign("final_result",'{{design_input_data}}')
+})
+
+// final_design_result
+assign("final_design_result",'{{design_input_data}}')
+
+
+
+
+
+
+// 定义 LLM 模板
+define('tpl_get_design', '''
+Answer only if you are confident
+
+
+# 根据这个模块内容和页面内容,符合哪些设计要素,按照设计要素输出测试内容.
+# 保持原有的语言类型,并输出具有层级关系的json.建议
+```json
+{"data":[{"design_element":"测试项名称","test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id'],...]},{...},...]}
+
+```
+其中"test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id']...],list中的元素必须是list
+
+# 模块内容
+{{input_data}}
+
+# 具体页面内容,存在章节内容跨页面内容.
+{{n_pages_data}}
+
+''')
+// 定义 LLM 模板
+define('tpl_get_design2', '''
+Answer only if you are confident
+
+# 需求分析中的详细设计要素:
+| 测试项       | 测试小项                                      | 出处                                  | 测试小项id |
+|--------------|---------------------------------------------|---------------------------------------|------------|
+| UI Page       | 导航流程：菜单层级、子页面跳转               | 需求流程描述                          | 10         |
+|              | 交互功能：按钮、链接、下拉选框、复选框、导入导出、打印、下载、保存 | 需求文档“输入”、“输出”功能栏位说明     | 11         |
+|              | 状态转换：排序、筛选、禁用/启用、删除、修改、下页、放大/缩小按钮、加载动画、滚动条 | 需求文档“输入”、“输出”功能栏位说明     | 12         |
+|              | 静态内容：菜单名称、栏位名称、说明内容、按钮名称 | 需求文档“输入”、“输出”功能栏位说明     | 13         |
+|              | 动态内容：用户名称、用户编号、部门名称       | 需求文档“输入”、“输出”功能栏位说明     | 14         |
+|              | 本地化与国际化：菜单名称、栏位名称、说明内容、按钮名称、栏位选项的各种语言适配 | 需求文档“输入”、“输出”功能栏位说明     | 15         |
+|              | 设备渲染：IE,Edge,Chome,Safari,Firefox,QQ流浏览器、IOS,Android,HarminyOS移动设备下功能页面内容显示 | 需求文档“业务处理说明”                | 16         |
+|              | 视觉一致性：字体、图标、行间距               | 需求文档“业务页面图”                  | 17         |
+|              | 响应式布局：分辨率适配、横竖屏切换、内容折叠与展开 | 需求文档“业务处理说明”                | 18         |
+| Functionality         | 功能验证-栏位输入控制                        | 需求文档的“输入”控制长度说明          | 20         |
+|              | 功能验证-栏位输出显示                        | 需求文档的“输出”控制长度说明          | 21         |
+|              | 功能验证-数据                                | 需求文档的“输入”控制逻辑说明          | 22         |
+| Process         | 流程-登录流程                                | 功能描述                              | 30         |
+|              | 流程-进入功能流程                            | 功能描述                              | 31         |
+|              | 流程-正常业务流程                            | 业务处理流程图、业务处理说明          | 32         |
+|              | 流程-异常业务流程                            | 业务处理流程图、业务处理说明          | 33         |
+|              | 流程-业务完成后查询结果流程                  | 业务处理说明                          | 34         |
+| Logic         | 逻辑-正面逻辑                                | 业务处理描述、业务规则说明            | 40         |
+|              | 逻辑-反面逻辑                                | 业务处理描述、业务规则说明            | 41         |
+|              | 逻辑-各逻辑触发系统提示信息                  | 业务处理描述、业务规则说明            | 42         |
+|              | 逻辑-逻辑触发条件                            | 业务处理描述、业务规则说明            | 43         |
+|              | 逻辑-各条件逻辑组合                          | 业务处理描述、业务规则说明            | 44         |
+
+# 根据这个模块内容和页面内容,符合哪些设计要素,按照设计要素输出测试内容.
+# 保持原有的语言类型,并输出具有层级关系的json.输出内容必须为英文,design_element内容必须为英文
+```json
+{"data":[{"design_element":"测试项名称","test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id'],...]},{...},...]}
+
+```
+其中"test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id']...],list中的元素必须是list
+
+# 模块内容
+{{input_data}}
+
+# 具体页面内容,存在章节内容跨页面内容.
+{{n_pages_data}}
+
+''')
+
+
+// 定义 LLM 模板
+define('tpl_design_rm', '''
+
+# 需求分析中的详细设计要素:
+| 测试项       | 测试小项                                      | 出处                                  | 测试小项id |
+|--------------|---------------------------------------------|---------------------------------------|------------|
+| UI页面       | 导航流程：菜单层级、子页面跳转               | 需求流程描述                          | 10         |
+|              | 交互功能：按钮、链接、下拉选框、复选框、导入导出、打印、下载、保存 | 需求文档“输入”、“输出”功能栏位说明     | 11         |
+|              | 状态转换：排序、筛选、禁用/启用、删除、修改、下页、放大/缩小按钮、加载动画、滚动条 | 需求文档“输入”、“输出”功能栏位说明     | 12         |
+|              | 静态内容：菜单名称、栏位名称、说明内容、按钮名称 | 需求文档“输入”、“输出”功能栏位说明     | 13         |
+|              | 动态内容：用户名称、用户编号、部门名称       | 需求文档“输入”、“输出”功能栏位说明     | 14         |
+|              | 本地化与国际化：菜单名称、栏位名称、说明内容、按钮名称、栏位选项的各种语言适配 | 需求文档“输入”、“输出”功能栏位说明     | 15         |
+|              | 设备渲染：IE,Edge,Chome,Safari,Firefox,QQ流浏览器、IOS,Android,HarminyOS移动设备下功能页面内容显示 | 需求文档“业务处理说明”                | 16         |
+|              | 视觉一致性：字体、图标、行间距               | 需求文档“业务页面图”                  | 17         |
+|              | 响应式布局：分辨率适配、横竖屏切换、内容折叠与展开 | 需求文档“业务处理说明”                | 18         |
+| 功能         | 功能验证-栏位输入控制                        | 需求文档的“输入”控制长度说明          | 20         |
+|              | 功能验证-栏位输出显示                        | 需求文档的“输出”控制长度说明          | 21         |
+|              | 功能验证-数据                                | 需求文档的“输入”控制逻辑说明          | 22         |
+| 流程         | 流程-登录流程                                | 功能描述                              | 30         |
+|              | 流程-进入功能流程                            | 功能描述                              | 31         |
+|              | 流程-正常业务流程                            | 业务处理流程图、业务处理说明          | 32         |
+|              | 流程-异常业务流程                            | 业务处理流程图、业务处理说明          | 33         |
+|              | 流程-业务完成后查询结果流程                  | 业务处理说明                          | 34         |
+| 逻辑         | 逻辑-正面逻辑                                | 业务处理描述、业务规则说明            | 40         |
+|              | 逻辑-反面逻辑                                | 业务处理描述、业务规则说明            | 41         |
+|              | 逻辑-各逻辑触发系统提示信息                  | 业务处理描述、业务规则说明            | 42         |
+|              | 逻辑-逻辑触发条件                            | 业务处理描述、业务规则说明            | 43         |
+|              | 逻辑-各条件逻辑组合                          | 业务处理描述、业务规则说明            | 44         |
+
+
+# 模块内容
+{{input_data}}
+
+# 具体页面内容,存在章节内容跨页面内容.
+{{n_pages_data}}
+
+# 设计要素Json数据
+```json
+{{n_get_design}}
+```
+# 保持原有的语言类型,并输出具有层级关系的json.建议
+```json
+{"data":[{"design_element":"测试项名称","test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id'],...]},{...},...]}
+
+```
+其中"test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id']...],list中的元素必须是list
+要求必须根据页面内容,排除Json数据中未明确测试项.直接返回json数据.
+
+
+''')

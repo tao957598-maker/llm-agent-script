@@ -1,0 +1,40 @@
+/*
+{
+	"title":"agt_rerank_test",
+	"description":"测试rerank-lj",
+    "parameter": [
+					{
+						"name":"userInput",
+						"label":"客户问题",
+						"type":"textarea"
+					},
+					{
+                        "name":"kbSpaceId",
+                        "label":"目录ID（支持多个）",
+                        "type":"textarea"
+                    },
+                    {
+                         "name":"kbSpaceFileId",
+                         "label":"文件ID（支持多个）",
+                         "type":"textarea"
+                     },
+					{
+                        "name":"kbData",
+                        "label":"知识库数据",
+                        "type":"textarea"
+                    }
+    			],
+    "llmType": "",
+    "resultPlan": "n_ink_result",
+    "life": "100"
+    "uiEntrance": "chatDoc",
+	"tag":"lj"
+} */
+
+// 定义变量
+// assign('params','{"question":"{{userInput}}","folderIds":"{{kbSpaceId!}}","knowledgeIds":"{{kbSpaceFileId!}}"}')
+assign('params','{"question":"test","folderIds":"237524727255957504","knowledgeIds":"{{kbSpaceFileId!}}"}')
+
+n_ink_result,rag_kbs.searchQuestion?paramData='{{params}}'&similarity='0.5'&combine=true&isRerank=1
+
+log('---------n_ink_result----------{{n_ink_result}}')

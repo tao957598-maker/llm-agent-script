@@ -1,0 +1,158 @@
+/*
+{
+	"title":"Prompt Optimization V2",
+	"description":"Optimize the prompt for better performance",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		},
+		{
+			"name":"prompt",
+			"label":"prompt",
+			"required":true
+		},
+		{
+			"name":"standard_answer",
+			"label":"standard_answer",
+			"required":true
+		},
+		{
+			"name":"optimization_rounds",
+			"label":"optimization_rounds",
+			"required":true
+		},
+		{
+			"name":"prompt_reserve",
+			"label":"prompt_reserve"
+		}
+
+	],
+	"resultPlan":"status,n_generated_answer,n_prompt_optimization_suggestions,n_prompt_optimized",
+	"life":10000,
+	"displayOrder":30,
+	"version":2
+}
+*/
+
+//# Agent status
+assign("status", 'Agent is running')
+// kbSpaceFileId22
+assign("kbSpaceFileId22", '248398006873423872')
+// file name
+n_file_name, act_kb.selectBy?sql='select  knowledge_name  from kb_spaces_folder_knowledge where id="{{kbSpaceFileId22}}" '
+assign("file_name", '{{n_file_name[0].knowledge_name}}')
+
+when('!fn.hasValue(Pages)', {
+  // 取全部数据
+  n_kb_data, act_kb.selectBy?sql='select page,content from kbs_doc_page_parse where documentId="{{kbSpaceFileId22}}"   ORDER BY CAST(page AS SIGNED) ASC'
+
+},{
+    // 取分页数据
+ n_kb_data, act_kb.selectBy?sql='select page,content from kbs_doc_page_parse where documentId="{{kbSpaceFileId22}}" and page in ({{Pages}}) ORDER BY CAST(page AS SIGNED) ASC'
+
+})
+
+// 循环优化提示词
+foreach('n_optimization', '[1,2,3]', {
+    // 生成答案
+    n_generated_answer,tpl_prompt,psr_all
+    // 优化建议
+    n_prompt_optimization_suggestions,tpl_prompt_optimization_suggestions,psr_all
+    
+    // 优化后的提示词
+    n_prompt_optimized,tpl_prompt_optimized,psr_all
+    assign("prompt", '{{n_prompt_optimized}}')
+})
+
+
+define('tpl_prompt', '''
+{{prompt}}
+
+{{n_kb_data}}
+''')
+
+define('tpl_prompt_optimized', '''
+# 原始提示词必须保留的内容
+{{prompt_reserve}}
+
+# 原始提示词
+```
+{{prompt}}
+```
+# 优化建议
+```
+{{n_prompt_optimization_suggestions}}
+```
+直接回答优化后的提示词,不必解释
+
+
+''')
+
+define('tpl_prompt_optimization_suggestions', '''
+**提示词：**  
+请对比分析 `standard_answer` 和 `generated_answer` 的内容，从准确性、完整性、逻辑性和语言表达等方面进行详细评估，并给出具体的修改建议。具体要求如下：  
+
+1. **内容对比**  
+   - 列出 `generated_answer` 中缺失的关键信息（需补充的内容）。  
+   - 指出 `generated_answer` 中多余或无关的内容（需删除的内容）。  
+   - 检查是否存在事实性错误或表述模糊的部分。  
+
+2. **逻辑与结构改进**  
+   - 分析逻辑是否连贯，是否需要调整顺序或增加过渡句。  
+   - 检查段落划分是否合理，建议合并或拆分段落。  
+
+3. **语言表达优化**  
+   - 标记表达不清晰、冗余或过于口语化的句子，并提供改写建议。  
+   - 建议更专业、简洁或符合上下文的词汇替换。  
+
+4. **其他建议**  
+   - 是否需要增加示例、数据或引用来源以提高说服力？  
+   - 是否需要调整语气（如更正式、更友好等）以适应目标受众？  
+5. **generated_answer内容打分**
+   - 满分100分
+   - 准确性   - 完整性   - 逻辑性   - 语言表达
+
+
+**输出格式：**  
+```markdown
+### 需增加的内容  
+- [具体缺失信息及补充建议]  
+
+### 需删除的内容  
+- [冗余或无关内容及删除理由]  
+
+### 逻辑与结构改进  
+- [具体调整建议]  
+
+### 语言表达优化  
+- [原句及优化后的句子]  
+
+### 其他建议  
+- [额外改进建议]  
+### generated_answer内容打分
+- 准确性：[具体分数]
+- 完整性：[具体分数]
+- 逻辑性：[具体分数]
+- 语言表达：[具体分数]
+
+```  
+
+# standard_answer
+```standard_answer
+
+{{standard_answer}}
+```
+
+# generated_answer
+```generated_answer
+{{n_generated_answer}}
+```
+
+
+
+''')

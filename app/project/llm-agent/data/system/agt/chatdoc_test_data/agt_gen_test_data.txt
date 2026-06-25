@@ -1,0 +1,83 @@
+/*
+{
+	"title":"Intelligent Test Data Generation",
+	"description":"AI-powered test data generation platform supporting multi-scenario data modeling and intelligent business rule-based data construction",
+	"parameter":[
+		 
+		{
+			"name":"test_no",
+			"label":"test_no",
+			"type":"textarea"
+		},
+		{
+			"name":"system",
+			"label":"system",
+			"type":"textarea"
+		}],
+	"tag":"Automated Testing",
+	"resultPlan":"user_input",
+	"life":1000,
+	"displayOrder":60,
+	"version":2
+}
+*/
+// 用户输入
+assign("user_input", "{{test_no}}")
+
+// 参数
+n_parameter,act_func?script='''
+  def result = [:]
+  result.kb_name = "kb_testcase_step"
+  result.method = "llm"
+  result.type = "table"
+  return result
+'''
+
+// 获取测试步骤数据的sql
+assign("userInput", "在kb_testcase_step查询test_no为{{test_no}}的数据")
+// n_sql,agt_auto_sql1.knowledge?userInput='{{userInput}}'
+assign('search_sql',"SELECT * FROM kb_testcase_step WHERE test_no = '{{test_no}}' and application='{{system}}' LIMIT 100")
+// 获取数据
+n_result_data,act_kb.selectBy?sql='{{search_sql}}'
+
+// Get result
+n_result,act_func?script='''
+  def data_item = n_result_data[0]
+  def result = data_item.result
+  output = (result == null) ? 0 : result
+ 
+'''
+log('n_result：{{n_result}}')
+when('!fn.hasValue(n_result)',{
+  //选择数据正确的Test No
+  assign('msg', '请选择数据正确的Test No')
+},
+{
+  // Script Path
+  n_script_apth,act_func?script='''
+    def paths = n_result[0]
+    def parentPath = new File(paths[0]).parent
+    return parentPath
+  
+  '''
+
+  // 数据处理
+  n_test_data,act_func?script='''
+    def script_apth = n_script_apth
+    def data_item = n_result_data[0]
+    def result = [steps: "",test_no: data_item.test_no ?: "", application: data_item.application ?: "", system: data_item.system_name ?: "", path: script_apth]
+    for (item in n_result_data) {
+      result.steps += item.step + "\\n\"
+    }
+    return result
+  '''
+  log('n_test_data：{{n_test_data}}')
+  // 元数据agent-> 插入元数据表
+  n_data_test,agt_generate_metadata_table?parameter="{{n_parameter}}"&stepsData="{{n_test_data}}"
+
+  // 取元数据表 -> 表数据agent -> 插入数据表
+  agt_test_data_table?tableName="{{n_parameter.kb_name}}"&stepsData="{{n_test_data}}"
+
+
+})
+

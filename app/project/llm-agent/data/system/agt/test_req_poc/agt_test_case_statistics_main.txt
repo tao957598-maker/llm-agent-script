@@ -1,0 +1,32 @@
+/*
+{
+	"title":"业务需求覆盖率统计",
+	"description":"统计业务主模块",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"File",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		}
+	],
+	"resultPlan":"status,n_sql_data,n_kpi_data,n_kpi_md,n_result",
+	"version":1
+}
+*/
+//# Agent status
+assign("status", 'Agent is running')
+n_sql_data,agt_test_case_statistics_sql?kbSpaceFileId={{kbSpaceFileId}}&version={{version}}
+n_kpi_data,agt_test_case_statistics_sql_kpi?kbSpaceFileId={{kbSpaceFileId}}&version={{version}}
+// n_kpi_md,tpl_data_to_markdown,psr_md
+n_result,act_memory.assign?value='''{{n_sql_data}}\n\n{{n_kpi_data}}'''&type=md
+
+define('tpl_data_to_markdown', '''
+请将以下结果转化为markdown格式，包含清晰的标题和表格展示,不符合的数据标记红色：：
+{{n_kpi_data}}
+汇总内容,直接返回markdown格式
+''')

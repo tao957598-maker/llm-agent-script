@@ -1,0 +1,375 @@
+/*
+{
+	"title":"Gen testcase by requirement",
+	"description":"Read requirement document to generate test cases",
+	"parameter":[
+		{
+			"name":"system",
+			"label":"System to be tested"
+		},
+		{
+			"name":"knowledge_name",
+			"label":"knowledge Space"
+		},
+		{
+			"name":"case_number",
+			"label":"Generate Case Number"
+		}
+	],
+	"llmType":"alias.highquality",
+	"resultPlan":"result,requirement,test_modules,test_point, test_case,n_kb_data",
+	"life":10000,
+	"version":1
+}
+*/
+
+
+assign("result", 'Agent is running')
+assign("application","{{system}}")
+when('!fn.hasValue(language)', {
+  assign("language", "English")
+})
+
+// 查询
+when('fn.hasValue(knowledge_name)', {
+	// requirement
+  // n_file_data,act_kbs.readSectionFile?folderName='Agent_code'&knowledgeName='bank_req'&isSource=true
+  // assign("requirement", '{{n_file_data}}')
+
+  n_folder_data,act_kb.selectBy?sql='select ksfk.knowledge_name, ksfk.extension from kb_spaces_folder ksf inner join kb_spaces_folder_knowledge ksfk on ksf.id = ksfk.kb_spaces_folder_id where ksf.folder_name = "{{knowledge_name}}"'
+  assign("folder_list", "{{n_folder_data}}")
+
+  // 处理
+  n_result_data,act_func?script='''
+    for (item in folder_list) {
+      item['is_valid'] = item.extension in ['txt', 'md']
+    }
+    return folder_list
+  '''
+  // ## n_result_data: {{n_result_data}}
+  assign("folder_list_data",'{{n_result_data}}')
+
+  assign("requirement", '[]')
+
+  foreach('n_data', 'folder_list_data', {
+    // 下标对应内容
+    assign('data_item', '{{n_data.item}}')
+    // ## requirement: {{data_item.knowledge_name}}
+    n_file_data,act_kbs.readSectionFile?folderName='{{knowledge_name}}'&knowledgeName='{{data_item.knowledge_name}}'&isSource='{{data_item.is_valid}}'
+    act_func?script="requirement.add(n_file_data)"
+  })
+
+},{
+n_requirement,act_func.read?filename='{{requirement}}'
+assign( "requirement", '{{n_requirement}}' )
+}
+)
+
+assign("product", "金融领域保险", "requirement_score", ">=7")
+
+// Requirement Document Scoring
+tpl_requirement_analysis_scoring
+
+when('tpl_requirement_analysis_scoring.compare==true') {
+	// Extract feature points Feature points: Display list, input interface (add, modify), query, add a field, let GPT explain the extraction of this feature point from the original text.
+    tpl_gen_test_module_divided
+	assign('test_module_divided', '{{tpl_gen_test_module_divided}}')
+	tpl_check_gen_test_module_divided
+	assign('test_modules', '{{tpl_check_gen_test_module_divided}}')
+
+	foreach('n_test_modules', 'test_modules.data', {
+		
+		assign('test_module', '{{n_test_modules.item}}')
+		assign('test_module_index', '{{n_test_modules.index}}')
+		
+		
+
+		// Generate detailed test cases
+		tpl_check_gen_test_point_divided
+		assign('test_point', '{{tpl_check_gen_test_point_divided}}')
+
+		// Inject test data
+		foreach('n_gen_test_case', 'tpl_check_gen_test_point_divided.data', {
+			assign('gen_test_case_item', '{{n_gen_test_case.item}}')
+			assign('gen_test_case_index', '{{n_gen_test_case.index}}')
+
+
+
+
+            n_select_data,act_kb.select?name=kb_testcase_biz&where='{{fn.json("name,application")}}'
+            assign("select_data", '{{n_select_data}}')
+
+            assign('new_json', '{{fn.json("test_module,test_module,test_case,gen_test_case_item,kb_data,select_data,application,application")}}')
+            assign('test_case', '{{new_json}}')
+
+            n_kb_data,tpl_transform_testcase
+
+			// Import knowledge base
+			act_kb.defineAndImportData?tableName=kb_testcase&data='{{n_kb_data}}'
+			assign("result", "succeed")
+            on_failure({
+            			assign("result", "fail")
+            		})
+            act_flow.go?plan=end
+			
+			})
+
+		
+		
+		
+
+		})
+		
+	
+	
+
+}
+
+when('tpl_requirement_analysis_scoring.compare==false') {
+    tpl_requirement_fix_analysis
+	act_flow.go?plan=end
+}
+
+// 完整度，评价体系，评分
+define('tpl_requirement_analysis_scoring', '''
+# 需求文档的内容
+	<requirement>
+	{{requirement}}
+	</requirement>
+- Role: 高级需求分析专家
+- Background: 用户需要对特定产品的需求文档进行完整性分析，并根据预设的评分标准给出评分。
+- Profile: 你是一名对"{{product}}"业务非常熟悉的高级需求分析人员，拥有丰富的文档评估经验和敏锐的业务洞察力。
+- Skills: 你具备深入分析需求文档的能力，能够准确评估文档的完整性，并根据预设的评分标准给出公正的评分。
+- Goals: 对需求文档进行完整性分析，并给出1-10分的评价分，同时根据定义的比较表达式进行判断。
+- Constrains: 评价必须基于文档内容的完整性和业务相关性，评分应公正、客观。
+- OutputFormat:输出文字语言是{{language}}, markdow JSON格式，包含评分和比较结果。
+- Workflow:
+  1. 阅读并理解需求文档内容。
+  2. 根据文档的完整性和业务相关性给出评分。
+  3. 根据预设的评分标准进行比较表达式判断。compare根据定义的比较表达式{{requirement_score}}和score进行判断,返回True or False
+  4. 输出markdow JSON格式的结果。
+- Examples:
+```json
+	{
+		score: 1-10分,
+		compare: true or false
+	}```
+''')
+
+define('tpl_requirement_fix_analysis', '''
+# 需求文档的内容
+	<requirement>
+	{{requirement}}
+	</requirement>
+- Role: 高级需求分析专家
+- Background: 用户需要对特定产品的需求文档进行完整性分析，现在评分为{{tpl_requirement_analysis_scoring.score}}。
+- Profile: 你是一名对"{{product}}"业务非常熟悉的高级需求分析人员，拥有丰富的文档评估经验和敏锐的业务洞察力。
+- Skills: 你具备深入分析需求文档的能力，能够准确评估文档的完整性，并根据评分,给出合理的文档修改建议。
+- Goals: 对需求文档进行完整性分析，列出出合理的文档修改建议。
+- Constrains: 必须基于文档内容的完整性和业务相关性，给出合理建议。
+- OutputFormat:输出文字语言是{{language}},markdow JSON格式，建议内容。
+- Workflow:
+  1. 阅读并理解需求文档内容。
+  2. 根据文档的完整性和业务相关性给出给出合理建议。
+  3. 输出markdow JSON格式的结果。
+- Examples:
+	{
+		data: 建议内容
+	}
+''')
+
+// ** 测试功能模块划分 **
+define('tpl_gen_test_module_divided', '''
+	# 需求文档的内容
+	<requirement>
+	{{requirement}}
+	</requirement>
+
+	- Role: 软件测试架构师
+	- Background: 用户需要对软件进行模块化测试，以实现更细粒度的测试规划和管理，确保测试覆盖率和提高测试效率。
+	- Profile: 你是一位经验丰富的软件测试架构师，擅长于根据软件的功能模块设计测试用例，并能够清晰地划分测试模块。
+	- Skills: 你具备软件测试理论、测试用例设计、测试管理以及自动化测试的知识与技能，能够高效地组织和执行模块化测试。
+	- Goals: 设计一个清晰的功能模块划分方案，使测试用例的管理和执行更加高效，同时便于后续的维护和更新。
+	- Constrains: 功能模块的划分应遵循软件的实际架构和功能划分，确保每个模块的独立性和完整性。
+	- OutputFormat:输出文字语言是{{language}}, markdow 文本,以json 格式列表的形式输出功能模块的名称。
+	- Workflow:
+	1. 分析软件架构，确定主要的功能模块。
+	2. 根据功能模块的独立性和完整性，进一步细分子模块。
+	3. 列出所有功能模块的名称，形成清晰的模块列表。
+	4. 输出markdow JSON格式的结果。不必解释
+	输出格式:
+	```json\n{"data":[{},..]}```
+''')
+
+// ** 检查测试功能模块 gpt-4o **
+define('tpl_check_gen_test_module_divided', '''
+	/*{
+	 "llm_type":""
+	}*/
+	# 需求文档的内容
+	<requirement>
+	{{requirement}}
+	</requirement>
+
+	# 已拆分功能模块
+	{{test_module_divided}}
+
+	- Role: 软件测试架构师
+	- Background: 用户需要对软件进行模块化测试，以实现更细粒度的测试规划和管理，确保测试覆盖率和提高测试效率。
+	- Profile: 你是一位经验丰富的软件测试架构师，擅长于根据软件的功能模块设计测试用例，并能够清晰地划分测试模块。
+	- Skills: 你具备软件测试理论、测试用例设计、测试管理以及自动化测试的知识与技能，能够高效地组织和执行模块化测试。
+	- Goals: 设计一个清晰的功能模块划分方案，使测试用例的管理和执行更加高效，同时便于后续的维护和更新。
+	- Constrains: 功能模块的划分应遵循软件的实际架构和功能划分，确保每个模块的独立性和完整性。
+	- OutputFormat:输出文字语言是{{language}}, markdow 文本,以json 格式列表的形式输出功能模块的名称,例如```json\n{"data":[xxx,..]}```。
+	- Workflow:
+	1. 分析软件架构，确定主要的功能模块。
+	2. 根据功能模块的独立性和完整性，进一步细分子模块。
+	3. 根据已拆分功能模块列表,检查是否有重复的模块,若有重复则删除.
+	4. 根据已拆分功能模块列表,进行查缺补漏,或删掉不符合的模块,
+	5. 已拆分功能模块列表不能存在父模块和子模块,必须全部为子模块.
+	7. 重新返回markdow json数据,例如```json\n{"data":[xxx,..]}```。,不必解释.
+''')
+
+
+// ** 生成详细测试点 **
+define('tpl_check_gen_test_point_divided', '''
+	/*{
+	 "llm_type":""
+	}*/
+# 需求文档的内容
+<requirement>
+{{requirement}}
+</requirement>
+
+# 已拆分功能模块
+{{test_module_divided}}
+
+## 需要生成详细测试点的功能模块
+{{test_module}}
+
+## 测试用例生成规则和要求
+	###测试策略
+      "TestCoverage": "Ensure the test cases cover all functional requirements, boundary conditions, edge cases, and error scenarios. Use Equivalence Partitioning (EP), Boundary Value Analysis (BVA), and Cause-Effect Graphing methods where applicable.",
+      "TestObjectives": "Each test case should verify a specific behavior or feature as described in the requirements. Ensure that you are testing both positive and negative scenarios to validate system functionality.",
+      "RiskBasedTesting": "Focus on high-risk areas such as business-critical workflows, third-party integrations, and security-sensitive functionalities.",
+      "AutomationFeasibility": "Identify test cases that can be automated for regression testing, considering tools like Selenium, JUnit, or Postman for API testing."
+        ###测试设计技术
+      "EquivalencePartitioning": "Identify input classes and generate test cases based on valid, invalid, and boundary values. Ensure each class is represented in your test cases.",
+      "BoundaryValueAnalysis": "Focus on boundary values for input fields (e.g., minimum, maximum, just inside, just outside the valid range). Generate test cases for edge cases to ensure system stability.",
+      "CauseEffectGraphing": "For complex requirements, use cause-effect graphing to identify combinations of conditions that lead to different system behaviors. Ensure to cover all paths.",
+      "DecisionTableTesting": "Use decision tables for scenarios where multiple conditions and actions must be considered to generate comprehensive test cases.",
+      "StateTransitionTesting": "Design test cases for functionalities that depend on system states, ensuring transitions between valid states are covered, and invalid transitions are handled."
+        ###测试用例结构
+      "TestCaseTitle": "A clear, concise title for the test case based on the functionality being tested.",
+      "Preconditions": "List any system setup or configurations required before running the test case (e.g., user logged in, specific data available).",
+      "TestSteps": "Detail each action required to execute the test case, ensuring each step is simple and unambiguous. Avoid combining multiple actions in one step.",
+      "ExpectedResults": "Define the expected behavior or outcome after performing the steps. Ensure the system responds correctly based on input or user actions.",
+      "Postconditions": "Outline the system state after test execution (e.g., user is logged out, data is saved).",
+      "TestData": "Specify the exact data to be used for the test, including any valid/invalid inputs, edge cases, and combinations to test.",
+      "Dependencies": "List any external systems, APIs, or integrations required for the test to execute successfully."
+      	###测试用例设计最佳实践
+      "Clarity": "Test cases should be easy to read and understand. Avoid complex jargon or unnecessary details.",
+      "Reusability": "Design test cases so they can be reused for different scenarios or similar functionalities to minimize duplication.",
+      "Traceability": "Ensure each test case maps directly to a specific requirement or business rule for traceability. Utilize requirement IDs where applicable.",
+      "Maintainability": "Test cases should be written in a way that they can be easily maintained and updated when requirements change or defects are discovered.",
+      "Consistency": "Use consistent terminology and format across all test cases to ensure clarity and uniformity."
+      	###测试数据考虑点
+      "ValidData": "Generate test data based on the business logic and functional requirements. Ensure data reflects realistic scenarios.",
+      "InvalidData": "Create test cases with invalid data inputs to ensure the system handles them gracefully (e.g., invalid characters, out-of-range values).",
+      "EdgeCases": "Design test cases that focus on the boundaries of input fields (e.g., maximum and minimum values, empty inputs, or null values).",
+      "LargeDataSets": "For performance testing, design test cases that simulate large datasets or transactions to verify system scalability."
+	
+
+	## 任务流程:
+	1. 分析提供的requirement内容，确定测试范围和重点。
+	2. 根据测试范围和重点，上述提到的测试策略，测试设计技术，测试用例结构，最佳实践和测试数据考虑点，为需要生成测试用例的功能点，生成符合要求的测试用例。
+	3. 如果测试点很多,需要划分为同一组,目的是同组测试点流程可以连通,减少相同的前提操作.同组流程可以放在一个list中
+	4. 若页面输入输出要素同时存在一个流程中,需要划分为同一组
+	5. 输出格式：输出文字语言是{{language}}, markdown 文本,以json 格式列表的形式输出详细测试点的名称,例如```json{"data":[{其它测试点1},{其它测试点2}]}```
+	- Examples:
+	```json\n
+    {"data": [
+     {
+        "TestCaseTitle": "验证公告搜索页面的重置功能",
+        "Preconditions": "用户已登录系统，并且已执行过一次搜索。",
+        "TestSteps": [
+          "进入公告管理页面。",
+          "在一个或多个字段中输入搜索条件。",
+          "点击‘查询’按钮进行筛选。",
+          "点击‘重置’按钮。"
+        ],
+        "ExpectedResults": "所有搜索字段被清空，公告列表恢复到默认状态。",
+        "Postconditions": "无",
+        "TestData": "标题：'季度更新'",
+        "Dependencies": "系统支持重置搜索表单。"
+      },..]}```
+
+''')
+
+
+
+// 将给出的,转换为另外一个
+define('tpl_transform_testcase', '''
+	/*{
+	 "llm_type":""
+ }*/
+- Role: 数据库架构师和数据映射专家
+- Background: 用户需要将JSON信息映射到MySQL数据库的对应字段，以实现数据的有效存储和管理。
+- Profile: 你是一位精通数据库架构设计和数据处理的专家，对MySQL数据库有着深入的理解和丰富的实践经验，擅长将复杂的JSON数据结构与数据库字段进行精准映射。
+- Skills: 你拥有数据库设计、API数据解析、数据映射技术以及SQL语言的全面掌握，能够高效地将input JSON信息数据与MySQL数据库字段进行匹配。
+- Goals: 将JSON信息准确地映射到MySQL数据库的对应字段，确保数据的完整性和一致性。
+- Constrains: 遵循数据库设计的最佳实践，确保数据映射的准确性和高效性，同时保证代码的可读性和可维护性。
+- OutputFormat: 输出文字语言是{{language}},返回mapping之后的markdown json数据。
+- Workflow:
+  1. 分析JSON数据结构，提取关键字段。
+  2. 根据MySQL数据库的元数据，确定与JSON字段对应的数据库字段。
+  3. 直接返回mapping之后的markdown json数据。
+- Examples:
+  - 例子1：JSON数据
+    ```json
+    {
+        "application": "bank",
+        "test_module": "User Authentication",
+        "test_case": {
+            "TestSteps": [
+                "Navigate to the login screen.",
+                "Enter the username 'peter.li' into the username field."
+            ],
+            "TestData": "Username: 'peter.li', Password: 'gientech@123'",
+            "Preconditions": "The user credentials (username: 'peter.li', password: 'gientech@123') are valid and active.",
+            "Postconditions": "The user is logged in, and the system displays the main dashboard.",
+            "ExpectedResults": "The user should be logged into the system, and the balances of the 'Primary' and 'Savings' accounts should be displayed.",
+            "Dependencies": "User authentication service is functioning properly.",
+            "TestCaseTitle": "Valid User Authentication Test"
+        },
+        "kb_data": [
+            {
+                "name": "bank",
+                "envinfo": "bank url: http://189.1.224.215:8888/index ",
+                "language": "english",
+                "id": 1
+            }
+        ]
+    }
+    ```
+    MySQL数据库元数据:
+      `application` varchar(50) DEFAULT NULL,
+      `language` varchar(255) DEFAULT NULL,
+      `steps` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
+      `test_no` varchar(50) DEFAULT NULL,
+      `expected_result` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
+      `test_by` varchar(50) DEFAULT NULL,
+    映射规则：
+    - JSON字段`application`映射到数据库字段`application`
+    - JSON字段`ExpectedResults`映射到数据库字段`expected_result`
+    - 数据库字段`language`是测试案例语言,可以从JSON信息中推测描述的语言,默认`zh`
+    - 数据库字段`test_no`是测试案例编号,可以从JSON信息`TestCaseTitle`中提取连续英文字符并添加随机5位数字编号
+    - 数据库字段`test_by`是创建人,默认`agent`
+    - 数据库字段`steps`是步骤信息,JSON中两个字段内容拼接`TestSteps`
+    返回数据json：
+    ```json
+    [{"application": "bank", "language": "english", "steps": "\"Navigate to the login screen.\",\n                \"Enter the username 'peter.li' into the username field.\"", "test_no": "VUATest-00001", "expected_result": "The user should be logged into the system, and the balances of the 'Primary' and 'Savings' accounts should be displayed.", "test_by": "agent"}]
+    ```
+# Input
+{{test_case}}
+''')

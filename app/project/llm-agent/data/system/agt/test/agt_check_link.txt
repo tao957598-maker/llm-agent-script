@@ -1,0 +1,17 @@
+/*
+{
+	"title": "Test chatdoc open link ",
+	"description": "Test chatdoc open link by default！",
+    "parameter": [
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "life": "100"
+} */
+
+//## Test show picture12344 test
+act_memory.assign?var='n_chart_absolute_path'&value='/api/tmp/cutting_172.18.2.14_20251126_1645_48_20251126164556.png'&type='image'
+
+
+
+            

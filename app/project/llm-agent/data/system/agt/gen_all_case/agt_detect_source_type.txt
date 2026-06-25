@@ -1,0 +1,74 @@
+/*{
+	"title":"Detect document source type",
+	"description":"Detect whether document content is web or api type",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		}
+	],
+	"resultPlan":"detected_source_type",
+	"version":1
+}*/
+// Agent status
+assign("status", "Agent is running")
+// default
+assign("detected_source_type", "web")
+
+// read a small sample set for fast detection
+when('!fn.hasValue(pages)', {
+    n_kb_data, act_kb.selectBy?sql='''select
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS content
+FROM
+    kbs_doc_page_parse
+WHERE
+    documentId = "{{kbSpaceFileId}}"
+ORDER BY
+    CAST(page AS SIGNED) ASC
+LIMIT 20'''
+},{
+    n_kb_data, act_kb.selectBy?sql='''select
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS content
+FROM
+    kbs_doc_page_parse
+WHERE
+    documentId = "{{kbSpaceFileId}}" and page in ({{pages}})
+ORDER BY
+    CAST(page AS SIGNED) ASC'''
+})
+
+// heuristic detection
+act_func?script='''
+    def rows = n_kb_data
+    if (rows == null || !(rows instanceof List) || rows.size() == 0) {
+        fn.put("detected_source_type", "web")
+        return
+    }
+    def txt = new StringBuilder()
+    rows.each { r ->
+        if (r instanceof Map) {
+            def c = r.get("content")
+            if (c != null) txt.append(c.toString().toLowerCase()).append("\\n")
+        }
+    }
+    def s = txt.toString()
+    def apiHits = 0
+    def webHits = 0
+    def apiKw = ["openapi", "swagger", "operationid", "request body", "response schema", "endpoint", "http status", "authorization", "bearer token", "get /", "post /", "put /", "delete /", "patch /"]
+    def webKw = ["page", "button", "click", "navigate", "ui", "screen", "menu", "field", "input box", "tab", "upload", "download", "template"]
+    apiKw.each { k -> if (s.contains(k)) apiHits++ }
+    webKw.each { k -> if (s.contains(k)) webHits++ }
+    def t = (apiHits > webHits) ? "api" : "web"
+    fn.put("detected_source_type", t)
+'''

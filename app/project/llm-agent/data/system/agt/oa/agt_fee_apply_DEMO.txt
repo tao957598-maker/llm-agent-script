@@ -1,0 +1,50 @@
+
+/*
+{
+	"title":"费用流程730DEMO",
+	"parameter":[],
+	"uiEntrance":"daily_fee_apply_form",
+	"displayOrder":0,
+	"version":1
+}
+*/
+
+// 展示费用申请表单界面
+n_expense_form, act_flow.page?pageCode='daily_fee_apply_form'
+
+// 第一个审批节点：项目经理(PM)审批
+approve('n_pm_approval', '''
+{
+  "assigneeConfig": {
+    "type": "ROLE",
+    "strategy": "ALL",
+    "targets": [
+      {
+        "targetType": "ROLE_NAME",
+        "value": "项目经理"
+      }
+    ]
+  },
+  "formKey": "n_expense_form"
+}
+''')
+
+// 第二个审批节点：财务总监审批
+approve('n_financial_director_approval', '''
+{
+  "assigneeConfig": {
+    "type": "ROLE",
+    "strategy": "ALL",
+    "targets": [
+      {
+        "targetType": "ROLE_NAME",
+        "value": "财务总监"
+      }
+    ]
+  },
+  "formKey": "n_expense_form"
+}
+''')
+
+// 流程结束
+assign("result", "审批流程已完成")

@@ -1,0 +1,43 @@
+/*
+{
+	"title":"API List",
+  "description":"Get API List",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"userInput"
+		}
+	],
+	"version":1,
+  "resultPlan":"n_api_list",
+  "life":1000,
+}
+*/
+
+// api list
+n_api_data,act_kb.selectBy?sql='SELECT request_body, description, name FROM llm_tool_api WHERE status IS NOT NULL AND status != 0;'
+
+// get list
+n_api_list,tpl_api_list_prompt,psr_json_python
+
+// prompt
+define('tpl_api_list_prompt','''
+  你是一位专业的 Agent 构建与 API 匹配专家。  
+  我会给你一个自然语言需求（req）和一个 API 的 json list。  
+  你的任务：  
+  - 从 req 中提取关键功能点或动作关键字  
+  - 在给定的 API 列表中寻找最可能使用到的接口  
+  - 只返回匹配到的 API 的字段，输出的字段名必须与输入 json 中保持一致  
+  - 返回的结果必须是一个 JSON list, 无匹配到的 API 时, 返回空 list: []
+
+  # 用户输出需求: {{userInput}}
+  # 可用API list: {{n_api_data}}
+
+  【示例输出】: 
+  [  
+		{...},  
+		{...}
+	]  
+
+  请严格遵守上述规则，仅输出 JSON list，不要额外解释。
+''')

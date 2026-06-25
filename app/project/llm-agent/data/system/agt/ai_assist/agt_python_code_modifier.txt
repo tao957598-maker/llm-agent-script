@@ -1,0 +1,158 @@
+/*
+{
+	"title":"AI-Powered Python Code Optimizer",
+	"description":"Next-gen AI assistant for intelligent Python code transformation and enhancement",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"用户输入"
+		},
+		{
+			"name":"textContent",
+			"label":"文本内容"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space"
+		}
+	],
+	"tag":"Text Processing",
+	"version":3
+}
+*/
+// Use selenium
+assign('pythonType', 'selenium')
+assign("file_element", "Nan")
+// 有文件ID的情况
+	assign("kbSpaceFileIdkbSpaceFileId", "{{kbSpaceFileId}}")
+when('fn.hasValue(kbSpaceFileId)', {
+
+	
+	// 定义list存储结果
+	assign("file_list", "[]")
+	n_list_id,act_func.run?script="return kbSpaceFileId.split(',')"
+	
+	foreach('n_loop_id', 'n_list_id', {
+    	assign('knowledgeId', '{{n_loop_id.item}}')
+
+	 
+		n_queryResult,agt_kb_space_query.tool_ecosystem?kbSpaceFileId={{knowledgeId}}
+		act_func?script='file_list.add(n_queryResult)'
+	})
+	
+	// 将数据放到file_element
+	assign("file_element", "{{file_list}}")
+	
+})
+assign('input_data', '''
+# 原始代码:第一个`@@`之前是文件名
+{{fn.when(textContent, textContent,'Nan')}}
+
+# 文件内容:
+{{file_element}}
+''')
+
+assign('system_prompt', '''
+# 输出格式要求:
+注意一个 完整的 Unified Diff 文件，结构是：
+```diff
+--- 文件名称(file_name)
++++ 文件名称(file_name)
+@@ -起始行,行数 +起始行,行数 @@
+ 修改片段（hunk 1）
+@@ -起始行,行数 +起始行,行数 @@
+ 修改片段（hunk 2）
+...
+```
+在diff格式中，减号(-)表示要删除的行，加号(+)表示要添加的行。
+优化后的提示词：
+
+## Unified Diff 内容生成规范
+
+### 核心要求
+1. **精准修改**：只输出实际发生代码变更的 hunk，移除未修改的上下文行
+2. **保持行号**：严格基于原始代码行号进行定位和修改
+3. **无额外内容**：不添加注释、假设或解释性文字
+
+### 生成规则
+- **范围精确**：每个 hunk 必须使用最小必要的行号范围（`@@ -起始行,行数 +起始行,行数 @@`）
+- **拆分原则**：当多个独立修改点相距较远时，拆分为多个 hunk
+- **内容精简**：删除所有 ` ` 和 ` ` 的未修改行标记
+
+### 输出格式
+1.说明diff输出格式
+2.返回diff数据:
+```diff
+@@ -原起始行,原行数 +新起始行,新行数 @@
+ 需要删除的原始行（以 - 开头）
++需要添加的新行（以 + 开头）
+```
+
+### 工作流程
+1. **分析需求**：理解当前代码功能与目标需求
+2. **定位修改**：确定必须修改的具体代码行
+3. **最小变更**：仅修改必要的代码行，保持其余部分不变
+4. **必须解释输出格式**：说明diff输出格式
+5. **格式验证**：确保输出符合标准的 Unified Diff 格式
+6. **内容过滤**：移除所有未实际修改的上下文行
+
+### 禁止事项
+- 添加注释或说明性文字
+- 包含未修改的代码行作为上下文
+- 使用假设性修改
+- 改变原始行号对应关系
+
+### 示例
+**错误示例**（包含未修改行）：
+```diff
+@@ -10,7 +10,7 @@
+   line8
+   line9
+- old_line10
++ new_line10
+   line11
+   line12
+```
+
+**正确示例**：
+```diff
+@@ -10,1 +10,1 @@
+- old_line10
++ new_line10
+```
+
+
+# 支持的API指令集
+| 函数名 | 参数 | 参数说明 | 函数功能 |
+|-------|------|----------|----------|
+| clickTripleMain | browser, target, waitSecond=None | browser: 浏览器对象<br>target: 目标元素标识<br>waitSecond: 可选等待时间 | 处理点击事件，支持坐标或元素标识定位 |
+| sendTripleMain | browser, target, keys | browser: 浏览器对象<br>target: 目标元素标识<br>keys: 要输入的文本 | 处理文本输入事件，支持坐标或元素标识定位 |
+| selectTripleMain | browser, target, option | browser: 浏览器对象<br>target: 目标元素标识<br>option: 选项元素标识 | 处理下拉框选择事件，支持多种定位方式 |
+| moveMouseTripleMain | browser, target | browser: 浏览器对象<br>target: 目标元素标识 | 处理鼠标移动事件，支持坐标或元素标识定位 |
+| saveDataTripleMain | browser, target, verify_data | browser: 浏览器对象<br>target: 目标元素标识<br>verify_data: 验证数据 | 保存历史数据 |
+| verifyTripleMain | browser, target, verify_data | browser: 浏览器对象<br>target: 目标元素标识<br>verify_data: 验证数据 | 验证元素数据 |
+| getElementMain | browser, target | browser: 浏览器对象<br>target: 目标元素标识 | 根据ID获取元素信息 |
+# 知识
+`browser` 是浏览器操作对象,例如:
+```python
+def run(browser, target="Me", **kwargs):
+...
+```
+''')
+
+
+tpl_python_code_modifier,psr_diff
+// 返回处理结果
+assign("finalResult", '{{tpl_python_code_modifier}}')
+define("tpl_python_code_modifier", '''
+{{system_prompt}}
+
+# User Input:
+{{input_data}}
+
+# 需求描述:
+{{userInput}}
+
+
+''')

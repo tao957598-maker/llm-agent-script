@@ -1,0 +1,75 @@
+/*
+{
+	"title":"费用审批流程",
+	"description":"先提交给PM审批，然后提交给财务总监审批",
+	"tag":"OA",
+	"uiEntrance":"daily_fee_apply_form",
+	"displayOrder":0,
+	"version":5
+}
+*/
+// 第一个审批节点：项目经理(PM)审批
+approve('n_pm_approval', '''
+{
+    "assigneeConfig": {
+        "type": "ROLE",
+        "strategy": "ALL",
+        "targets": [
+            {
+                "targetType": "USER_ID",
+                "value": "1,2"
+            }
+        ]
+    },
+    "formKey": "n_expense_report_form",
+    "dueDateUnit": "DAYS"
+}
+
+	{
+	    "assigneeConfig": {
+	        "type": "ROLE",
+	        "strategy": "ALL",
+	        "targets": [
+	            {
+	                "targetType": "USER_ID",
+	                "value": 1
+	            }
+	        ]
+	    },
+	    "formKey": "n_expense_report_form",
+	    "dueDateUnit": "DAYS"
+	}
+''')
+
+// 第二个审批节点：财务总监审批
+approve('n_financial_director_approval', '''
+{
+    "assigneeConfig": {
+        "type": "ROLE",
+        "strategy": "ALL",
+        "targets": [
+            {
+                "targetType": "USER_ID",
+                "value": "1,2"
+            }
+        ]
+    },
+    "formKey": "n_expense_report_form",
+    "dueDateUnit": "DAYS"
+}
+
+	{
+	    "assigneeConfig": {
+	        "type": "ROLE",
+	        "strategy": "ALL",
+	        "targets": [
+	            {
+	                "targetType": "USER_ID",
+	                "value": 1
+	            }
+	        ]
+	    },
+	    "formKey": "n_expense_report_form",
+	    "dueDateUnit": "DAYS"
+	}
+''')

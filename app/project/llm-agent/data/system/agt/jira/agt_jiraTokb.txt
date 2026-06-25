@@ -1,0 +1,168 @@
+/*
+{
+	"title":"Export Jira to knowledge base",
+	"description":"Export Jira data to kb_testcase for test case management",
+	"parameter":"{\"name\":\"issueKey\",\"label\":\"Jira keys,spilt by `,`\"}",
+	"tag":"Automated Testing",
+	"resultPlan":"result,n_jira_save,n_issueKey_list,task_result",
+	"life":100,
+	"displayOrder":51,
+	"version":1
+}
+*/
+// Tip
+assign("result", 'Agent is running')
+
+// Query system configuration
+n_jira_config,act_kb.readCfg?type='jira_config'&key='1'
+n_doc_config,act_kb.readCfg?type='doc.path'&key='1'
+assign("jiraConfig", "{{n_jira_config}}")
+
+
+// Check if the issueKey variable has a value
+when('!fn.hasValue(issueKey)', {
+  // issueKey has no value, perform the following actions to get all keys
+  n_jira_get_issue, act_api.doExecute?name="jira_search_issues"&params='{"jira_config":{{jiraConfig}}}'
+  
+  assign("n_issueKey_list", "[]")
+
+  foreach('n_data', 'n_jira_get_issue.data.issues', {
+    // issues_item
+    assign('issues_item', '{{n_data.item}}')
+    // Get the content of the current element
+    assign('issueIdOrKey', '{{issues_item.key}}')
+    act_func?script="n_issueKey_list.add('''{{issues_item.key}}''')"
+  })
+
+}, {
+  // If issueKey has a value, perform the following actions
+  assign("action_result", "issueKey有值，执行默认动作")
+  
+  n_issueKey_list, tpl_spilt_key
+})
+
+
+// Loop through n_issueKey_list
+foreach('n_issueKey', 'n_issueKey_list', {
+    assign('current_issueKey', '{{n_issueKey.item}}')
+    // Get getIssues data
+    n_jira_get_issue, act_api.doExecute?name="jira_get_issue"&params='{"jira_config":{{jiraConfig}},"issue_key":"{{current_issueKey}}"}'
+
+    // n_jira_saven_jira_save
+    n_jira_save, tpl_jira_to_kb
+
+    // application
+    assign('application', '{{n_jira_save[0].application}}')
+    // test_no
+    assign('test_no', '{{n_jira_save[0].test_no}}')
+
+    n_load_target_data, act_kb.select?name='kb_testcase'&where='{"application":"{{application}}","test_no":"{{test_no}}"}'&column='summary,application,language,steps,test_no,expected_result,test_by,test_result'
+    // convert
+    act_kb.convert?data={{n_load_target_data}}&converter=mergeList&storeColumn='summary,application,language,steps,test_no,expected_result,test_by,test_result'&parameters='{"uniqueKey":"application,test_no", "targetData": {{n_jira_save}}}'
+    assign('last_result', '{{sys_last_result}}')
+    act_kb.importData?name=kb_testcase&data={{last_result}}&uniqueKey='application,test_no'
+
+
+
+    // Get the result of task processing
+    assign("task_result", '{{sys_last_result}}')
+})
+// Tip
+assign("result", 'Agent task ended')
+on_failure({
+            assign("result", "Agent task fail")
+        })
+
+act_flow.go?step='end'
+
+
+// 将jira API返回的issue json信息,mapping到对应的mysql数据库字段,数据库元数据如下.
+define('tpl_spilt_key', '''
+	/*{
+	 "llm_type":""
+ }*/
+根据input数据,进行分割,返回markdown json数据.
+- Examples:
+  - input: `llm1,llm2,llm3ll`
+  - 返回数据:
+  ```json
+  ["llm1","llm2","llm3ll"]
+  ```
+# Input
+{{issueKey}}
+
+''')
+
+
+// 将jira API返回的issue json信息,mapping到对应的mysql数据库字段,数据库元数据如下.
+define('tpl_jira_to_kb', '''
+	/*{
+	 "llm_type":""
+ }*/
+- Role: 数据库架构师和API数据映射专家
+- Background: 用户需要将Jira API返回的issue JSON信息映射到MySQL数据库的对应字段，以实现数据的有效存储和管理。
+- Profile: 你是一位精通数据库架构设计和API数据处理的专家，对MySQL数据库和Jira API有着深入的理解和丰富的实践经验，擅长将复杂的JSON数据结构与数据库字段进行精准映射。
+- Skills: 你拥有数据库设计、API数据解析、数据映射技术以及SQL语言的全面掌握，能够高效地将Jira API返回的数据与MySQL数据库字段进行匹配。
+- Goals: 将Jira API返回的issue JSON信息准确地映射到MySQL数据库的对应字段，确保数据的完整性和一致性。
+- Constrains: 遵循数据库设计的最佳实践，确保数据映射的准确性和高效性，同时保证代码的可读性和可维护性。
+- OutputFormat: 返回mapping之后的markdown json数据。
+- Workflow:
+  1. 如果issue JSON数据提示 数据不存在,直接返回`{}`
+  2. 分析Jira API返回的issue JSON数据结构，提取关键字段。
+  3. 根据MySQL数据库的元数据，确定与JSON字段对应的数据库字段。
+  4. 返回的list json数据字段只有: `summary`,`application`,`language`,`steps`,`test_no`,`expected_result`,`test_by`,`jira_no`,`test_result`.
+  5. 返回mapping之后的markdown list json数据。
+- Examples:
+  - 例子1：Jira API返回的issue JSON数据
+    ```json
+    {
+        "summary": "deposit and transfer funds ",
+        "issueType": "任务",
+        "projectKey": "LLMAG",
+        "issueKey": "LLMAG-98",
+        "assigneeName": "",
+        "displayName": "admin",
+        "description": "open url http://gt-tcoe-labs.site:8888/index Type “peter.li” as Username",
+        "attachmentsUri": "http://183.87.33.127:8200/rest/api/latest/issue/10097/attachments",
+        "status": "待办"
+    }
+    ```
+    MySQL数据库元数据:
+    CREATE TABLE `kb_testcase` (
+      `summary` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
+      `application` varchar(50) DEFAULT NULL,
+      `language` varchar(255) DEFAULT NULL,
+      `steps` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
+      `test_no` varchar(50) DEFAULT NULL,
+      `expected_result` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
+      `test_by` varchar(50) DEFAULT NULL,
+      `jira_no` varchar(50) DEFAULT NULL,
+      `test_result` varchar(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC COMMENT='测试用例知识库';
+    映射规则：
+    - Jira JSON字段`summary`映射到数据库字段`summary`
+    - 数据库字段`application`是系统名称,可以从Jira JSON信息提取,若未指定默认`default`
+    - 数据库字段`language`是测试案例语言,可以从Jira JSON字段`description`推测描述的语言属于English,默认`zh`
+    - JSON字段`description`映射到数据库字段`steps`
+    - 数据库字段`test_no`是测试案例编号,可以从Jira JSON信息提取,若未指定默认Jira JSON信息中的`issueKey`对应的值
+    - 数据库字段`expected_result`是测试案例期望结果,可以从Jira JSON信息提取,非必要字段
+    - 数据库字段`test_by`是创建人,可以从Jira JSON信息中`displayName`提取
+    - 数据库字段`jira_no`是jira issueKey,可以从Jira JSON信息中`issueKey`提取
+    - 数据库字段`test_result`是任务结果,可以从Jira JSON信息中`status`提取:`status`状态为`完成`or`Done`,`test_result`为`Pass`;其它情况为空字符串``
+    返回数据json：
+    ```json
+    [{
+      "summary": "deposit and transfer funds",
+      "application": "default",
+      "language": "English",
+      "steps": "open url http://gt-tcoe-labs.site:8888/index Type “peter.li” as Username",
+      "test_no": "LLMAG-98",
+      "expected_result": "",
+      "test_by": "admin",
+      "jira_no": "LLMAG-98",
+      "test_result": ""
+    }]
+    ```
+# issue JSON数据
+{{n_jira_get_issue}}
+''')

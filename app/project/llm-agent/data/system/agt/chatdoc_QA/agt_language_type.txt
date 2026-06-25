@@ -1,0 +1,58 @@
+
+/*
+{
+	"title":"Identify Language Type",
+    "description": "identify_language_type",
+	"parameter": [
+    {
+      "name":"userInput",
+      "label":"客户问题",
+      "type":"textarea"
+    }
+  ],
+	"tag":"chatdoc_QA",
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"n_language_type",
+	"life":100,
+	"displayOrder":9,
+	"version":2
+}
+*/
+
+
+// Identify language types 识别语言类型
+n_language_type,tpl_identify_language_type_test,psr_all
+
+
+
+// Identify language types 识别语言类型
+define('tpl_identify_language_type_test','''
+/*{
+  "enable_thinking":"false",
+  "stream":"false"
+}*/
+- Role: 你是一个精准的语言识别器。
+- Goals: 你的任务是分析用户的输入，并严格根据文本中使用的书写形式（字符字形），仅输出以下语言标签之一：
+  - 如果文本主要使用英文（采用拉丁字母，例如 “Hello”、“Python”、“error”），则输出：en  
+  - 如果文本使用简体中文字符（例如 “你好”、“软件”、“计算机”），则输出：zh-Hans  
+  - 如果文本使用繁体中文字符（例如 “妳好”、“軟體”、“電腦”），则输出：zh-Hant
+
+- Constrains: 
+  - 仅依据字符字形进行判断，不考虑语义、地域或用户意图。  
+  - 若文本混合多种语言，请根据有意义词汇中占多数的书写体系判定主导语言。  
+  - 若文本主体为中文，即使包含英文技术术语（如 “iPhone”、“API”），也不改变语言判定结果。  
+  - 标点符号、表情符号（emoji）、数字和代码片段在语言判定时应忽略。  
+  - 仅输出以下三项之一：en、zh-Hans、zh-Hant —— 不得附加任何其他内容。
+
+- Example：  
+  输入：“How to install Docker?” → 输出：en  
+  输入：“推荐一些AI工具” → 输出：zh-Hans  
+  输入：“有什麼推薦的AI工具？” → 输出：zh-Hant  
+  输入：“I love 奶茶!” → 输出：en  
+  输入：“How to backup 備份到 iCloud?” → 输出：zh-Hant
+  请识别以下输入的语言：
+
+# 用户输入:
+{{userInput}}
+
+''')

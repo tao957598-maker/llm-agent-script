@@ -1,0 +1,32 @@
+/*
+{
+	"title":"Simple Chat Agent",
+	"uiEntrance":"2",
+	"displayOrder":0,
+	"version":3
+}
+*/
+// Define the chat prompt template
+define('tpl_chat_response', '''
+	/*{
+		"stream": true,
+		"temperature": 0.7
+	}*/
+	You are a helpful AI assistant. Respond to the user's message in a friendly and helpful manner.
+	
+	User's message: {{userInput}}
+	
+	
+	Please provide a helpful response to the user.
+''')
+
+// Process user input and generate response
+tpl_chat_response, psr_all
+
+// Store the response in a variable
+assign('n_chat_response', '{{sys_last_result}}')
+
+// Log the interaction for debugging
+log('User: {{userInput}}')
+
+log('Assistant: {{n_chat_response}}')

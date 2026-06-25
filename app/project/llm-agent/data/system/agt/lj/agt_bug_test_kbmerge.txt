@@ -1,0 +1,53 @@
+/*
+{
+	"title":"agt_bug_test_kbmerge",
+	"description":"测试kb.merge特殊字符后端转换错误的问题-lj",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"displayOrder":0,
+	"version":1
+}
+*/
+assign("output_string",'''
+1. Navigate to the URL: http://189.1.224.215:8888/index .
+2. Enter "peter.li" in the username field.
+3. Enter "gientech@123" in the password field.
+4. Click the sign-in button.
+5. Click the "Go to Deposit" button.
+6. Select "Savings" for accountType.
+7. Enter "2580" in the deposit amount field.
+8. Click the "Deposit" button.
+9. Click the "View Details" of "Savings Balance".
+10. Click on the "Transfer" menu.
+11. Click on the "To Someone Else" menu item.
+12. Select "Mr. James" in the recipientName field.
+13. Select "Primary" from the accountType dropdown.
+14. Input "2580" into the amount field.
+15. Click the "Transfer" button to transfer the funds.
+16. Click on the "Me" menu.
+17. Click "Logout" to log out of the system."
+''')
+assign("test_no","CloudBank-01")
+assign("system","CloudBank")
+assign("version","1")
+//#   graph_content值里有双引号 （双引号包含双引号）
+act_kb.merge?name=kb_testcase&columnValues='{"steps":"{{output_string}}"}'&where='{"test_no":"{{test_no}}","application":"{{system}}","version":"{{version}}"}'
+
+
+// assign("a_data_item",'{"properties":{"directory_id":"25f48f2987b4fa980d4915d582053436","current_uri":"/admin/admin/dashboard/","relationKey":"directory_id"},"subNode":[{"properties":{"directory_id":"c84684a51ce43a65480780204f25b943","current_uri":"/admin/catalog/product/","relationKey":"directory_id"},"relationProps":{"current_uri":"/admin/admin/dashboard/","target_uri":"/admin/catalog/product/","run_steps":"[[type:click, target:id_238042788, msg:点击【Catalog】导航到目录页面], [type:click, target:id_2203330583, msg:点击[Products]]]","relationType":"inherit"}}]}')
+assign("a_data_item",'''
+{"properties":{"directory_id":"0ad17840dbd71726618c434a95eae019","current_uri":"/admin/catalog/category/","relationKey":"directory_id"},"subNode":[{"properties":{"directory_id":"d331de7aaab0b6ede415f095066e017b","current_uri":"/admin/catalog/category/edit/id/38/","relationKey":"directory_id"},"relationProps":{"current_uri":"/admin/catalog/category/","target_uri":"/admin/catalog/category/edit/id/38/","run_steps":"[[type:click, target:id_1519360227, msg:点击【What's New (ID: 38) (0)】查看新品分类]]","relationType":"inherit"}}]}
+''')
+assign("z_biz_id","c0c1666755532878613d8ab1a94ffbea") 
+
+//#   graph_content值里有单引号 （单引号包含单引号）
+// act_kb.update?name=kb_spiderdeep_directory&columnValues="{'graph_content':'{{fn.str(a_data_item)}}'}"&where='{"biz_id":"{{z_biz_id}}"}'
+
+// 报错-转义
+assign("column_values_json","""
+{"end_uri":"/end/page","add_status":"1","python_code":"print('execute test step')","start_uri":"/start/page","system_name":"pamp_demo_system","test_no":"TC_20260331_001","steps":"打开页面并提交表单","collect_data":{"field":"value","source":"workflow_test"}}
+""")
+assign("where_json","""
+{"system_name":"pamp_demo_system","test_no":"TC_20260331_001","steps":"打开页面并提交表单"}
+""") 
+n_save_result, act_kb.merge?name=kb_test_steps_result_data&columnValues={{column_values_json}}&where={{where_json}}

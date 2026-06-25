@@ -1,0 +1,93 @@
+/*
+{
+	"title": "AI-Powered Python Code Optimizer",
+	"description": "Next-gen AI assistant for intelligent Python code transformation and enhancement",
+	"parameter": [
+		{
+			"name": "userInput",
+			"label": "用户输入"
+		},
+		{
+			"name": "textContent",
+			"label": "文本内容"
+		}
+	],
+	"tag": "Text Processing",
+	"version": "1"
+}
+*/
+
+// Use selenium
+assign('pythonType', 'selenium')
+
+// Get triple cms
+n_data, act_rpa.send?command=getFunctionData&parameters='{{fn.json("pythonType, pythonType")}}'
+
+
+// Triple CMS
+assign('triple_cms', '{{n_data}}')
+
+
+assign('system_prompt', '''
+# 输出格式要求:
+注意一个 完整的 Unified Diff 文件，结构是：
+```diff
+--- a/文件名
++++ a/文件名
+@@ -起始行,行数 +起始行,行数 @@
+ 修改片段（hunk 1）
+@@ -起始行,行数 +起始行,行数 @@
+ 修改片段（hunk 2）
+...
+```
+在diff格式中，减号(-)表示要删除的行，加号(+)表示要添加的行。
+## `Unified Diff `内容精简要求
+对于不需要修改的 hunk 不应该出现在返回的`diff`结果中
+只应该修改实际存在的代码行，而不应该添加任何额外的注释或假设内容。
+可以拆分成多个更精确的hunk。对于只需要修改多行的情况，应该使用更精确的行号范围：
+
+# Workflow:
+  1. 详细阅读用户提供的代码和需求描述，理解代码的当前功能和用户期望的功能。
+  2. 分析代码中存在的问题或需要改进的地方，确定修改的方向和方法。
+  3. 对代码进行修改和优化，确保代码能够满足用户的需求，并进行测试验证。
+  4. 需要基于提供的代码和行号(行内容标记:`@@ 开始行号,共几行 @@`),选取对应的行号和内容进行修改,行号保持不变
+  5. 返回标准的Unified Diff 格式应该包含行号信息,markdown格式。
+
+# 支持的API指令集
+| 函数名 | 参数 | 参数说明 | 函数功能 |
+|-------|------|----------|----------|
+| clickTripleMain | browser, target, waitSecond=None | browser: 浏览器对象<br>target: 目标元素标识<br>waitSecond: 可选等待时间 | 处理点击事件，支持坐标或元素标识定位 |
+| sendTripleMain | browser, target, keys | browser: 浏览器对象<br>target: 目标元素标识<br>keys: 要输入的文本 | 处理文本输入事件，支持坐标或元素标识定位 |
+| selectTripleMain | browser, target, option | browser: 浏览器对象<br>target: 目标元素标识<br>option: 选项元素标识 | 处理下拉框选择事件，支持多种定位方式 |
+| moveMouseTripleMain | browser, target | browser: 浏览器对象<br>target: 目标元素标识 | 处理鼠标移动事件，支持坐标或元素标识定位 |
+| saveDataTripleMain | browser, target, verify_data | browser: 浏览器对象<br>target: 目标元素标识<br>verify_data: 验证数据 | 保存历史数据 |
+| verifyTripleMain | browser, target, verify_data | browser: 浏览器对象<br>target: 目标元素标识<br>verify_data: 验证数据 | 验证元素数据 |
+| getElementMain | browser, target | browser: 浏览器对象<br>target: 目标元素标识 | 根据ID获取元素信息 |
+# 知识
+`browser` 是浏览器操作对象,例如:
+```python
+def run(browser, target="Me", **kwargs):
+...
+```
+''')
+
+assign('input_data', '''
+# 原始代码:
+{{textContent}}
+
+# 需求描述:
+{{userInput}}
+''')
+tpl_python_code_modifier,psr_diff
+// 返回处理结果
+assign("finalResult", '{{tpl_python_code_modifier}}')
+define("tpl_python_code_modifier", '''
+# 原始代码:
+{{textContent}}
+
+# 需求描述:
+{{userInput}}
+
+{{fn.chatFlag('%{system_prompt}%', 'userInput', '', '', 10)}}
+
+''')

@@ -1,0 +1,46 @@
+/*
+{
+	"title": "Generate Agent code templates",
+	"description": "Automatically generate Agent code templates",
+	"parameter": [
+         {
+            "name":"userInput",
+            "label":"客户问题",
+            "type":"textarea"
+         }
+	 ],
+	"llm_type": "",
+	"life": "100"
+    "uiEntrance": "chatDoc",
+    "tag":"chatdoc"
+}
+*/
+
+
+// 定义提示词-智能模板
+assign('system_prompt', '''
+   你是一个智能生成Agent模板助手，根据用户问题识别是否创建Agent或Agent Code或Agent模板,如果是，返回true，否则false。
+   输出模板（boolean类型）：true或false
+''')
+
+//# Analyze user Question
+tpl_generate_agent,psr_all
+assign('n_create_flag', '{{tpl_generate_agent}}')
+log("n_create_flag={{n_create_flag}}")
+
+when("n_create_flag=='true' || n_create_flag", {
+    //# generate agent code demo
+    n_template_txt,act_func.read?filename='system/agt/template/agt_common_template.md'
+},{
+    //# Sorry, I am an intelligent agent template assistant, and the current issue is not within my scope of responsibility.
+    log("Sorry, I am an intelligent agent template assistant, and the current issue is not within my scope of responsibility.")
+})
+
+
+// 定义chat,与大模型交互 传入变量python_code,这里使用jinja模板语法{{}}
+define('tpl_generate_agent', '''
+    Customer's Question：
+    {{userInput}}
+
+    {{fn.chatFlag('%{system_prompt}%', '', '', '', 10)}}
+''')

@@ -1,0 +1,62 @@
+/*{
+  "title": "检查Maven环境",
+  "description": "检查 Maven 环境是否安装，如未安装则自动安装",
+  "parameter": [
+    {
+      "name": "os",
+      "label": "操作系统",
+      "required": true
+    },
+    {
+      "name": "server_id",
+      "label": "服务器ID"
+    }
+  ],
+  "resultPlan": "n_mvn_plan_result",
+  "discoverable": false,
+  "life": "100"
+}*/
+
+assign('n_log', '')
+assign('n_mvn_bin_path', '')
+
+// 检查 Maven 环境（直接用 which mvn 找）
+n_mvn_path, agt_cmd_executor.assistant?cmd='which mvn 2>/dev/null || echo "NOT_FOUND"'&cmd_executor_name="检查Maven版本"&server_id={{server_id}}
+assign('n_mvn_found', '{{fn.contains(n_mvn_path, "/mvn") && !fn.contains(n_mvn_path, "NOT_FOUND")}}')
+when('fn.bool(n_mvn_found)', {
+  // 找到 Maven - 提取 Maven home 目录
+  n_mvn_home, act_func?script='''
+    def mvnCmd = n_mvn_path ?: ""
+    if (mvnCmd.endsWith("/bin/mvn")) {
+      return mvnCmd.substring(0, mvnCmd.length() - 8)
+    } else if (mvnCmd.endsWith("/mvn")) {
+      return mvnCmd.substring(0, mvnCmd.length() - 4)
+    }
+    return mvnCmd
+  '''
+  assign('n_mvn_bin_path', '{{n_mvn_home}}/bin')
+  assign('n_log', '{{n_log}}\n✓ 找到 Maven: {{n_mvn_bin_path}}')
+  // 返回成功
+  assign("n_mvn_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_mvn_bin_path}}","is_plan_break":"false"}')
+}, {
+  // Maven 若未找到，尝试安装
+  when('n_os == "windows"', {
+    assign('n_mvn_install_cmd', 'winget install --id Apache.Maven -e --source winget || choco install maven -y')
+  }, {
+    assign('n_mvn_install_cmd', 'sudo apt-get update && sudo apt-get install -y maven || sudo yum install -y maven || (mkdir -p /opt && curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz -o /tmp/maven.tar.gz && tar -xzf /tmp/maven.tar.gz -C /opt && rm /tmp/maven.tar.gz && echo "/opt/apache-maven-3.9.6/bin")')
+  })
+  n_mvn_install_result, agt_cmd_executor.assistant?cmd={{n_mvn_install_cmd}}&cmd_executor_name="安装Maven"&server_id={{server_id}}
+  // 再次检查 Maven (安装后）
+  n_mvn_install_path, agt_cmd_executor.assistant?cmd='which mvn 2>/dev/null || echo "NOT_FOUND"'&cmd_executor_name="再次检查Maven"&server_id={{server_id}}
+  assign('n_mvn_install_ok', '{{fn.contains(n_mvn_install_path, "/mvn") && !fn.contains(n_mvn_install_path, "NOT_FOUND")}}')
+  when('fn.bool(n_mvn_install_ok)', {
+    assign('n_log', '{{n_log}}\n✓ Maven 安装完成')
+    assign('n_mvn_bin_path', '/opt/apache-maven-3.9.6/bin')
+    // 返回成功
+    assign("n_mvn_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_mvn_bin_path}}","is_plan_break":"false"}')
+  }, {
+    assign('n_log', '{{n_log}}\n❌ Maven 未安装且无法自动安装')
+    // 返回失败
+    assign("n_mvn_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"true"}')
+  })
+})

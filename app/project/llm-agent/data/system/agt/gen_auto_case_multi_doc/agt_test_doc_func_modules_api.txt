@@ -1,0 +1,118 @@
+/*
+{
+	"title":"API functional decomposition",
+	"description":"Decompose API specification text into module/submodule tree (parallel to Web func_modules)",
+	"parameter":"{\"name\":\"input_data\",\"label\":\"Knowledge space path\"},{\"name\":\"outputLanguage\",\"label\":\"Output Language\",\"type\":\"select\",\"defaultValue\":\"en\",\"args\":[{\"label\":\"English\",\"value\":\"en\"},{\"label\":\"Chinese\",\"value\":\"zh\"},{\"label\":\"Traditional Chinese\",\"value\":\"tw\"}]}",
+	"llmType":"alias.highquality",
+	"resultPlan":"result_functional",
+	"life":10000,
+	"version":3
+}
+*/
+when('!fn.hasValue(input_data)', {
+  n_empty_result,act_func?script='return [platform:"DEMO-platform", modules:[]]'
+  assign("result_functional", '{{n_empty_result}}')
+},{
+n_dbg_fm_api_in,act_func?script='println("[agt_test_doc_func_modules_api] input_data_present=true"); return ""'
+
+assign('lang_output_text', '{{fn.optional(outputLanguage, "en")}}')
+when('outputLanguage == "zh"', {
+  assign('lang_output_text', '中文')
+})
+when('outputLanguage == "tw"', {
+  assign('lang_output_text', '繁體中文')
+})
+when('outputLanguage == "en"', {
+  assign('lang_output_text', 'English')
+})
+
+// 压缩输入，避免 API 契约文本直接送入 LLM 导致超 token
+n_func_modules_api_compact_input,act_func?script='''
+    def clip = { v, maxLen ->
+        def s = v == null ? "" : v.toString().trim()
+        if (!s) return ""
+        return s.length() <= maxLen ? s : s.substring(0, maxLen)
+    }
+    def takeList = { v, maxItems, itemLen ->
+        def out = []
+        if (v instanceof List) {
+            for (int i = 0; i < v.size() && i < maxItems; i++) {
+                def t = clip(v.get(i), itemLen)
+                if (t) out.add(t)
+            }
+        } else {
+            def t = clip(v, itemLen)
+            if (t) out.add(t)
+        }
+        return out
+    }
+    def rows = input_data
+    if (rows == null) return []
+    if (!(rows instanceof List)) rows = [rows]
+    def out = []
+    rows.each { item ->
+        if (!(item instanceof Map)) return
+        out.add([
+            platform: clip(item.get("platform"), 60),
+            source_type: clip(item.get("source_type"), 20),
+            section: clip(item.get("section"), 120),
+            title: clip(item.get("title"), 180),
+            description: clip(item.get("description"), 360),
+            business_rules: takeList(item.get("business_rules"), 5, 140),
+            acceptance_criteria: takeList(item.get("acceptance_criteria"), 5, 140),
+            dependencies: takeList(item.get("dependencies"), 4, 80),
+            page: clip(item.get("page"), 40),
+            source: clip(item.get("source") ?: item.get("source_ref"), 120)
+        ])
+    }
+    return out
+'''
+n_dbg_fm_api_compact,act_func?script='println("[agt_test_doc_func_modules_api] compact_input_size=" + (n_func_modules_api_compact_input instanceof List ? n_func_modules_api_compact_input.size() : 0)); return ""'
+
+n_get_functional, tpl_get_functional_api, psr_json
+assign("result_functional", '{{n_get_functional}}')
+})
+
+define('tpl_get_functional_api', '''
+You are generating a compact API module tree for test-case generation.
+
+Goal:
+- Convert API functional summary input into a stable JSON module tree.
+- Keep output bounded and contract-focused.
+
+Hard rules:
+1. Output JSON only.
+2. Output language: {{lang_output_text}}.
+3. `platform` must be exactly `DEMO-platform`.
+4. Do not invent endpoints or modules not supported by the input.
+5. Prefer concrete endpoint/action names over broad service-area names.
+6. A submodule should usually represent one testable API surface, such as `METHOD path`.
+7. Do not create many parallel modules from one endpoint by paraphrase.
+8. Keep descriptions short and focused on contract evidence: auth, params, status codes, errors.
+9. Preserve `page` and `source`. If `source` contains `fileName#PageN`, keep that format.
+
+Output format:
+```json
+{
+  "platform": "DEMO-platform",
+  "modules": [
+    {
+      "name": "Login",
+      "page": "1",
+      "source": "Page1 or fileName#Page1",
+      "submodules": [
+        {
+          "name": "POST /api/auth/login",
+          "description": "Contract + key validations",
+          "page": "1",
+          "source": "Page1 or fileName#Page1"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Input data:
+{{n_func_modules_api_compact_input}}
+''')

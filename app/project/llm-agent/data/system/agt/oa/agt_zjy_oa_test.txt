@@ -1,0 +1,49 @@
+/*
+{
+	"title":"zjy_OA请假流程",
+	"description":"小组长-->经理",
+	"tag":"OA",
+	"uiEntrance":"7",
+	"displayOrder":0,
+	"version":73
+}
+*/
+// 组长
+approve('approve_1_1', '''
+{
+    "assigneeConfig": {
+        "type": "STATIC",
+        "strategy": "ANY",
+        "targets": [
+            {
+                "targetType": "ROLE_NAME",
+                "value": "250724119964827648",
+                "description": "财务总监"
+            }
+        ]
+    },
+    "formKey": "n_leave_form",
+    "commentRequired": false,
+    "dueDateUnit": "DAYS"
+}
+''')
+
+// 经理
+approve('n_hr_approval', '''
+{
+    "assigneeConfig": {
+        "type": "ROLE",
+        "strategy": "ANY",
+        "targets": [
+            {
+                "targetType": "ROLE_NAME",
+                "value": "250724109370015740",
+                "description": "项目经理"
+            }
+        ]
+    },
+    "formKey": "n_leave_form",
+    "commentRequired": false,
+    "dueDateUnit": "DAYS"
+}
+''')

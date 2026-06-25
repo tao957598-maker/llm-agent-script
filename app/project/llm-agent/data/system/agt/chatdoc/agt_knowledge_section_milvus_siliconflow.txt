@@ -1,0 +1,369 @@
+/*
+{
+	"title": "knowledge space sections-operation",
+	"description": "knowledge space sections-operation",
+    "parameter": [
+                    {
+                        "name":"sectionIds",
+                        "label":"切片ids",
+                        "type":"textarea"
+                    },
+					{
+                        "name":"knowledgeId",
+                        "label":"知识id",
+                        "type":"textarea"
+                    },
+					{
+                        "name":"content",
+                        "label":"切片内容",
+                        "type":"textarea"
+                    },
+					{
+                        "name":"operation",
+                        "label":"操作类型(1.切片向量化  2.新增切片信息  3.根据知识（id，orderByNum）或sectionIds找到对应的切片数据 4.根据对话，找到匹配的只是空间向量数据 5.对话检索-ink 6.文档切片向量化 7.回调切片数据 8.根据对话，找到匹配的只是专家知识向量数据)",
+                        "type":"textarea"
+                    },
+					{
+                        "name":"question",
+                        "label":"对话内容",
+                        "type":"textarea"
+                    },
+					{
+                        "name":"value",
+                        "label":"参数类型(folderName、folderIds、knowledgeIds、sectionIds值)",
+                        "type":"textarea"
+                    },
+					{
+                        "name":"knowledgeName",
+                        "label":"知识名称",
+                        "type":"textarea"
+                    },
+                    {
+                         "name":"bm25Weight",
+                         "label":"bm25权重",
+                         "type":"textarea"
+                    },
+                    {
+                         "name":"isRerank",
+                         "label":"是否二次Rerank",
+                         "type":"textarea"
+                    },
+                    {
+                         "name":"isReferenceGraph",
+                         "label":"是否关联图谱",
+                         "type":"textarea"
+                     },
+                     {
+                          "name":"isTest",
+                          "label":"是否测试",
+                          "type":"textarea"
+                     }
+    			],
+    "llmType": "",
+    "resultPlan": "",
+    "uiEntrance": "chatdoc",
+	"tag":"chatdoc"
+} */
+
+// 单个切片向量化
+when("operation==1", {
+    // 切片向量化
+    foreach('n_loop_id', 'sectionIds', {
+        assign('sectionId', '{{n_loop_id.item}}')
+
+        // 1.找到切片数据
+        n_data,act_kb.select?name='kb_spaces_knowledge_section'&maxSize=1&where='{"id":"{{n_loop_id.item}}"}'
+
+        n_update_data,act_func?script='''
+                                        def data = n_data[0];
+                                        data.put("id", n_loop_id.item+"")
+                                        data.put("status", "1")
+                                        data.put("update_time","now")
+                                        data.put("page",data.page +"")
+                                        if(null != data.meta_data && data.meta_data != ""){
+                                            def meta_data_map = fn.map(data.meta_data)
+                                            def title = meta_data_map?.title ?: ""
+                                            def keywords = fn.list(meta_data_map?.keywords)
+                                            def keywordsStr = (keywords ?: []).join(",")
+                                            def description = meta_data_map?.description ?: ""
+                                            def content = [title, keywordsStr, description, data.raw_content]
+                                                .findAll { it }  // 过滤 null 或空字符串
+                                                .join("""\n""")     // 用换行拼接
+                                            data.put("content", content)
+
+                                            // 去掉特殊字符（只去一次）
+                                            // 这里一定要\\\\,如果传给java时，那么就少了一层即变成了一个 。也就说传给java后一定时转义字符 （agent groovy script->解码-java->groovy shell(只接受转义字符)
+                                            def regex = "# Below is[\\\\s\\\\S]*?(?:Now begins the content of this block\\\\.?[：:]\\\\r?\\\\n|overlapping row\\\\(s\\\\) from the next block[：:]\\\\r?\\\\n)"
+                                            def contentNew = fn.replaceFirst(content, regex, "")
+                                            data.put("content", contentNew)
+                                        }else{
+                                            if(null != data.raw_content && data.raw_content != ""){
+                                                data.put("content",data.raw_content)
+                                            }
+                                        }
+                                        return data
+                                    '''
+        // 2.将切片数据修改状态，并向量化
+        act_kb.merge?name='kb_spaces_knowledge_section'&columnValues={{n_update_data}}&where='{"id":{{n_loop_id.item}}}'&addColumnsMilvus=true&embedding=true
+    })
+
+    assign('last_result', '{{sys_last_result}}')
+})
+
+when("operation==2",{
+    // 新增切片
+    // 1.找到对应的知识信息，获取相关参数
+    n_data,act_kb.selectBy?sql='select * from kb_spaces_knowledge_section where document_id = ? order by id desc limit 1'&parameters='{{knowledgeId}}'
+    n_import_data,act_func?script='''
+                                            def data = n_data[0];
+                                            data.remove("id")
+                                            data.put("status", "0")
+                                            data.put("meta_data", meta_data)
+                                            data.put("raw_content", raw_content)
+                                            data.put("update_time","now")
+                                            data.put("page", (Integer.parseInt(String.valueOf(data.page)) + 1 ) + "")
+                                            return data
+                                        '''
+    // 2.保存db数据信息
+    act_kb.importData?name='kb_spaces_knowledge_section'&data={{n_import_data}}&embedding=false
+    assign('last_result', '{{sys_last_result}}')
+})
+
+when("operation==3",{
+    // 切片查询
+    when("sectionIds=='' || sectionIds==null",{
+        assign('doSql', 'select skis.*,ksfk.knowledge_name,ksfk.extension,ksfk.store_uri,p.imagePath from kb_spaces_knowledge_section skis inner join kb_spaces_folder_knowledge ksfk on skis.document_id = ksfk.id left join kbs_doc_page_parse p on p.documentId = ksfk.id and p.page=skis.page where skis.document_id = ? and order_by_num = ? ')
+        assign('doSqlParams', '{{knowledgeId}},{{orderByNum}}')
+    },{
+         n_where_quote,act_func?script='''
+                        def quote = ""
+                        def length = sectionIds.split(",").size()
+                        for(int i = 0; i < length; i++){
+                            if(i == 0){
+                                quote = "?"
+                            } else{
+                                quote = quote+",?"
+                            }
+                        }
+                        return quote
+                    '''
+        assign('doSql', 'select skis.*,ksfk.knowledge_name,ksfk.extension,ksfk.store_uri,p.imagePath from kb_spaces_knowledge_section skis inner join kb_spaces_folder_knowledge ksfk on skis.document_id = ksfk.id left join kbs_doc_page_parse p on p.documentId = ksfk.id and p.page=skis.page where skis.id in ({{n_where_quote}})')
+        assign('doSqlParams', '{{sectionIds}}')
+    })
+    // 1.找到对应的知识信息，获取相关参数
+    n_data,act_kb.selectBy?sql={{doSql}}&ql='onlyOneParameters'&parameters='{{doSqlParams}}'
+
+    n_merge_data,act_kbs.removeProp?params='{{n_data}}'&properties='emb_rerank,emb_content'
+
+    // 2.找到文件对应的知识
+    // n_kn_data,act_kb.select?name='kb_spaces_folder_knowledge'&maxSize=1&where='{"id":{{n_merge_data[0].document_id}}}'
+
+    // 2.加载对应的html文件
+    // n_file_data,act_kbs.readFile?name={{n_kn_data[0].store_uri}}
+
+    n_first_data,act_func?script='''
+        // def data = n_merge_data[0]
+        def data = n_merge_data
+        // data.put("html", n_file_data)
+        return data
+    '''
+
+    assign('last_result', '{{n_first_data}}')
+})
+
+when("operation==4 || operation==8",{
+    n_knowledge_ids,act_func?script='''
+        def items = new ArrayList()
+        return items
+    '''
+
+    // 对话检索
+    when("fn.hasValue(value)",{
+        // 找到目录对应的知识id
+        n_data,act_kbs.callQuestionKnowledges?callType={{callType}}&value={{value}}
+    })
+
+    when("fn.hasValue(n_data)",{
+        // 添加目录对应的知识id
+        act_func?script='''
+                            n_knowledge_ids.addAll(n_data)
+                       '''
+    })
+
+    when("fn.hasValue(knowledgeIds)",{
+        // 添加指定文件对应的id
+        act_func?script='''
+                            n_knowledge_ids.addAll(knowledgeIds)
+                       '''
+    })
+
+    n_has_value,act_func?script='''
+        def list = n_knowledge_ids
+        def size = list.size()
+        return size
+    '''
+
+    when("operation==8",{
+        //2.专家知识检索-向量信息
+        n_result_data,act_kbs.searchFaq?question='{{question}}'&top='10'&bm25Weight={{bm25Weight}}&isRerank='{{isRerank}}'&isReferenceGraph='{{isReferenceGraph}}'&isTest={{isTest}}
+    },{
+        when("n_has_value > 0",{
+            n_filter_data,act_func?script='''
+                    def item = new HashMap()
+                     // logicType 逻辑类型，空字符串表示简单条件，"and"、"or"、"not"表示复杂逻辑
+                    item.put("logicType", "")
+                    item.put("filterValue", n_knowledge_ids)
+                    item.put("operator", "in")
+                    item.put("filterKey", "document_id")
+                    return item;
+                '''
+
+            // 2.知识空间知识检索-向量信息
+            n_result_data,act_kb.search?requirement='{{question}}'&name='kb_spaces_knowledge_section'&top='10'&bm25Weight={{bm25Weight}}&isRerank='{{isRerank}}'&isReferenceGraph='{{isReferenceGraph}}'&filterItem='{{n_filter_data}}'
+        })
+    })
+
+    n_result_parse_data,act_func?script='''
+                        def n_parse_data = n_result_data
+                        for (int i = 0; i < n_parse_data.size(); i++) {
+                            def map = n_parse_data[i]
+                            map.put("id", map.id + "")
+                        }
+                        return n_parse_data
+                    '''
+    assign('last_result', '{{n_result_parse_data}}')
+})
+
+when("operation==5",{
+    // 对话检索-ink
+    // 1.获取向量查询参数
+    n_data,act_kbs.callQuestionKnowledges?callType={{callType}}&value={{value}}&knowledgeNameItems={{knowledgeName}}
+
+    n_has_value,act_func?script='''
+        def list = n_data
+        def size = list.size()
+        return size
+    '''
+
+    when("n_has_value > 0",{
+        n_api_data,act_api.doExecute?name='get_gientech_retrieval'&params='{"question":'{{question}}',"collection":"kb_spaces_knowledge_ink_section","document_id":{{n_data}}}'
+
+        n_merge_data,act_kbs.removeProp?params='{{n_api_data.reference_details}}'&properties='emb_content'
+
+        n_result_data,act_func?script='''
+            def map = new HashMap()
+            map.put("reference_contents", n_api_data.reference_contents)
+            map.put("sections", n_merge_data)
+            return map
+        '''
+        assign('last_result', '{{n_result_data}}')
+    })
+})
+
+// 文件分析切片后，文件进行向量化
+when("operation==6", {
+    // 1.修改知识的状态
+    act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"1"}'&where='{"id":{{kbSpaceFileId}}}'
+
+    // 2.找到切片数据
+    n_data,act_kb.select?name='kb_spaces_knowledge_section'&maxSize=10000&where='{"document_id":"{{kbSpaceFileId}}"}'
+    when("fn.hasValue(n_data)", {
+        n_update_data,act_func?script='''
+                                                List<Map> items = new ArrayList();
+                                                for(int i = 0; i < n_data.size();i++){
+                                                    def data = n_data[i];
+                                                    data.put("status", "1")
+                                                    data.put("update_time","now")
+                                                    data.put("page",data.page +"")
+                                                    if(null != data.meta_data && data.meta_data != ""){
+                                                        def meta_data_map = fn.map(data.meta_data)
+                                                        def title = meta_data_map?.title ?: ""
+                                                        def keywords = fn.list(meta_data_map?.keywords)
+                                                        def keywordsStr = (keywords ?: []).join(",")
+                                                        def description = meta_data_map?.description ?: ""
+                                                        def content = [title, keywordsStr, description, data.raw_content]
+                                                            .findAll { it }  // 过滤 null 或空字符串
+                                                            .join("""\n""")     // 用换行拼接
+
+                                                        // 去掉特殊字符（只去一次）
+                                                        // 这里一定要\\\\,如果传给java时，那么就少了一层即变成了一个 。也就说传给java后一定时转义字符 （agent groovy script->解码-java->groovy shell(只接受转义字符)
+                                                        def regex = "# Below is[\\\\s\\\\S]*?(?:Now begins the content of this block\\\\.?[：:]\\\\r?\\\\n|overlapping row\\\\(s\\\\) from the next block[：:]\\\\r?\\\\n)"
+                                                        def contentNew = fn.replaceFirst(content, regex, "")
+                                                        data.put("content", contentNew)
+                                                    }else{
+                                                        if(null != data.raw_content && data.raw_content != ""){
+                                                            data.put("content",data.raw_content)
+                                                        }
+                                                    }
+                                                    items.add(data);
+                                                }
+                                                return items
+                                            '''
+
+        // 3.将切片数据修改状态，并向量化
+        act_kb.importData?name='kb_spaces_knowledge_section'&data={{n_update_data}}&addColumnsMilvus=true
+
+        // 4.修改知识状态
+        act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"2","update_time":'now',"msg":""}'&where='{"id":{{kbSpaceFileId}}}'
+    },{
+        // 5.修改知识状态-知识向量失败-找不到向量数据
+        act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"vector failed,unable to find slice data that can be vectorized"}'&where='{"id":{{kbSpaceFileId}}}'
+    })
+    on_failure({
+        // 5.修改知识状态-知识向量失败
+        act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"{{sys_failure_task.result}}"}'&where='{"id":{{kbSpaceFileId}}}'
+    })
+    assign('last_result', '{{sys_last_result}}')
+})
+
+when("operation==7", {
+    // 1.调用rag接口，检测切片是否完成
+    n_api_data,act_api.doExecute?name='rag_check_parse_status'&params='{"file_name":'{{fileName}}'}'
+
+    on_failure({
+        // 2.提取异常错误信息
+        n_fail_msg,act_func?script='''
+                                return sys_failure_task.result.substring(sys_failure_task.result.indexOf("_") + 1)
+                            '''
+        when('sys_failure_task.result?starts_with("511") || sys_failure_task.result?starts_with("510")',{
+            // 3.解析失败，解析ocr服务器异常
+            act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"{{n_fail_msg}}"}'&where='{"id":{{knowledgeId}}}'
+            assign('last_result', '{"status":0,"nodeName":"parse","msg":"{{n_fail_msg}}"}')
+        },{
+            // 3.解析失败，其他异常信息
+         act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"{{n_fail_msg}}"}'&where='{"id":{{knowledgeId}}}'
+         assign('last_result', '{"status":0,"nodeName":"parse","msg":"{{sys_failure_task.result}}"}')
+        })
+    })
+
+    when("fn.hasValue(n_api_data) && n_api_data.code==200 && fn.hasValue(n_api_data.relativePath)", {
+        // 2.通过知识id，找到知识对应的数据
+        n_data,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,kb_spaces_folder_id,extension,store_uri,knowledge_name'&maxSize=1&where='{"id":{{knowledgeId}}}'
+        n_first_data,act_func?script='''
+                                return n_data[0]
+                            '''
+        // 3.文档解析成功,解析zip包
+        n_parse_data,act_kbs.parseFile?relativePath='{{n_api_data.relativePath}}'&kbData='{{n_first_data}}'
+
+        when("n_parse_data.success", {
+            // 4.验证是否需要进行分析
+            when("fn.hasValue(analysis_agent) && analysis_agent == 'agt_parse_main.file_parse'",{
+                // 5.调用分析agent
+                agt_parse_main.file_parse?kbSpaceFileId={{knowledgeId}}
+            })
+
+            // 6.解析完成，更新状态
+            act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"2","msg":""}'&where='{"id":{{knowledgeId}}}'
+            assign('last_result', '{"status":2,"nodeName":"parse","msg":""}')
+        },{
+            // 4.解析失败，更新消息
+            act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"{{n_parse_data.msg}}"}'&where='{"id":{{knowledgeId}}}'
+            assign('last_result', '{"status":0,"nodeName":"parse","msg":"{{n_parse_data.msg}}"}')
+        })
+    },{
+        when("!fn.hasValue(last_result)", {
+            assign('last_result', '{"status":1,"nodeName":"parse","msg":""}')
+        })
+    })
+})
+assign('return', '{{last_result}}')

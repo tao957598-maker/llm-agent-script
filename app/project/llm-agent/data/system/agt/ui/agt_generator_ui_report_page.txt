@@ -1,0 +1,125 @@
+/*
+ {
+     "title": "Generate UI report Tool",
+     "description": "Generate UI report tool",
+	 "parameter": [
+     		 {
+     			"name":"requirement",
+     			"label":"用户对话内容"
+     		 },
+     		 {
+                "name":"pageType",
+                "label":"10"
+             }
+     	 ]
+ }
+*/
+
+// 1.检查现有页面列表能否满足需求
+rag_api?name=ui_dev_search&params='{"pageType":{{pageType}}}', tpl_ui_select
+when("tpl_ui_select.pageName=='NEW_PAGE' && fn.hasValue(tpl_ui_select.template)", {
+	// 2.生成新页面属性信息，并保存到db
+	tpl_ui_generator, act_api?name=ui_dev_save&params={{sys_last_result}}
+	assign('n_last_result_data', '{"result":"success","pageName":"{{tpl_ui_generator.pageName}}","msg":"Generation completed"}')
+}, {
+    when("fn.hasValue(tpl_ui_select.pageName) && fn.hasValue(tpl_ui_select.template)", {
+        // 2.页面已存在
+        assign('n_last_result_data', '{"result":"fail","pageName":"{{tpl_ui_select.pageName}}","msg":"Page already exists"}')
+    })
+
+    when("tpl_ui_select.success == 'fail'", {
+        // 2.异常，无法识别用户输入的信息
+        assign('n_last_result_data', '{"result":"fail","msg":"{{tpl_ui_select.remark}}"')
+    })
+});
+
+assign('return', '{{n_last_result_data}}')
+
+define('tpl_ui_select', '''
+	你是一名前端程序开发人员，基于用户的描述，对比现有的页面名称及描述信息，按严格匹配，找出哪个页面能符合用户需求，返回该页面名称及页面类型（如果没有页面，则：pageName:'NEW_PAGE'）。返回结果要求用json格式
+
+    用户需求:
+    {{requirement}}
+
+	现有的页面列表：(注：页面列表中的pageName为页面名称)
+	{{ui_dev_search.data}}
+
+	页面模板类型为template，取值为数字1-3，含义如下：
+    1： 柱形图表
+    2： 饼形图表
+    3： 折线图表
+
+	返回结果示例：
+	{
+		pageName: 'NEW_PAGE'
+		template: '1'
+	}
+
+	异常信息处理：
+    如果无法识别用户的需求，那么返回示例:
+    {
+        success: 'fail',
+        msg: 'Unable to recognize input information',
+        remark: 'xxxxx为什么无法识别'
+    }
+
+    提示：pageCode:不允许重复
+
+''')
+
+define('tpl_ui_generator', '''
+	你是一名程序开发人员，基于模板类型,返回对应的JSON格式数据
+
+	模板类型为：{{tpl_ui_select.template}}
+    请根据模板选择以下返回结果：
+
+	template:1
+	{
+        pageName："柱形图表",
+        pageCode:"chart.bar",
+        pageType: 10,
+        systemUI: {{systemUI}},
+        tag:{{tag}},
+        templateType: 1,
+        description: "柱形图表",
+        metaDataColumns：[
+            {"name":"xAxis", "label":"X轴", "type":"text", "args":"Mon, Tue, Wed, Thu, Fri, Sat, Sun", "required":1, "searchable":0,"sort":1},
+            {"name":"name", "label":"类型名称", "type":"text", "args":"Email, Union Ads, Video Ads, Direct, Search Engine", "required":1, "searchable":1,"sort":2},
+            {"name":"data", "label":"数据", "type":"text", "args":"", "required":1, "searchable":0,"sort":3}
+        ]
+    }
+
+    template:2
+    {
+        pageName："饼形图表",
+        pageCode:"chart.pie",
+        pageType: 10,
+        systemUI: {{systemUI}},
+        tag:{{tag}},
+        templateType: 2,
+        description: "饼形图表",
+        metaDataColumns：[
+            {"name":"name", "label":"类型名称", "type":"text", "args":"Email, Union Ads, Video Ads, Direct, Search Engine", "required":1, "searchable":1,"sort":2},
+            {"name":"data", "label":"数据", "type":"text", "args":"", "required":1, "searchable":0,"sort":3}
+        ]
+    }
+
+    template:3
+    {
+        pageName："折线图表",
+        pageCode:"chart.line",
+        pageType: 10,
+        systemUI: {{systemUI}},
+        tag:{{tag}},
+        templateType: 3,
+        description: "折线图表",
+        metaDataColumns：[
+            {"name":"xAxis", "label":"X轴", "type":"text", "args":"Mon, Tue, Wed, Thu, Fri, Sat, Sun", "required":1, "searchable":0,"sort":1},
+            {"name":"name", "label":"类型名称", "type":"text", "args":"Email, Union Ads, Video Ads, Direct, Search Engine", "required":1, "searchable":1,"sort":2},
+            {"name":"data", "label":"数据", "type":"text", "args":"", "required":1, "searchable":0,"sort":3}
+        ]
+    }
+
+    提示：其中pageName与pageCode可以根据用户的需求，进行生成替换
+
+''')

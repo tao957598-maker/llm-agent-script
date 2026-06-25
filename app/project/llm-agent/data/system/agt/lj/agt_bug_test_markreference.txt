@@ -1,0 +1,14 @@
+/*
+{
+	"title":"agt_bug_test_markreference",
+	"description":"lj测试标记为引用",
+	"parameter":"{\"name\":\"kbSpaceFileId\",\"label\":\"文件ID\",\"type\":\"textarea\"}",
+	"tag":"lj",
+	"displayOrder":0,
+	"version":1
+}
+*/
+// 专家知识引用
+assign("n_expert_data","[{\"id\":\"261324959808716800\",\"similarityScore\":0.96329874,\"sourceTable\":\"sys_expert_knowledge\",\"question\":\"I receive a SMS with the “#” sign but it is not from an authentic bank. What should I do?  我收到了一則發送人名稱含「＃」號的短訊，但它並不是來自真正的銀行。我該怎麼辦？\",\"reference_answer\":\"Once you have checked the authenticity of the SMS, you should report that to your bank or mobile service company.\\n\\n在確認短訊的真實性後，你應該通知你的銀行或流動通訊服務供應商。\"},{\"id\":\"261325070208040960\",\"similarityScore\":0.8773736,\"sourceTable\":\"sys_expert_knowledge\",\"question\":\"Is it ok for an applicant to submit one form as sender of Sender ID sent by its RSSP and also authorise SMS aggregator (with Letter of Authorizations) to register same Sender ID with its downstream RSSP? Or the SMS Aggregator has to be RSSP that the applicant should only submit one form with all RSSP?  申請人是否可以交表登記為發送人，讓其「已登記短訊服務供應商」可使用某個「已登記的短訊發送人名稱」，同時又授權短訊聚合商（連同授權書）交表登記，讓聚合商所合作的「已登記短訊服務供應商」亦可使用該「短訊發送人名稱」？還是短訊聚合商必須登記為「已登記短訊服務供應商」，而申請人只可提交一份包含所有「已登記短訊服務供應商」的表格？\",\"reference_answer\":\"Banks, instead of their authorised representative(s)/RSSP/SMS Aggregator, should submit application form as the registered senders.\\n\\n銀行應以「已獲認證的發送人」提交申請表格，而不是由其授權代表/已登記短訊服務供應商/短訊聚合商提交。\"},{\"id\":\"261957875573587968\",\"similarityScore\":0.6333694,\"sourceTable\":\"sys_expert_knowledge\",\"question\":\"火星上有水吗？\",\"reference_answer\":\"Query answer:\\n[\\\"目前火星表面没有稳定的液态水，但科学家在极地冰冠中发现了水冰，并通过轨道探测器在某些区域探测到地下可能存在咸水湖。此外，古代火星曾有河流、湖泊甚至海洋的地质证据。\\\",\\\"很可能可以。火星地下和极地蕴藏大量水冰，未来载人任务可就地开采并转化为饮用水、氧气或火箭燃料（通过电解水制氢氧），这对建立火星基地至关重要。\\\",\\\"科学家认为，随着火星内核冷却、磁场消失，太阳风逐渐剥离了其大气层，导致气压下降、温度降低，地表水要么蒸发逃逸到太空，要么冻结埋藏于地下，部分可能仍以水冰形式存在。\\\",\\\"煮米饭时水和米的比例通常为1:1到1.2:1，即一杯米配一杯到一杯二的水。具体比例可根据米的品种调整：粳米（短粒米）用水较少，约1:1；籼米（长粒米）需要稍多水分，约1:1.2。喜欢软糯口感的可以适当多加一点水，喜欢偏硬口感的可以少加一点。新米含水量高，可比陈米少放一些水。\\\"]\"}]")
+
+rag_kbs.markReference?data='{{n_expert_data}}'

@@ -1,0 +1,87 @@
+/*
+{
+	"title":"Test Data Generation from Test Steps",
+	"description":"Automatically generate test data based on provided test steps",
+	"parameter":[
+		{
+			"name":"user_input",
+			"label":"Data Filtering Conditions",
+			"type":"textarea"
+		},
+		{
+			"name":"outputTable",
+			"label":"Data Storage Table",
+			"type":"input",
+			"defaultValue":"kb_test_data_scenario"
+		}
+	],
+	"resultPlan":"userInput, n_kb_data",
+	"life":1000,
+	"displayOrder":21,
+	"version":2
+}
+*/
+// userInput
+assign("userInput", "基于`kb_test_steps_data`表 \n{{user_input}}")
+
+// 获取查询 SQL 并执行
+agt_auto_sql1.knowledge?userInput='{{userInput}}'
+
+// n_kb_data
+n_kb_data, act_kb.selectBy?sql='{{sys_last_result}}'
+
+n_data_item, act_func?js='''
+(function() {
+    let arrList = {{n_kb_data}};
+    let newArr = [];
+    let nResArr = [];
+    let nTitleArr = [];
+    for(let i = 0; i < arrList.length; i++) {
+        let jsonArr = JSON.parse(arrList[i].data);
+        for(let j = 0; j < jsonArr.length; j++) {
+            newArr.push(jsonArr[j]);
+        }
+        nResArr.push(arrList[i].expected_result);
+        nTitleArr.push(arrList[i].title);
+    }
+    
+    let obj = {
+        "title": JSON.stringify(nTitleArr),
+        "test_no": arrList[0].test_no,
+        "system_name": arrList[0].system_name,
+        "metadata_id": arrList[0].metadata_id,
+        "test_method": arrList[0].test_method,
+        "data": JSON.stringify(newArr),
+        "expected_result": JSON.stringify(nResArr)
+    };
+    
+    return JSON.stringify(obj);
+})();
+'''
+
+assign("n_result_data", "{{n_data_item}}")
+// get test_no
+n_test_no, act_func?script='''return n_result_data.test_no'''
+
+// 查询test step语句
+assign("n_userInput", "在kb_test_metadata表查询test_no为{{n_test_no}}的第一条数据")
+
+// 取test step数据sql
+agt_auto_sql1.knowledge?userInput='{{n_userInput}}'
+
+// data from kb_test_metadata
+n_test_metadata,act_kb.selectBy?sql='{{sys_last_result}}'
+
+// 输出 test step
+n_step_data, act_func?script='''return n_test_metadata[0].steps'''
+
+
+// 拼接test_step
+n_test_data, act_func?script='''return [n_result_data.put('test_step', n_step_data)]'''
+
+// 最终的驱动数据
+assign("case_item", "{{n_result_data}}")
+
+// 保存到数据库
+assign("newTableName", "{{outputTable}}")
+act_kb.defineAndImportData?tableName='{{newTableName}}'&data='{{case_item}}'

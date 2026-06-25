@@ -1,0 +1,97 @@
+# Sheet Information
+
+## Sheet name: Applicant
+
+### Sheet data:
+
+Age	Anl_Household_Income_Hke	Doc_Nbr	Doc_Type_Code	Education_Desc	Entity_Nbr	Gender_Code	Industry_Code	Industry_Desc	Issue_Country_Code	Marital_Status	Marital_Status_Desc	Nbr_Of_Children	Party_Intl_Nbr	education_Code
+58		P5XXXX12	H		0015	F			HK				04364797	
+24		Y7XXXX73	H		0015	M			HK				04020821	
+57		C5XXXX83	H		0015	F			HK				03267845	
+64		62XXXXX11	2		0015	M			GB				04390749	
+66		P5XXXX35	H		0015	F			HK				04299903	
+73		E4XXXX19	H		0015	M			HK				04409100	
+        FIXXXXXXXX20	X		0015	U			TW				03702103	
+45		V0XXXX16	H		0015	F			HK				04118405	
+69		E9XXXX34	H		0015	F			HK				04097724	
+36		M5XXXX97	H		0015	F			HK				03973884	
+64		P5XXXX08	H		0015	F			HK				03690749	
+70		G2XXXXX97	2		0015	M			CN				02201451	
+        00XXXXX17	V		0015	U			HK				04243017	
+27		M7XXXX98	H		0015	F			HK				04309732	
+46		M5XXXX74	H		0015	F			HK				03541985	
+20		M6XXXX51	H		0015	M			HK				03654076	
+40		Z6XXXX65	H		0015	F			HK				03895456	
+36		Y0XXXX96	H		0015	F			HK				02478753	
+
+### table metadata:
+Column Name	Type	Constraints	Default	Description
+Age	Int	18-100	空白
+Anl_Household_Income_Hke	VARCHAR		空白
+Doc_Nbr	VARCHAR		无	香港地区身份证号/大陆地区身份证号/其它区域护照号
+Doc_Type_Code	Enum	H/X/V/2/3/7	无
+Education_Desc	VARCHAR		空白	教育状况
+Entity_Nbr	VARCHAR		0015
+Gender_Code	Enum	F/M/U	无
+Industry_Code	VARCHAR		空白
+Industry_Desc	VARCHAR		空白
+Issue_Country_Code	VARCHAR			身份证签发国家/地区代码，例如HK/CN/GB
+Marital_Status	VARCHAR		空白
+Marital_Status_Desc	VARCHAR		空白
+Nbr_Of_Children	Int	0或者空白	空白
+Party_Intl_Nbr	VARCHAR	8位数字，第一个字符为0，后续7位数字	无
+education_Code	Int	6	空白
+
+
+## Sheet name: Appl_Card
+### Sheet data:
+Acct_Nbr	Acct_Open_Dte	Acct_Party_End_Dte	Acct_Party_Role_Code	Acct_Party_Role_Desc	Acct_Party_Role_Seq	Acct_Party_Start_Dte	Acct_Type_Code	Age	Anl_Household_Income_Hke	Appl_Code	Block_Code	Block_Reason_Code	Doc_Nbr	Doc_Type_Code	Dte_Of_Birth	Education_Desc	Entity_Nbr	Gender_Code	Guarantor_Limit_Hke	Industry_Code	Industry_Desc	Issue_Country_Code	Marital_Status	Marital_Status_Desc	Nbr_Of_Children	Party_Intl_Nbr	Primary_Owner_Ind	Rel_Setup_By_Offr_Id	Stmt_Type_Code	education_Code
+5452XXXXXXXX6220	2011-05-19	2018-03-13	1	A/C HOLDER	1	2011-08-25	VP	36		014	Q		P9XXXX86	H	1988-10-08		0015	F		35102020	HEALTH CARE FACILITIES	HK	U	UNKNOWN	0	04XXXX97	N	1008	H	
+4384XXXXXXXX8169	2006-01-20	2018-05-04	H	CORPORATE CARDHOLDER	1	2007-02-02	MW	61		014	Q		E8XXXX37	H	1962-12-22		0015	F		202090ZZ	COMMERCIAL SERVICES & SUPPLIES - OTHERS	HK	U	UNKNOWN	0	04XXXX21	N	1008	H	
+5544XXXXXXXX6538	2023-06-26	2999-12-31	1	A/C HOLDER	1	2023-06-26	MW	58		014			G1XXXX57	H	1966-01-16		0015	M		40101010	DIVERSIFIED BANKS	HK	M	MARRIED	0	03XXXX45	Y	1008	H	
+4384XXXXXXXX7489	2017-09-07	2999-12-31	1	A/C HOLDER	1	2021-11-12	VP	28		014			Y5XXXX27	H	1996-10-19	MATRICULATED/POST SECONDARY	0015	M		74		HK	U	UNKNOWN	0	04XXXX49	Y	1008	H	3
+4384XXXXXXXX1953	2014-11-05	2019-12-06	1	A/C HOLDER	1	2015-09-12	VP	29		014	E		Y5XXXX6A	H	1995-07-30	MATRICULATED/POST SECONDARY	0015	F		25301040	RESTAURANTS	HK	U	UNKNOWN		04XXXX03	N	1008	H	3
+4384XXXXXXXX6459	2022-08-02	2024-04-10	1	A/C HOLDER	1	2022-08-02	UT	36		014	Q		V1XXXX69	H	1988-04-28		0015	M		40101010	DIVERSIFIED BANKS	HK	U	UNKNOWN	0	04XXXX00	N	1008	H	
+5452XXXXXXXX9093	2023-08-11	2999-12-31	1	A/C HOLDER	1	2023-08-11	MW	53		014			G8XXXX01	H	1971-04-21		0015	F		40301010	INSURANCE BROKERS	HK	M	MARRIED	0	03XXXX03	Y	1008	H	
+4384XXXXXXXX0804	2012-07-24	2999-12-31	1	A/C HOLDER	1	2012-07-24	UC	46		014			K8XXXX36	H	1978-10-17		0015	F		25501010	DISTRIBUTORS AND WHOLESALERS - GENERAL MERCHANDISE	HK	M	MARRIED	0	04XXXX05	Y	1008	H	
+4384XXXXXXXX6529	2024-01-17	2999-12-31	1	A/C HOLDER	1	2024-01-17	VS	54		014			M4XXXX82	H	1970-06-19		0015	M		2530201B	GOVERNMENT FUND SCHOOL	HK	U	UNKNOWN	0	04XXXX24	Y	1008	H	
+4384XXXXXXXX0784	2010-07-12	2022-02-11	1	A/C HOLDER	1	2010-07-12	UC	39		014	Q		P8XXXX05	H	1984-10-27		0015	F		25501010	DISTRIBUTORS AND WHOLESALERS - GENERAL MERCHANDISE	HK	U	UNKNOWN		03XXXX84	N	1008	H	
+4384XXXXXXXX1598	2003-05-13	2999-12-31	1	A/C HOLDER	1	2003-05-14	VP	67		014			C3XXXX58	H	1957-09-30	SECONDARY	0015	M		255090ZZ	RETAILING - OTHERS	HK	M	MARRIED	0	03XXXX49	Y	1008	H	2
+### table metadata:
+Column Name	Type	Constraints	Default	Description
+Acct_Nbr	VARCHAR	16位数字组合	无
+Acct_Open_Dte	DATE	1990-01-02/2024-12-24	无
+Acct_Party_End_Dte	DATE	2008-01-02/2099-12-24,大于Acct_Open_Dte日期	无
+Acct_Party_Role_Code	Enum	1/H/F	无
+Acct_Party_Role_Desc	Enum	A/C HOLDER;CORPORATE CARDHOLDER;JOINT A/C HOLDER;SUPPLEMENTARY CARDHOLDER	无
+Acct_Party_Role_Seq	Int	1	无
+Acct_Party_Start_Dte	DATE	1990-01-02/2024-12-24,大于Acct_Open_Dte	无
+Acct_Type_Code	Enum	VP/MW/UT/UC/VS/MG	无
+Age	INT	20-100	无
+Anl_Household_Income_Hke	VARCHAR	空白	空白
+Appl_Code	VARCHAR	014	无
+Block_Code	Enum	Q/E/V/F	空白
+Block_Reason_Code	VARCHAR	空白	空白
+Doc_Nbr	VARCHAR	大写字母开头+7位数字	无
+Doc_Type_Code	Enum	H	无
+Dte_Of_Birth	DATE	1920-01-02/2008-12-24	无
+Education_Desc	Enum	PRIMARY OR BELOW/MATRICULATED/POST SECONDARY/SECONDARY/LOCAL U GRADUATES/UNIVERSITY/PRIMARY OR BELOW	空白
+Entity_Nbr	VARCHAR	0015	无
+Gender_Code	Enum	F/M/U	无
+Guarantor_Limit_Hke	VARCHAR	空白	空白
+Industry_Code	VARCHAR	8位数字/7位数字+1位大写字符/6位数字+2个字符/2位数字	空白
+Industry_Desc	VARCHAR		空白	行业描述
+Issue_Country_Code	Enum	HK	无
+Marital_Status	Enum	U/M/S/O	空白
+Marital_Status_Desc	Enum	UNKNOWN/MARRIED/SINGLE/OTHERS	无
+Nbr_Of_Children	INT	0-10	空白
+Party_Intl_Nbr	VARCHAR	以0开头的8位数字	无
+Primary_Owner_Ind	Enum	N/Y	无
+Rel_Setup_By_Offr_Id	INT	1008	无
+Stmt_Type_Code	VARCHAR	H	无
+education_Code	INT	2/3/4/5/6/7	空白
+
+### Relationship Between `Applicant` and `Appl_Card`
+
+The `Applicant` and `Appl_Card` entities are associated through a common attribute, `Doc_Nbr`. Specifically, the `Doc_Nbr` field in the `Applicant` table corresponds to the `Doc_Nbr` field in the `Appl_Card` table. This relationship can be expressed as:
+Applicant.Doc_Nbr = Appl_Card.Doc_Nbr

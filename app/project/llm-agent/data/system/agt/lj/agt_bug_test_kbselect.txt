@@ -1,0 +1,64 @@
+
+/*
+{
+	"title":"agt_bug_test_kbselect",
+	"description":"测试rag_kbs.searchQuestion相似度问题-lj",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"textarea"
+		}
+	],
+	"tag":"lj",
+	"displayOrder":0,
+	"version":4
+}
+*/
+
+// 1. kbs.searchQuestion
+assign("params",'{"question":"`16.INVESTMENTS IN SUBSIDIARIES` 说了什么内容","knowledgeIds":"255072248500142080,255072306158190592","folderIds":""}')
+// n_results,rag_kbs.searchQuestion?paramData='{{params}}'&similarity='0.2'
+
+// 2. kbs.search 分页读取文档内容
+// n_file_content,rag_kbs.readSectionFileByPage?kbSpaceFileId={{kbSpaceFileId!}}&isSource=true&metadata='1'
+
+// 3. 查询指定的表： kb_test_query
+assign('userInput','怎么挑选防晒霜')
+// n_milvus_result, rag_kb.search?column='question'&name='kb_test_query'&requirement='{{userInput}}'&bm25Weight="0.65"
+
+
+
+// 4. 专家只是查下 kb_test_query
+assign('userInput','中国有几个省')
+//n_milvus_result, rag_kbs.searchFaq?question='{{userInput}}'&bm25Weight=""
+
+
+// 5. Read original document content
+//n_finally_answer,rag_kbs.searchFileContent?paramData='{{params}}'
+
+// 6. 查询知识信息（根据不同调用类型查询知识ID或其他字段）knowledgeNameItems只针对callType='folderIds'生效  callType  调用类型：folderName(根据目录名)、folderPath(根据目录路径)、folderIds(根据目录ID)、knowledgeIds(根据知识ID)
+//rag_kbs.callQuestionKnowledges?callType='folderName'&value='test_lht_openurl'&knowledgeNameItems=''
+//rag_kbs.callQuestionKnowledges?callType='folderName'&value='test_lht_openurl'&knowledgeNameItems=''&outFieldName='id'
+//rag_kbs.callQuestionKnowledges?callType='folderPath'&value='appdata/ac_script/CloudBank/Selenium/workflows/def_module/draft_steps/lj_test_CloudBank_20260122'&knowledgeNameItems=''
+//rag_kbs.callQuestionKnowledges?callType='folderIds'&value='265501785076809728,266785463193059328'&knowledgeNameItems=''&outFieldName='knowledge_name'
+//rag_kbs.callQuestionKnowledges?callType='knowledgeIds'&value='{{params.knowledgeIds}}'&knowledgeNameItems=''&outFieldName='store_uri'
+
+// 测试266577738065068032 数据结果
+//n_paths,rag_kbs.callQuestionKnowledges?callType='folderIds'&value='266577738065068032'&outFieldName='store_uri'
+// 测试266577738065068032数据结果
+// n_paths,rag_kbs.callQuestionKnowledges?callType='folderIds'&value='266577738065068032'&outFieldName='store_uri'
+
+// 测试filterItem参数 -赋值
+n_filter_data,act_func?script='''
+def item = new HashMap()
+// logicType 逻辑类型，空字符串表示简单条件，"and"、"or"、"not"表示复杂逻辑
+item.put("logicType", "")
+item.put("filterValue", [1,2,3])
+item.put("operator", "in")
+item.put("filterKey", "document_id")
+return item;
+'''
+
+// 测试filterItem参数 -知识空间知识检索-向量信息
+n_result_data,act_kb.search?requirement='中国有几个省'&name='kb_spaces_knowledge_section'&top='10'&bm25Weight=0.3&isRerank=false&isReferenceGraph=false&filterItem='{{n_filter_data}}'

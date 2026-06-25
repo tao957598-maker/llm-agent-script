@@ -1,0 +1,14 @@
+/*
+{
+	"title":"Run existed code",
+	"description":"Run existed code or similar code",
+	"parameter":"test_no=Test Case No&current_step=当前验证步骤&steps=完整验证步骤&system=系统名称&envinfo=environment information",
+	"resultPlan":"n_python_file",
+	"version":1
+}
+*/
+// Use selenium
+assign('pythonType', 'selenium', 'subfolder', '{{test_no}}')
+
+//## Prepare to run test step
+n_python_file,act_python.read?pythonType={{pythonType}}&requirement={{current_step}}&subfolder={{subfolder}}

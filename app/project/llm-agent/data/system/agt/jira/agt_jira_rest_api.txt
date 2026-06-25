@@ -1,0 +1,13 @@
+/*
+ {
+	 "title": "自动化测试-restapi",
+	 "description": "自动化测试-restapi",
+	 "parameter": "json=json",
+	 "llmType": "",
+	  "resultPlan": "",
+	 "life": "100"
+ }
+*/
+
+// jira rest
+n_rest_api, act_func?name='jiraRestapi.addBatch({{json}})'

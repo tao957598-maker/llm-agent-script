@@ -1,0 +1,140 @@
+/*
+{
+	"title":"Read Image",
+	"description":"读取图片",
+	"parameter":[
+		{
+			"name":"dataType",
+			"label":"图片类型"
+		},
+		{
+			"name":"imagePath",
+			"label":"图片路径"
+		},
+		{
+			"name":"ocrContent",
+			"label":"图片内容",
+			"type":"textarea"
+		}
+	],
+	"uiEntrance":"chatDoc",
+	"resultPlan":"last_result",
+	"life":1000,
+	"version":1
+}
+*/
+/
+
+// 获取参数
+assign('n_data_item', '{{dataType}}')
+assign('image_path', '{{imagePath}}')
+assign('ocr_content', '{{ocrContent}}')
+
+// 是否存在流程图
+n_mermaid,act_func?script='''
+  def str = n_data_item
+  return str.contains("mermaid")
+'''
+
+// 是否是UI
+n_ui,act_func?script='''
+  def str = n_data_item
+  return str.contains("ui")
+'''
+
+// 定义提示词
+when('n_mermaid==true', {
+  assign('system_prompt','''
+    你是一位专业的图片还原专家，擅长各类表格、流程图内容一比一还原。
+      根据提供的图片和OCR识别后的文本，严格按图片顺序和遵循以下要求进行输出图片全部内容：
+      - 严格按照图片上下顺序输出，不遗漏任何内容；
+      - 图片内所包含的表格按照Markdown输出；
+      - 图片内所包含的流程图，按照Mermaid时序图(sequenceDiagram)语法，严格还原节点及箭头指向、实线虚线、矩形线等；
+        以下是sequenceDiagram部分连线说明：
+          ->	没有箭头的实线
+          -->	没有箭头的虚线
+          ->>	带箭头的实线
+          -->>	带箭头的虚线
+          <<->>	带双向箭头的实线
+          <<-->>	带双向箭头的虚线
+          -x	末端有十字的实线
+          --x	末端带有十字的虚线
+          -)	末尾带有空心箭头的实线（异步）
+          --)	末尾带有空心箭头的虚线（异步）
+          ->>+ 激活 -->>- 停用（相交竖线为矩形）
+      - 图片内所包含一级标题，二级标题，纯文本等其他格式内容，如按原格式输出；
+      - 输出所包含的文字在OCR内容中提取，并保持一致，不用任何解释说明；
+    ''')
+},{
+  when('n_ui==true', {
+    assign('system_prompt','''
+      你是一位专业的前端开发专家。
+        请根据提供的页面截图，生成**完整HTML代码**，要求：
+
+        - 精确还原布局和组件，包括常用标签：
+          - 表格（<table>、<thead>、<tbody>）
+          - 输入框（<input>、<textarea>）
+          - 按钮（<button>）
+          - 菜单栏（<nav>、<ul>、<li>）
+        - 图片可使用占位或字体图标等方式。
+        - 除个颜色鲜明的按钮或者菜单栏的选中效果采用#53a6d8主色，其他主要采用黑灰白等基本颜色即可以。
+        - 文本内容从识别到的OCR中提取。
+        - 输出**纯HTML、CSS代码**，不需要任何解释或额外说明。
+
+         输出格式：
+          <!DOCTYPE html>
+          <html lang="en">
+          ...
+          </html>
+    ''')
+
+    // html提示词
+    assign('system_prompt11','''
+      你是一位HTML专家，擅长将UI图片还原为HTML和CSS代码。
+        现在根据提供的UI图片，严格按以下规则输出：
+        1. 保持代码完整性，禁止省略代码，比如使用注释标注省略；
+        2. 精准识别并且一比一用代码还原UI图片，不能有任何遗漏；
+        3. 严禁添加任何注释或解释说明，输出的HTML代码可以直接展示；
+        输出格式：
+          <!DOCTYPE html>
+            <html lang="en">
+            ...
+            </html>
+    ''')
+  },{
+    assign('system_prompt','''
+      你是一位专业的图片内容提取专家，擅长从图片中提取文字、表格、图表等内容。
+      根据提供的图片和OCR识别后的文本，严格按图片顺序，不能遗漏任何图片内容，输出与图片格式相同的Markdown文本,包含文字需要与OCR内容保持一致，完全匹配，不用任何解释说明。
+    ''')
+  })
+})
+
+// 调用大模型输出
+when('n_ui==true', {
+  n_result_data1, tpl_html_chat,psr_ref
+  assign("last_result", "{{n_result_data1}}")
+},{
+  n_result_data2, tpl_image_chat,psr_ref
+  assign("last_result", "{{n_result_data2}}")
+})
+
+// 定义输出模板
+define('tpl_image_chat', '''
+  /*{
+	 "llmType":"alias.vision"
+	}*/
+
+  OCR Content:
+  {{ocr_content}}
+  
+	{{fn.chatImageFlag('%{system_prompt}%', 'ocr_content', '', '%{image_path}%', 1)}}
+''')
+
+// html模版
+define('tpl_html_chat', '''
+
+  OCR Content:
+    {{ocr_content}}
+
+	{{fn.chatImageFlag('%{system_prompt}%', 'ocr_content', '', '%{image_path}%', 1)}}
+''')

@@ -1,0 +1,654 @@
+/*
+{
+	"title":"Document Summary & Test Case Generator",
+	"description":"Generate comprehensive summaries from documents and create test cases based on the content",
+	"parameter":[
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"pages",
+			"label":"Pages (spilt by `,` )"
+		},
+		{
+			"name":"source_type",
+			"label":"文档类型(web/api/auto)"
+		},
+		{
+			"name":"version",
+			"label":"Version",
+			"required":true
+		},
+		{
+			"name":"skip_delete",
+			"label":"Skip delete in this run (true/false)"
+		}
+	],
+	"tag":"Automated Testing",
+	"uiEntrance":"test",
+	"resultPlan":"status,n_combined_result,n_doc_mind_map",
+	"life":10000,
+	"displayOrder":30,
+	"version":2
+}
+*/
+//# Agent status
+assign("status", 'Agent is running')
+// file name
+n_file_name, act_kb.selectBy?sql='select  knowledge_name  from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}" '
+assign("file_name", '{{n_file_name[0].knowledge_name}}')
+//# 步骤执行
+// 使用知识库的分页读取功能，读取文档的每一页内容
+//## 步骤1：读取文档内容
+// 查询kb_okp_page_data表，按page字段升序排序，筛选system_name='OKP'的数据
+// assign('knowledgeNameItems', '["{{knowledgeNameItems}}"]')
+// n_data,act_kbs.searchFolderKnowledges?folder='{{folderName}}'&knowledgeNameItems='{{knowledgeNameItems}}'
+// n_kbSpaceFileId,act_func?script='n_data[0]'
+when('!fn.hasValue(pages)', {
+  // 取全部数据
+  n_kb_data, act_kb.selectBy?sql='''select
+    *
+from
+    (SELECT
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS content
+FROM
+    kbs_doc_page_parse
+WHERE
+    documentId = "{{kbSpaceFileId}}"
+ORDER BY
+    CAST(page AS SIGNED) ASC) as a where a.content is not null'''
+
+},{
+    // 取分页数据
+ n_kb_data, act_kb.selectBy?sql='''select
+    *
+from
+    (SELECT
+    page,
+    CASE
+        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
+        ELSE analysis_content
+    END AS content
+FROM
+    kbs_doc_page_parse
+WHERE
+    documentId = "{{kbSpaceFileId}}" and page in ({{pages}})
+ORDER BY
+    CAST(page AS SIGNED) ASC) as a where a.content is not null'''
+
+})
+assign("documentId", "{{kbSpaceFileId}}")
+assign("effectiveDocumentId", "{{kbSpaceFileId}}")
+assign("source_type_norm", "{{fn.optional(source_type, 'web')}}")
+assign("skip_delete_norm", "{{fn.optional(skip_delete, 'false')}}")
+
+// 获取查询结果
+assign("kb_list_data", '{{n_kb_data}}')
+
+assign('async_list', '[]')
+// 异步处理每页数据
+foreach('n_page_content', 'kb_list_data', {
+    // 获取当前模块名称
+    assign('page_content', '{{n_page_content.item}}')
+    // 计算数据
+    n_page_content_summary,agt_page_content_summary?page_content='{{page_content}}'&async=true
+    act_func?script="async_list.add(n_page_content_summary)"
+})
+
+// 定义一个空 list
+assign('page_summary_list', '[]')
+// 定义四个空列表用于分类
+assign('background_list', '[]')
+assign('functional_list', '[]')
+assign('compliance_list', '[]')
+assign('other_list', '[]')
+
+// 对查询结果kb_okp_data进行循环处理并分类
+foreach('n_item', 'async_list', {
+    // 获取当前循环项的下标
+    assign('current_index', '{{n_item.index}}')
+    // 获取当前循环项的数据
+    assign('async_summary', '{{n_item.item}}')
+    // page_content_summary
+    assign('page_content_summary', '{{async_summary.value}}')
+    act_func?script='''
+                page_content_summary.each { item ->
+                    page_summary_list.add(item)
+                }
+            '''
+})
+// page_summary_listpage_summary_list
+assign('page_summary_listpage_summary_list', '{{page_summary_list}}')
+foreach('n_page_data', 'page_summary_listpage_summary_list', {
+        // page_content_summary_datapage_content_summary_data
+        assign('page_data', '{{n_page_data.item}}')
+        assign('current_type', '{{page_data["requirement_type"]}}')
+        when('current_type == "Background"', {
+            act_func?script='background_list.add(page_data)'
+        })
+        when('current_type == "Functional"', {
+            act_func?script='functional_list.add(page_data)'
+        })
+        when('current_type == "Compliance"', {
+            act_func?script='compliance_list.add(page_data)'
+        })
+        when('current_type == "Other"', {
+            act_func?script='other_list.add(page_data)'
+        })
+    })
+
+
+
+// background_listbackground_list
+assign('background_listbackground_list', '{{background_list}}')
+// 调用 agt_background_to_md.txt 并获取返回结果
+when('fn.hasValue(background_list)', {
+    n_background_result, agt_background_to_md?background_list='{{background_list}}'
+    assign('background_result', '{{n_background_result}}')
+}, {
+    assign('background_result', '')
+})
+
+// 调用 agt_functional_to_md.txt 并获取返回结果
+when('fn.hasValue(functional_list)', {
+    n_functional_result, agt_functional_to_md?functional_list='{{functional_list}}'
+    assign('functional_result', '{{n_functional_result}}')
+}, {
+    assign('functional_result', '')
+})
+
+// 调用 agt_compliance_to_md.txt 并获取返回结果
+when('fn.hasValue(compliance_list)', {
+    n_compliance_result, agt_compliance_to_md?compliance_list='{{compliance_list}}'
+    assign('compliance_result', '{{n_compliance_result}}')
+}, {
+    assign('compliance_result', '')
+})
+
+// 调用 agt_other_to_md.txt 并获取返回结果
+when('fn.hasValue(other_list)', {
+    // other_listother_listother_list
+    assign('other_listother_listother_list', '{{other_list}}')
+    n_other_result, agt_other_to_md?other_list='{{other_list}}'
+    // othe
+    assign('other_result', '{{n_other_result}}')
+}, {
+    assign('other_result', '')
+})
+
+// 将这些返回结果拼接成一个字符串
+assign('combined_result', '# {{file_name}} \n{{background_result}}\n{{functional_result}}\n{{compliance_result}}\n{{other_result}}')
+//#  doc combined result
+n_combined_result,act_memory.assign?value='''{{combined_result}}'''&type=md
+//# get doc mind map
+n_doc_mind_map,tpl_txt_to_mermaid,psr_mmd
+// 生成测试用例流程
+// 功能模块
+n_modules,agt_test_doc_func_modules?input_data='{{functional_list}}'
+
+// 使用展平模块数据
+assign('result_list', '[]')
+
+foreach('n_item', 'n_modules.modules', {
+    assign('module', '{{n_item.item}}')
+    
+    foreach('n_sub', 'module.submodules', {
+		assign('sub', '{{n_sub.item}}')
+        act_func?script='''
+            def row = [
+                platform: n_modules.platform,
+                main_module_name: module.name,
+                main_module_source: module.source,
+                submodule_name: sub.name,
+                submodule_description: sub.description,
+                submodule_source: sub.source,
+                documentId: effectiveDocumentId,
+                source_type: source_type_norm,
+                version: version
+            ]
+            result_list.add(row)
+        '''
+    })
+})
+// Step1 去重（先不遗漏）：仅合并“同主模块 + 同子模块名(规范化后)”的同义行，来源页码做并集
+act_func?script='''
+    def normName = { s ->
+        def x = (s == null ? "" : s.toString()).toLowerCase()
+        x = x.replaceAll(/[\\[\\]【】()]/, " ")
+        x = x.replaceAll(/\\s*-\\s*/, " ")
+        x = x.replaceAll(/\\s+/, " ").trim()
+        return x
+    }
+    def mergePages = { a, b ->
+        def ps = new LinkedHashSet()
+        [a, b].each { v ->
+            def t = (v == null ? "" : v.toString())
+            t.split(/\\s*,\\s*/).each { p ->
+                def pp = p == null ? "" : p.trim()
+                if (pp) ps.add(pp)
+            }
+        }
+        return ps.join(", ")
+    }
+    def merged = new LinkedHashMap()
+    result_list.each { r ->
+        if (!(r instanceof Map)) return
+        def k = normName(r.main_module_name) + "||" + normName(r.submodule_name)
+        if (!merged.containsKey(k)) {
+            merged.put(k, r)
+        } else {
+            def ex = merged.get(k)
+            ex.main_module_source = mergePages(ex.main_module_source, r.main_module_source)
+            ex.submodule_source = mergePages(ex.submodule_source, r.submodule_source)
+            def d1 = (ex.submodule_description ?: "").toString().trim()
+            def d2 = (r.submodule_description ?: "").toString().trim()
+            if (d2.length() > d1.length()) ex.submodule_description = d2
+            merged.put(k, ex)
+        }
+    }
+    result_list = new ArrayList(merged.values())
+'''
+// test_module_flattened_data
+assign('test_module_flattened_data', '{{result_list}}')
+
+when('"{{skip_delete_norm}}" != "true"', {
+    act_kb.selectBy?sql='delete from kb_gen_test_module where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
+    on_failure({
+	    // Force to success status
+	    act_flow.success
+    })
+})
+// 保存展平数据到数据库
+act_kb.defineAndImportData?tableName='kb_gen_test_module'&data='{{test_module_flattened_data}}'
+//# kb_gen_test_module
+assign('kb_gen_test_module', 'Download <a href="/knowledge-base/retrieval?title=knowledgeBaseList/knowledgeRetrieval/kb_gen_test_module&tableName=kb_gen_test_module&schema=llm_agent" target="_blank">kb_gen_test_module</a>')
+
+// 第二步：async=false + 确定性展平 + 兼容子 agent 返回嵌套（与 agt_test_module_design_main 一致）
+assign('async_test_content_list', '[]')
+foreach('n_test_module_content', 'test_module_flattened_data', {
+    assign('test_module_content', '{{n_test_module_content.item}}')
+    n_design,agt_test_doc_design?input_data='{{test_module_content}}'&documentId='{{effectiveDocumentId}}'&async=false
+    act_func?script="async_test_content_list.add(n_design)"
+})
+assign('test_design_list', '[]')
+foreach('n_test_design', 'async_test_content_list', {
+    assign('test_design', '{{n_test_design.item}}')
+    act_func?script='''
+        def h = test_design
+        if (h == null) return
+        def v = null
+        try {
+            if (h instanceof Map) {
+                v = h.get("value")
+                if (v == null) v = h
+            } else {
+                v = h
+            }
+        } catch (Exception ignore) {
+            v = h
+        }
+        if (v != null) test_design_list.add(v)
+    '''
+})
+
+assign('result_list_design', '[]')
+act_func?script='''
+    def safeDocId = ""
+    try { safeDocId = (effectiveDocumentId != null ? effectiveDocumentId.toString() : "") } catch (Throwable ignore) { safeDocId = "" }
+    def ver = ""
+    try { ver = (version != null ? version.toString() : "") } catch (Throwable ignore) { ver = "" }
+
+    def nonEmptyData = { mm ->
+        if (mm == null || !(mm instanceof Map)) return false
+        def x = mm.get("data")
+        if (x instanceof List) return (x as List).size() > 0
+        if (x instanceof Map) return true
+        return false
+    }
+    def normalizeRoot = { raw ->
+        if (raw == null) return null
+        if (raw instanceof Map) return raw as Map
+        if (raw instanceof List && (raw as List).size() > 0) {
+            def z = (raw as List)[0]
+            if (z instanceof Map) return z as Map
+        }
+        return null
+    }
+    def findMapWithData
+    findMapWithData = { obj, depth ->
+        if (depth > 8 || obj == null) return null
+        if (obj instanceof Map) {
+            def mm = obj as Map
+            if (nonEmptyData(mm)) return mm
+            for (def e : mm.entrySet()) {
+                def r = findMapWithData(e.value, depth + 1)
+                if (r != null) return r
+            }
+        }
+        if (obj instanceof List) {
+            for (def el : (obj as List)) {
+                def r = findMapWithData(el, depth + 1)
+                if (r != null) return r
+            }
+        }
+        return null
+    }
+    def unwrapPayload = { raw ->
+        def m = normalizeRoot(raw)
+        if (m == null) return null
+        if (nonEmptyData(m)) return m
+        def inner = m
+        if (inner.get("value") instanceof Map) inner = inner.get("value") as Map
+        if (nonEmptyData(inner)) return inner
+        if (inner.get("final_design_result") instanceof Map) inner = inner.get("final_design_result") as Map
+        if (nonEmptyData(inner)) return inner
+        if (inner.get("final_result") instanceof Map) inner = inner.get("final_result") as Map
+        if (nonEmptyData(inner)) return inner
+        if (inner.get("design_input_data") instanceof Map) inner = inner.get("design_input_data") as Map
+        if (nonEmptyData(inner)) return inner
+        def deep = findMapWithData(raw, 0)
+        return deep != null ? deep : inner
+    }
+    def dataRows = { m ->
+        if (m == null) return []
+        def data = m.get("data")
+        if (data instanceof List) return data as List
+        if (data instanceof Map) return [data]
+        return []
+    }
+    def tdl = fn.get('test_design_list')
+    if (tdl == null || !(tdl instanceof List)) tdl = []
+
+    def out = []
+    tdl.each { raw ->
+        def d = unwrapPayload(raw)
+        if (d == null) return
+        def rows = dataRows(d)
+        rows.each { row ->
+            if (!(row instanceof Map)) return
+            def de = (row.get("design_element") ?: row.get("DesignElement") ?: "").toString()
+            def items = row.get("test_content")
+            if (items == null) items = row.get("TestContent")
+            items = items instanceof List ? (items as List) : []
+            items.each { tcRaw ->
+                def tc = tcRaw
+                if (tcRaw instanceof List && tcRaw.size() >= 2) {
+                    tc = [sub_category: tcRaw[0] != null ? tcRaw[0].toString() : "", sub_id: tcRaw[1] != null ? tcRaw[1].toString() : ""]
+                }
+                if (!(tc instanceof Map)) return
+                def sid = (tc.get("sub_id") ?: tc.get("Sub_id") ?: "").toString().trim()
+                if (!sid) return
+                out.add([
+                    design_element: de,
+                    sub_category: (tc.get("sub_category") ?: tc.get("Sub_category") ?: "").toString(),
+                    sub_id: sid,
+                    platform: d.get("platform"),
+                    main_module_name: d.get("main_module_name"),
+                    main_module_source: d.get("main_module_source"),
+                    submodule_name: d.get("submodule_name"),
+                    submodule_description: d.get("submodule_description"),
+                    submodule_source: d.get("submodule_source"),
+                    documentId: safeDocId,
+                    source_type: source_type_norm,
+                    version: ver
+                ])
+            }
+        }
+    }
+    def seenKeys = new LinkedHashSet()
+    def deduped = []
+    out.each { m ->
+        if (m == null || !(m instanceof Map)) return
+        def k = [
+            (m.get("submodule_name") ?: "").toString(),
+            (m.get("design_element") ?: "").toString(),
+            (m.get("sub_id") ?: "").toString()
+        ].join("||")
+        if (!seenKeys.contains(k)) {
+            seenKeys.add(k)
+            deduped.add(m)
+        }
+    }
+    fn.put('result_list_design', deduped)
+    fn.put('design_flattened_data', deduped)
+    fn.put('design_flattened_data_one', deduped)
+'''
+
+// 展平结果已写入 result_list_design 与 design_flattened_data，不再用 assign 模板承接
+// 先删除旧数据（已移除仅取首行的 n_first_item，避免跨 act_func 变量未绑定报错）
+when('"{{skip_delete_norm}}" != "true"', {
+    act_kb.selectBy?sql='delete from kb_gen_test_module_design where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
+    on_failure({
+	    // Force to success status
+	    act_flow.success
+    })
+})
+// 保存展平数据到数据库
+act_kb.defineAndImportData?tableName='kb_gen_test_module_design'&data='{{design_flattened_data}}'
+//# kb_gen_test_module_design
+assign('kb_gen_test_module_design', 'Download <a href="/knowledge-base/retrieval?title=knowledgeBaseList/knowledgeRetrieval/kb_gen_test_module_design&tableName=kb_gen_test_module_design&schema=llm_agent" target="_blank">kb_gen_test_module_design</a>')
+
+// 第三步遍历全部设计行；design_flattened_data_one 已在展平 act_func 中 fn.put，勿用 assign 模板承接 List<Map>
+
+// 生成测试案例：async=false，避免句柄未就绪导致空表
+assign('async_test_case_list', '[]')
+foreach('n_test_design','design_flattened_data_one', {
+    assign('test_design', '{{n_test_design.item}}')
+    n_gen_case,agt_test_doc_gen_case?input_data='{{test_design}}'&documentId='{{effectiveDocumentId}}'&async=false
+    act_func?script="async_test_case_list.add(n_gen_case)"
+})
+assign('test_case_list', '[]')
+foreach('n_test_case', 'async_test_case_list', {
+    assign('test_case', '{{n_test_case.item}}')
+    act_func?script='''
+        def h = test_case
+        if (h == null) return
+        def v = null
+        try {
+            if (h instanceof Map) {
+                v = h.get("value")
+                if (v == null) v = h
+            } else {
+                v = h
+            }
+        } catch (Exception ignore) {
+            v = h
+        }
+        if (v != null) test_case_list.add(v)
+    '''
+})
+
+when('"{{skip_delete_norm}}" != "true"', {
+    act_kb.selectBy?sql='delete from kb_gen_test_case where version = "{{version}}" and document_id in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
+    on_failure({
+	    // Force to success status
+	    act_flow.success
+    })
+})
+// result_list_test_cases
+assign('result_list_test_cases', '[]')
+
+foreach('n_test_case', 'test_case_list', {
+    assign('test_case_map', '{{n_test_case.item}}')
+    foreach('n_test_case_map','test_case_map.data',{
+        assign('test_case', '{{n_test_case_map.item}}')
+        // 直接构造 Map，避免字符串 JSON 混入导致去重失效
+        act_func?script='''
+            def row = [
+                title: test_case.title,
+                application: test_case.application,
+                steps: test_case.steps,
+                test_no: test_case.test_no,
+                expected_result: test_case.expected_result,
+                source_value: test_case.source_value,
+                test_type: test_case.test_type,
+
+                sub_category: test_case_map.sub_category,
+                sub_id: test_case_map.sub_id,
+                design_element: test_case_map.design_element,
+                test_content: test_case_map.test_content,
+                platform: test_case_map.platform,
+                main_module_name: test_case_map.main_module_name,
+                main_module_source: test_case_map.main_module_source,
+                submodule_name: test_case_map.submodule_name,
+                submodule_description: test_case_map.submodule_description,
+                submodule_source: test_case_map.submodule_source,
+                document_id: effectiveDocumentId,
+                source_type: source_type_norm,
+                version: version
+            ]
+            result_list_test_cases.add(row)
+        '''
+    })
+})
+
+// 入库前统一治理：优先不遗漏，其次去重，再处理 test_no 冲突
+act_func?script='''
+    def arr = result_list_test_cases
+    if (arr == null || !(arr instanceof List)) return
+    def norm = { v -> (v == null ? "" : v.toString()).trim().replaceAll(/\\s+/, " ") }
+    def containsAny = { txt, kws ->
+        def s = (txt == null ? "" : txt.toString().toLowerCase())
+        kws.any { k -> s.contains(k) }
+    }
+    def forbidden = [
+        "unregistered","not registered","feature not registered","no permission","without permission",
+        "access blocked","navigation denied","button disabled","未注册","無權限","无权限"
+    ]
+    def out = []
+    def seenBiz = new LinkedHashSet()
+    def seenNo = new LinkedHashMap()
+    arr.each { row ->
+        if (!(row instanceof Map)) return
+        def text = [row.title, row.steps, row.expected_result].collect { norm(it) }.join(" ").toLowerCase()
+        if (containsAny(text, forbidden)) return
+        def bizKey = [norm(row.submodule_name), norm(row.sub_id), norm(row.title), norm(row.steps), norm(row.expected_result), norm(row.version), norm(row.document_id)].join("||").toLowerCase()
+        if (!bizKey || seenBiz.contains(bizKey)) return
+        seenBiz.add(bizKey)
+        def no = norm(row.test_no)
+        if (!no) no = "TC-" + (out.size() + 1)
+        if (!seenNo.containsKey(no)) {
+            seenNo.put(no, 1)
+            row.test_no = no
+        } else {
+            def n = seenNo.get(no) + 1
+            seenNo.put(no, n)
+            row.test_no = no + "-D" + n
+        }
+        out.add(row)
+    }
+    result_list_test_cases = out
+'''
+
+// 分批导入，避免单次过大
+n_case_batches,act_func?script='''
+    def arr = result_list_test_cases
+    if (arr == null || !(arr instanceof List)) return []
+    int bs = 20
+    def batches = []
+    for (int i = 0; i < arr.size(); i += bs) {
+        int j = Math.min(i + bs, arr.size())
+        batches.add(arr.subList(i, j))
+    }
+    return batches
+'''
+assign('case_batches', '{{n_case_batches}}')
+
+foreach('n_case_batch', 'case_batches', {
+    assign('batch_data', '{{n_case_batch.item}}')
+    when('fn.hasValue(batch_data)', {
+        act_kb.defineAndImportData?tableName='kb_gen_test_case'&data='{{batch_data}}'
+    }, {
+        act_flow.success
+    })
+})
+
+
+
+ 
+//# kb_gen_test_case
+assign('kb_gen_test_case', 'Download <a href="/knowledge-base/retrieval?title=knowledgeBaseList/knowledgeRetrieval/kb_gen_test_case&tableName=kb_gen_test_case&schema=llm_agent" target="_blank">kb_gen_test_case</a>')
+
+
+define('tpl_page_summary', '''
+# 需求文档处理流程
+请根据以下提供的需求文档内容，逐页分析并整理每一页的测试点和测试内容。对于每一页，请明确以下信息：
+## 输出JSON格式存储整理后的需求内容：
+
+```json
+{
+  "page_number": 1,
+  "section": "用户认证",
+  "title": "登录功能需求",
+  "description": "系统应允许已注册用户使用邮箱和密码登录",
+  "business_rules": [
+    "密码必须加密存储",
+    "登录失败3次后锁定账户30分钟"
+  ],
+  "acceptance_criteria": [
+    "当输入正确凭证时，系统应授予访问权限",
+    "当输入错误凭证时，系统应显示适当错误消息"
+  ],
+  "dependencies": ["REQ-005", "REQ-008"]
+}
+```
+
+## 核心字段设计
+
+| 字段名 | 类型 | 描述 | 测试用例生成用途 |
+|--------|------|------|------------------|
+| page_number | Integer | 文档页码 | 需求追溯 |
+| requirement_type | String | 需求类型分类 | 标识是"背景(Background)"、"功能(Functional)"还是"合规(Compliance)"需求,还是其它Other |
+| section | String | 所属章节/模块 | 测试模块分类 |
+| title | String | 需求标题 | 测试用例命名 |
+| description | String | 需求详细描述 | 测试场景依据 |
+| business_rules | Array | 业务规则列表 | 验证点提取 |
+| acceptance_criteria | Array | 验收标准 | 测试断言基础 |
+| dependencies | Array | 依赖需求列表 | 测试前置条件 |
+| testability | Boolean | 是否可直接生成测试案例 | 快速过滤不可测试内容（如当前页面应标记为false） |
+
+# 页面Contents：
+{{current_data}}
+
+    
+''')
+
+
+define('tpl_txt_to_mermaid', '''
+这个markdown内容转化为mermaid 思维导图,语言格式不变.
+要求: 1.memaid内容中不要出现Mermaid 图表中的 CSS 类定义
+2.Mindmap 语法中，子项必须使用一致的缩进(通常2或4个空格)，且不能混合使用空格和制表符。
+3.Mindmap 解析器对特殊字符（如括号 ()）的处理可能比较严格,节点内容尽量不要用括号 ()
+mermaid参考格式:
+```mermaid
+mindmap
+  root((mindmap))
+    Origins
+      Long history
+      ::icon(fa fa-book)
+      Popularisation
+        British popular psychology author Tony Buzan
+    Research
+      On effectiveness<br/>and features
+      On Automatic creation
+        Uses
+            Creative techniques
+            Strategic planning
+            Argument mapping
+    Tools
+      Pen and paper
+      Mermaid
+```
+
+
+```markdown
+{{combined_result}}
+```
+    
+''')

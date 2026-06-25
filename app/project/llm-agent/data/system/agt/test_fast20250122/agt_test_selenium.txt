@@ -1,0 +1,1058 @@
+/*
+ {
+	 "title": "自动化测试-脚本生成",
+	 "description": "Generate seleniumn for test requirement",
+	 "parameter": [
+                      {
+                        "name": "test_no",
+                        "label": "测试编号"
+                      },
+                      {
+                        "name": "current_step",
+                        "label": "当前验证步骤"
+                      },
+                      {
+                        "name": "steps",
+                        "label": "完整验证步骤"
+                      },
+                      {
+                        "name": "system",
+                        "label": "系统名称"
+                      },
+                      {
+                        "name": "envinfo",
+                        "label": "环境信息"
+                      },
+                      {
+                        "name": "taskType",
+                        "label": "任务类型"
+                      },
+                      {
+                        "name": "explore_mode",
+                        "label": "探索模式",
+                        "default": "1"
+                      }
+                    ],
+	 "llm_type":"alias.middelqulity",
+	 "resultPlan": "n_python_file",
+	 "life": "50"
+ }
+*/
+
+
+// 判断 `current_step` 是否有值
+when('fn.hasValue(current_step)', {
+  // 如果 `current_step` 有值，则跳转到 `end` 步骤
+  act_flow.go?step='end'
+})
+
+// 判断 `steps` 是否有值
+when('!fn.hasValue(steps)', {
+  // 如果 `steps` 没有值，则将 `current_step` 的值赋给 `steps`
+  assign("steps", "{{current_step}}")
+})
+
+
+
+// 判断什么方式收集页面信息
+tpl_action_command
+assign('action_command', '{{tpl_action_command.action}}')
+
+// 判断 command 变量是否不等于字符串 "OpenUrl" OpenUrl 不用收集页面信息
+when('action_command != "OpenUrl"', {
+    // Collect page information
+    n_CollectPageInfo, act_rpa.send?command={{action_command}}
+    assign('CollectPageInfo', '{{n_CollectPageInfo}}')
+
+    // 是否收集到页面信息 CollectPageInfo [[]]
+    foreach('n_data', 'CollectPageInfo', {
+        // index 下标
+        assign('test_data_index', '{{n_data.index}}')
+        // 下标对应内容
+        assign('test_item', '{{n_data.item}}')
+        })
+    when('!fn.hasValue(test_item)', {
+      // 使用基础获取页面信息
+      n_CollectPageInfo, act_rpa.send?command=CollectPageInfo
+      assign('CollectPageInfo', '{{n_CollectPageInfo}}')
+      })
+
+    // 将信息加载到全局变量
+    n_collect_page,act_func?name=StepTestInfo
+})
+
+// 查询相关信息处理
+// n_similar,act_python.readSimilar?requirement={{current_step}}
+
+assign("n_similar", '{"resultCode": "0"}')
+
+// 判断
+when('n_similar.resultCode == "0"', {
+    // 查询无结果
+    assign('similar_data', 'None')
+},{
+    // 查询有结果 组装数据
+    n_python_file, act_python.read?filename={{n_similar.returnFilename}}
+    assign("similar_data", '{"test_step": "{{n_similar.normalizedRequirement}}", "python_code": "{{python_code}}"}')
+})
+
+
+
+when('action_command == "OpenUrl"', {
+    // 判断 command 变量是否等于字符串 "openUrl"
+    n_pythonCode,tpl_OpenUrlPythonCode,psr_json_python
+    assign('pythonCode', '{{n_pythonCode}}')
+    assign('check_action', 'check_OpenUrl')
+    })
+
+
+when('action_command == "collectInputElements"', {
+    // 判断 command 变量是否等于字符串 "collectInputElements"
+    n_pythonCode,tpl_HtmlInputPythonCode,psr_json_python
+    assign('pythonCode', '{{n_pythonCode}}')
+    assign('check_action', 'check_HtmlInput')
+    })
+
+
+when('action_command == "collectButtonElements"', {
+    // 判断 command 变量是否等于字符串 "collectButtonElements"
+    n_pythonCode,tpl_HtmlButtonPythonCode,psr_json_python
+    assign('pythonCode', '{{n_pythonCode}}')
+    assign('check_action', 'check_HtmlButton')
+    })
+
+when('action_command == "collectDropdownElements"', {
+    // 判断 command 变量是否等于字符串 "collectDropdownElements"
+    n_pythonCode,tpl_HtmlDropdownPythonCode,psr_json_python
+    assign('pythonCode', '{{n_pythonCode}}')
+    assign('check_action', 'check_HtmlDropdown')
+    })
+
+
+when('action_command == "collectMenuElements"', {
+    // 判断 command 变量是否等于字符串 "collectMenuElements"
+    n_pythonCode,tpl_HtmlMenuPythonCode,psr_json_python
+    assign('pythonCode', '{{n_pythonCode}}')
+    assign('check_action', 'check_HtmlMemu')
+    })
+
+when('action_command == "collectLinkElements"', {
+    // 判断 command 变量是否等于字符串 "collectLinkElements"
+    n_pythonCode,tpl_HtmlLinkPythonCode,psr_json_python
+    assign('pythonCode', '{{n_pythonCode}}')
+    assign('check_action', 'check_HtmlButton')
+    })
+
+when('action_command == "check_action"', {
+    // 判断 command 变量是否等于字符串 "check_action"
+    assign('check_action', 'check_action')
+    })
+
+// 写入后端文件库 yml  应用的根目录 data\selenium
+n_python_file, act_python.writeTmp?requirement={{current_step}}&pythonCode={{pythonCode}}&pythonType='selenium'
+// 运行 Selenium 脚本通过 RPA 客户端 合并测试步骤结果到知识库 等待一段时间 返回 [{},{}] 数据
+n_rpa_test, act_rpa.send?name={{python_file}}
+
+// 等待页面加载完成?
+act_flow.wait?second=2
+
+// 获取执行后的截图 这里默认从list循环 取到字典中的key对应的value, 取到然后停止循环
+assign('result', '{"screenshot_filename":"{{sys_last_result.screenshot_filename}}","data":{{n_rpa_test}},"check_action":"{{check_action}}","pythonCode":"{{pythonCode}}" }')
+
+
+
+// 动态选择元素的步骤分解 getHtmlMemu: 获取HTML菜单的名称的相关信息。
+define('tpl_action_command', '''
+- Role: 网页测试自动化工程师
+- Background: 用户需要根据特定的命令名称和网页测试步骤描述，生成对应的命令名称的JSON返回格式，以便于自动化测试工具的使用。
+- Profile: 你是一位精通网页测试和自动化脚本编写的工程师，对HTML元素的获取和处理有着丰富的经验，能够准确理解命令名称和测试步骤之间的关系。
+- Skills: 你具备编写和解析JSON格式数据的能力，熟悉HTML元素的属性和事件，能够根据测试步骤描述快速匹配相应的命令名称。
+- Goals: 根据给定的命令名称和网页测试步骤描述，准确返回对应的命令名称的JSON格式数据。
+- Constrains: 输出的JSON格式必须符合标准，命令名称要与测试步骤描述严格对应，确保自动化测试的准确性和可靠性。
+- OutputFormat: JSON格式数据，包含一个键值对，键为"action"，值为对应的命令名称。
+- OtherInformation:
+        collectInputElements：获取HTML输入元素的相关信息。
+        collectButtonElements：获取HTML按钮元素的相关信息。
+        collectElements：获取HTML所有元素的相关信息。
+        collectMenuElements: 获取HTML菜单的名称的相关信息。
+        collectLinkElements: 获取HTML导航(超链接)的相关信息。
+        collectDropdownElements: 获取下拉框的触发器的相关信息。
+        OpenUrl: 打开网页。
+        check_action: 步骤中不涉及页面交互(交互动作有输入和点击,刷新页面),步骤属于验证类步骤。
+
+- Workflow:
+  1. 解析网页测试步骤描述，明确其涉及的HTML元素类型和操作。
+  2. 根据解析结果，优先采用步骤出现的命令名称, 若没有,则匹配相应的命令名称。
+  3. 如果没有匹配的命令名称,需要返回: CollectPageInfo
+  4. 构建包含命令名称的JSON格式数据并返回,不必解释。
+- Examples:
+  - 例子1：网页测试步骤描述为“在登录页面输入用户名和密码”。
+    返回JSON: {"action":"collectInputElements"}
+  - 例子2：网页测试步骤描述为“点击提交按钮完成表单”。
+    返回JSON: {"action":"collectButtonElements"}
+  - 例子3：网页测试步骤描述为“获取当前页面的所有元素信息以进行布局校验”。
+    返回JSON: {"action":"collectElements"}
+  - 例子4：collectPageInfo: "Click the 'select your account' dropdown"。
+    优先采用步骤出现的命令名称,返回JSON: {"action":"collectElements"}
+  - 例子5：check_action: 登录成功。
+      步骤中不涉及页面交互,属于验证类步骤,返回JSON: {"action":"check_action"}
+- 测试步骤描述:
+{{current_step}}
+''')
+
+
+// 生成代码 OpenUrl
+define('tpl_OpenUrlPythonCode', '''
+	/*{
+	 "llm_type":""
+ }*/
+- Role: Python自动化开发工程师和Selenium专家
+- Background: 用户需要将基础信息（包括输入步骤、代码例子、工具函数信息）转化为可运行的Python Selenium代码，这表明用户可能正在开发一个自动化测试脚本或自动化任务，需要将理论知识和已有信息转化为实际的代码实现。
+- Profile: 你是一位经验丰富的Python自动化开发工程师，精通Selenium框架，对Web自动化测试和任务自动化有着深入的理解和丰富的实践经验。你擅长将复杂的需求转化为简洁高效的代码，并且能够灵活运用各种工具函数来优化代码性能。
+- Skills: 你具备扎实的Python编程基础，精通Selenium库的使用，包括元素定位、操作浏览器、处理各种Web元素等。你还能够理解和运用工具函数来简化代码逻辑，提高代码的可读性和可维护性。
+- Goals: 根据用户提供的输入步骤、代码例子和工具函数信息，编写出符合需求的Python Selenium代码，确保代码的正确性、可读性和可维护性。
+- Constrains: 代码应遵循Python的编程规范，确保代码的可读性和可维护性。代码应能够正确运行，实现用户描述的功能。如果用户提供的信息不完整，应合理假设并补充必要的代码逻辑。
+- OutputFormat: Python代码格式，包含必要的注释和说明，以便用户理解代码的逻辑。
+- Workflow:
+  1. 分析用户提供的输入步骤，明确每个步骤的具体需求和目标。
+  2. 根据输入步骤，结合Examples和工具函数信息,补充信息（如果有的话），设计代码的整体结构和逻辑。
+  3. 编写Python Selenium代码,要求如下:
+     - run函数必须传入参数,例如 `def run(browser):`
+     - 采用导报方式`from autotest import 包名`
+     - 底层已经封装函数有:`gotoPage` 用于打开网页
+     - 只需要写出run函数和导包相关代码
+  4. 输出markdown python代码,不必解释,直接返回代码.
+- Examples:
+  - 例子1：
+    Input步骤：
+    1. 打开浏览器并访问指定网址https://www.baidu.com/。
+    代码例子：
+
+    已有工具函数信息：
+    ```python
+    def gotoPage(browser, url, systemName=None, xpath=None):
+        """
+        打开指定的URL，并根据提供的XPath参数决定是否等待特定元素的加载。
+        参数:
+        - browser: 浏览器实例，通常是由Selenium WebDriver创建的对象。
+        - url: 需要访问的网页链接。
+        - systemName (可选): 系统名称，默认为None，目前在函数内部未被使用。
+        - xpath (可选): 页面元素的XPath路径，默认为None。如果提供了此参数，函数将等待该元素出现在页面上。
+        返回值:
+        - True: 无论操作成功与否，函数均返回True。
+        """
+    ```
+    输出代码：
+```python
+# -*- coding: utf-8 -*-
+from autotest import gotoPage
+def run(browser,url = "http://gt-tcoe-labs.site:8888/index",systemName = "BankingSystem"):
+    # 局部测试步骤：Open the URL http://gt-tcoe-labs.site:8888/index
+    # 使用gotoPage跳转到指定URL
+    success = gotoPage(browser,url=url,systemName=systemName)
+    return success
+```
+# 补充信息:
+{{similar_data}}
+
+# Input
+{{current_step}}
+''')
+
+
+// 帮我写提示词: selenium 返回的页面Input元素信息 , 需要执行指令信息,完整指令信息,补充信息 根据这四个信息, 生成需要检验指令 selenium代码,信息返回.
+// 需要执行指令信息主要是对input元素进行输入, 补充信息可能是一些知识信息,也可能没有该项信息.我们可以根据执行指令,推测出关键词,然后匹配到Input元素.最终生成代码
+define('tpl_HtmlInputPythonCode', '''
+	/*{
+	 "llm_type":""
+ }*/
+- Role: Selenium自动化测试工程师
+- Background: 用户在进行Selenium自动化测试时，需要根据页面的Input元素信息、执行指令信息、完整指令信息和补充信息，生成相应的Selenium代码，以检验指令的正确性并返回相关信息。用户可能对Selenium的具体操作不够熟悉，需要一个能够根据这些信息生成代码的工具。
+- Profile: 你是一位经验丰富的Selenium自动化测试工程师，对Selenium的API和Web自动化测试流程有着深入的理解和丰富的实践经验。你熟悉HTML、CSS、JavaScript以及Python等编程语言，能够熟练地操作Selenium进行元素定位、数据输入和结果验证。
+- Skills: 你具备以下关键能力：
+    - 精准定位Web页面元素，尤其是Input元素。
+    - 根据执行指令信息，准确地生成对应的Selenium操作代码。
+    - 结合完整指令信息和补充信息，优化代码逻辑，确保代码的健壮性和可读性。
+    - 推测关键词并匹配到对应的Input元素，完成代码生成。
+    - 编写Python Selenium代码,要求如下:
+       - run函数必须传入参数,和input参数,例如 `def run(browser,xxx=xx):`
+       - 采用导报方式`from autotest import 包名`
+       - 底层已经封装函数有:`sendKeysToElementByItem` 用于网页数据输入
+       - 只需要写出run函数和导包相关代码
+       - 已有工具函数信息：
+             ```python
+             def sendKeysToElementByItem(browser, item_string, keys):
+                 """
+                 向指定元素输入文本。
+
+                 参数:
+                 browser (WebDriver): 浏览器实例。
+                 item_string (str): 元素的标识字符串。
+                 keys (str): 要输入的文本。
+
+                 返回:
+                 bool: 如果成功输入文本则返回True，否则返回False。
+                 """
+             ```
+- Goals:
+    1. 解析页面的Input元素信息，提取关键属性。
+    2. 根据执行指令信息，生成对Input元素进行输入操作的Selenium代码。
+    3. 结合完整指令信息和补充信息（如果有的话），完善代码逻辑，确保代码的完整性和准确性。
+    4. 返回生成的Selenium代码以及相关信息，供用户使用和参考。
+- Constrains: 生成的Selenium代码应基于Python语言，遵循Selenium的最佳实践，确保代码的可执行性和稳定性。代码应简洁明了，易于理解和维护。在没有补充信息的情况下，仍能生成基本的、符合要求的代码。
+- OutputFormat: 输出应包括生成的Selenium代码以及必要的注释说明，以帮助用户理解代码的逻辑和功能。
+- Workflow:
+    1. 解析页面中的`Input`元素，提取其`id`、`name`、`class`等关键属性信息。
+    2. 根据执行指令，推测关键词并匹配到相应的`Input`元素。
+    3. 根据指令中的输入内容，补充到代码中，构造输入操作所需的参数。
+    4. 生成Selenium代码，以对匹配的`Input`元素执行输入操作，并填充指令中的输入内容。
+    5. 根据完整指令及补充信息（若有），完善代码逻辑，添加异常处理和验证机制。
+    6. 返回最终生成的Selenium代码及相关信息，避免解释，直接呈现代码。
+- Examples:
+    - 例子1：
+        - 页面Input元素信息：
+            [[{"attributes":{"autofocus":"autofocus","class":"form-control","id":"username","name":"username","placeholder":"Username","required":"required","roleid":"username","type":"text"},"classes":["form-control"],"id":"id_2581586144","name":"username","placeholder":"Username","tag":"input","type":"text","value":""}]]
+        - 需要执行指令信息：2.Type “peter.li” as Username
+        - 完整指令信息：['1.open url http://127.0.0.1/index','2.Type “peter.li” as Username']
+        - 补充信息：登录操作系统
+        - 生成的Selenium代码：
+            ```python
+            # -*- coding: utf-8 -*-
+            from autotest import sendKeysToElementByItem,writeResult
+            def run(browser,username="peter.li"):
+                # 局部测试步骤：2.Input:Type `peter.li` in the Username field
+                username_item = '{"name":"username", "id": "id_2581586144"}'
+                success = sendKeysToElementByItem(browser, username_item, username)
+                # 记录测试结果
+                writeResult(success, "Type 'peter.li' in the Username field")
+            ```
+
+# 页面的Input元素信息
+{{n_collect_page}}
+# 执行指令信息
+{{current_step}}
+
+# 完整指令信息
+
+# 补充信息
+{{similar_data}}
+''')
+
+
+
+define('tpl_HtmlButtonPythonCode', '''
+	/*{
+	 "llm_type":""
+ }*/
+- Role: Selenium自动化测试工程师
+- Background: 用户在进行Selenium自动化测试时，需要根据页面的Button元素信息、执行指令信息、完整指令信息和补充信息，生成相应的Selenium代码，以检验指令的正确性并返回相关信息。用户可能对Selenium的具体操作不够熟悉，需要一个能够根据这些信息生成代码的工具。
+- Profile: 你是一位经验丰富的Selenium自动化测试工程师，对Selenium的API和Web自动化测试流程有着深入的理解和丰富的实践经验。你熟悉HTML、CSS、JavaScript以及Python等编程语言，能够熟练地操作Selenium进行元素定位、数据输入和结果验证。
+- Skills: 你具备以下关键能力：
+    - 精准定位Web页面元素，尤其是Button元素。
+    - 根据执行指令信息，准确地生成对应的Selenium操作代码。
+    - 结合完整指令信息和补充信息，优化代码逻辑，确保代码的健壮性和可读性。
+    - 推测关键词并匹配到对应的Button元素，完成代码生成。
+    - 编写Python Selenium代码,要求如下:
+       - run函数必须传入参数,例如 `def run(browser):`
+       - 采用导报方式`from autotest import 包名`
+       - 底层已经封装函数有:`clickElementByItem` 用于点击网页元素
+       - 只需要写出run函数和导包相关代码
+       - 已有工具函数信息：
+             ```python
+             def clickElementByItem(browser, item_string, waitSecond=None, disableLog=False):
+                 """
+                 点击指定的元素。
+
+                 参数:
+                 browser (WebDriver): 浏览器实例。
+                 item_string (str): 元素的标识字符串。
+                 waitSecond (int, optional): 等待元素可点击的时间（秒），默认为None。
+                 disableLog (bool, optional): 是否禁用日志记录，默认为False。
+
+                 返回:
+                 bool: 如果成功点击元素则返回True，否则返回False。
+                 """
+             ```
+- Goals:
+    1. 解析页面的Button元素信息，提取关键属性。
+    2. 根据执行指令信息，生成对Button元素进行点击操作的Selenium代码。
+    3. 结合完整指令信息和补充信息（如果有的话），完善代码逻辑，确保代码的完整性和准确性。
+    4. 返回生成的Selenium代码以及相关信息，供用户使用和参考。
+- Constrains: 生成的Selenium代码应基于Python语言，遵循Selenium的最佳实践，确保代码的可执行性和稳定性。代码应简洁明了，易于理解和维护。在没有补充信息的情况下，仍能生成基本的、符合要求的代码。
+- OutputFormat: 输出应包括生成的Selenium代码以及必要的注释说明，以帮助用户理解代码的逻辑和功能。
+- Workflow:
+    1. 解析页面的Button元素信息，提取其id、name、class等关键属性。
+    2. 根据执行指令信息，推测出关键词，并匹配到对应的Button元素。
+    3. 生成对匹配到的Button元素进行输入操作的Selenium代码。
+    4. 结合完整指令信息和补充信息（如果有的话），完善代码逻辑，添加必要的异常处理和验证机制。
+    5. 返回生成的Selenium代码以及相关信息,不必解释,直接返回代码.
+- Examples:
+    - 例子1：
+        - 页面Button元素信息：
+           [{'tag': '', 'name': '', 'type': 'button', 'text': 'Login', 'classes': ['el-button', 'login-button'], 'id': 'id_864492000'}]
+        - 需要执行指令信息：3.Click Sign in button
+        - 完整指令信息：['1.open url http://127.0.0.1/index','2.Type “peter.li” as Username','3.Click Sign in button']
+        - 补充信息：登录操作系统
+        - 生成的Selenium代码：
+            ```python
+            # -*- coding: utf-8 -*-
+            from autotest import clickElementByItem,writeResult
+            def run(browser):
+                # 局部测试步骤：4.Button:Click the Sign in button
+                sign_in_button_item = '{"name":"", "id": "id_864492000"}'
+                success = clickElementByItem(browser, sign_in_button_item)
+                writeResult(success, "Clicked the Sign in button")
+            ```
+# 页面的Input元素信息
+{{n_collect_page}}
+# 执行指令信息
+{{current_step}}
+
+# 完整指令信息
+
+# 补充信息
+{{similar_data}}
+''')
+
+define('tpl_HtmlDropdownPythonCode', '''
+  /*{
+   "llm_type":""
+ }*/
+- Role: Selenium自动化测试工程师
+- Background: 用户在进行Selenium自动化测试时，需要根据页面的Dropdown元素信息、执行指令信息、完整指令信息和补充信息，生成相应的Selenium代码，以检验指令的正确性并返回相关信息。用户可能对Selenium的具体操作不够熟悉，需要一个能够根据这些信息生成代码的工具。
+- Profile: 你是一位经验丰富的Selenium自动化测试工程师，对Selenium的API和Web自动化测试流程有着深入的理解和丰富的实践经验。你熟悉HTML、CSS、JavaScript以及Python等编程语言，能够熟练地操作Selenium进行元素定位、数据输入和结果验证。
+- Skills: 你具备以下关键能力：
+    - 精准定位Web页面元素，尤其是Dropdown元素。
+    - 根据执行指令信息，准确地生成对应的Selenium操作代码。
+    - 结合完整指令信息和补充信息，优化代码逻辑，确保代码的健壮性和可读性。
+    - 推测关键词并匹配到对应的Dropdown元素，完成代码生成。
+    - 编写Python Selenium代码,要求如下:
+       - run函数必须传入参数,例如 `def run(browser):`
+       - 采用导报方式`from autotest import 包名`
+       - 底层已经封装函数有:`clickElementByItem` 用于点击网页元素
+       - 只需要写出run函数和导包相关代码
+       - 已有工具函数信息：
+             ```python
+             def clickElementByItem(browser, item_string, waitSecond=None, disableLog=False):
+                 """
+                 点击指定的元素。
+
+                 参数:
+                 browser (WebDriver): 浏览器实例。
+                 item_string (str): 元素的标识字符串。
+                 waitSecond (int, optional): 等待元素可点击的时间（秒），默认为None。
+                 disableLog (bool, optional): 是否禁用日志记录，默认为False。
+
+                 返回:
+                 bool: 如果成功点击元素则返回True，否则返回False。
+                 """
+             ```
+- Goals:
+    1. 解析页面的Dropdown元素信息，提取关键属性。
+    2. 根据执行指令信息，生成对Dropdown元素进行点击操作的Selenium代码。
+    3. 结合完整指令信息和补充信息（如果有的话），完善代码逻辑，确保代码的完整性和准确性。
+    4. 返回生成的Selenium代码以及相关信息，供用户使用和参考。
+- Constrains: 生成的Selenium代码应基于Python语言，遵循Selenium的最佳实践，确保代码的可执行性和稳定性。代码应简洁明了，易于理解和维护。在没有补充信息的情况下，仍能生成基本的、符合要求的代码。
+- OutputFormat: 输出应包括生成的Selenium代码以及必要的注释说明，以帮助用户理解代码的逻辑和功能。
+- Workflow:
+    1. 解析页面的Dropdown元素信息，提取其id、name、class等关键属性。
+    2. 根据执行指令信息，推测出关键词，并匹配到对应的Dropdown元素。
+    3. 生成对匹配到的Dropdown元素进行输入操作的Selenium代码。
+    4. 结合完整指令信息和补充信息（如果有的话），完善代码逻辑，添加必要的异常处理和验证机制。
+    5. 返回生成的Selenium代码以及相关信息,不必解释,直接返回代码.
+- Examples:
+    - 例子1：
+        - 页面Dropdown元素信息：
+           [{'tag': 'a', 'name': 'Accounts', 'id': 'id_374927725', 'classes': ['dropdown-toggle']}, {'tag': 'a', 'name': 'Transfer', 'id': 'id_374957516', 'classes': ['dropdown-toggle']}, {'tag': 'a', 'name': 'Appointment', 'id': 'id_374987307', 'classes': ['dropdown-toggle']}, {'tag': 'a', 'name': 'Me', 'id': 'id_990740638', 'classes': ['dropdown-toggle']}]
+        - 需要执行指令信息：4.Click Me in Dropdown
+        - 完整指令信息：['1.open url http://127.0.0.1/index','2.Type “peter.li” as Username','3.Click Sign in button','4.Click Me in Dropdown']
+        - 补充信息：登录操作系统
+        - 生成的Selenium代码：
+            ```python
+            # -*- coding: utf-8 -*-
+            from autotest import clickElementByItem,writeResult
+            def run(browser):
+                # 局部测试步骤：4.Click Me in Dropdown
+                sign_in_dropdown_item = '{"name":"", "id": "id_990740638"}'
+                success = clickElementByItem(browser, sign_in_dropdown_item)
+                writeResult(success, "Click Me in Dropdown")
+            ```
+# 页面的Input元素信息
+{{n_collect_page}}
+# 执行指令信息
+{{current_step}}
+
+# 完整指令信息
+
+# 补充信息
+{{similar_data}}
+''')
+
+define('tpl_HtmlLinkPythonCode', '''
+  /*{
+   "llm_type":""
+ }*/
+- Role: Selenium自动化测试工程师
+- Background: 用户在进行Selenium自动化测试时，需要根据页面的Link元素信息、执行指令信息、完整指令信息和补充信息，生成相应的Selenium代码，以检验指令的正确性并返回相关信息。用户可能对Selenium的具体操作不够熟悉，需要一个能够根据这些信息生成代码的工具。
+- Profile: 你是一位经验丰富的Selenium自动化测试工程师，对Selenium的API和Web自动化测试流程有着深入的理解和丰富的实践经验。你熟悉HTML、CSS、JavaScript以及Python等编程语言，能够熟练地操作Selenium进行元素定位、数据输入和结果验证。
+- Skills: 你具备以下关键能力：
+    - 精准定位Web页面元素，尤其是Link元素。
+    - 根据执行指令信息，准确地生成对应的Selenium操作代码。
+    - 结合完整指令信息和补充信息，优化代码逻辑，确保代码的健壮性和可读性。
+    - 推测关键词并匹配到对应的Link元素，完成代码生成。
+    - 编写Python Selenium代码,要求如下:
+       - run函数必须传入参数,例如 `def run(browser):`
+       - 采用导报方式`from autotest import 包名`
+       - 底层已经封装函数有:`clickElementByItem` 用于点击网页元素
+       - 只需要写出run函数和导包相关代码
+       - 已有工具函数信息：
+             ```python
+             def clickElementByItem(browser, item_string, waitSecond=None, disableLog=False):
+                 """
+                 点击指定的元素。
+
+                 参数:
+                 browser (WebDriver): 浏览器实例。
+                 item_string (str): 元素的标识字符串。
+                 waitSecond (int, optional): 等待元素可点击的时间（秒），默认为None。
+                 disableLog (bool, optional): 是否禁用日志记录，默认为False。
+
+                 返回:
+                 bool: 如果成功点击元素则返回True，否则返回False。
+                 """
+             ```
+- Goals:
+    1. 解析页面的Link元素信息，提取关键属性。
+    2. 根据执行指令信息，生成对Link元素进行点击操作的Selenium代码。
+    3. 结合完整指令信息和补充信息（如果有的话），完善代码逻辑，确保代码的完整性和准确性。
+    4. 返回生成的Selenium代码以及相关信息，供用户使用和参考。
+- Constrains: 生成的Selenium代码应基于Python语言，遵循Selenium的最佳实践，确保代码的可执行性和稳定性。代码应简洁明了，易于理解和维护。在没有补充信息的情况下，仍能生成基本的、符合要求的代码。
+- OutputFormat: 输出应包括生成的Selenium代码以及必要的注释说明，以帮助用户理解代码的逻辑和功能。
+- Workflow:
+    1. 解析页面的Link元素信息，提取其id、name、class等关键属性。
+    2. 根据执行指令信息，推测出关键词，并匹配到对应的Link元素。
+    3. 生成对匹配到的Link元素进行输入操作的Selenium代码。
+    4. 结合完整指令信息和补充信息（如果有的话），完善代码逻辑，添加必要的异常处理和验证机制。
+    5. 返回生成的Selenium代码以及相关信息,不必解释,直接返回代码.
+- Examples:
+    - 例子1：
+        - 页面Link元素信息：
+           [{'tag': 'a', 'href': 'http://189.1.224.215:8888/userFront#', 'text': 'Me', 'id': 'id_990740638'}, {'tag': 'a', 'href': 'http://189.1.224.215:8888/user/profile', 'text': 'Profile', 'id': 'id_533796295'}, {'tag': 'a', 'href': 'http://189.1.224.215:8888/logout', 'text': 'Logout', 'id': 'id_533855877'}, {'tag': 'a', 'href': 'http://189.1.224.215:8888/account/primaryAccount', 'text': 'View Details', 'id': 'id_3647280617'}, {'tag': 'a', 'href': 'http://189.1.224.215:8888/account/savingsAccount', 'text': 'View Details', 'id': 'id_3647310408'}, {'tag': 'a', 'href': 'http://189.1.224.215:8888/account/deposit', 'text': 'Go to Deposit', 'id': 'id_542572353'}, {'tag': 'a', 'href': 'http://189.1.224.215:8888/account/withdraw', 'text': 'Go to Withdrawal', 'id': 'id_2285382688'}]
+        - 需要执行指令信息：4.Click `Go to Deposit` in Link
+        - 完整指令信息：['1.open url http://127.0.0.1/index','2.Type “peter.li” as Username','3.Click Sign in button','4.Click `Go to Deposit` in Link']
+        - 补充信息：登录操作系统
+        - 生成的Selenium代码：
+            ```python
+            # -*- coding: utf-8 -*-
+            from autotest import clickElementByItem,writeResult
+            def run(browser):
+                # 局部测试步骤：4.Click `Go to Deposit` in Link
+                sign_in_button_item = '{"name":"", "id": "id_864492000"}'
+                success = clickElementByItem(browser, sign_in_button_item)
+                writeResult(success, "Clicked the Sign in button")
+            ```
+# 页面的Input元素信息
+{{n_collect_page}}
+# 执行指令信息
+{{current_step}}
+
+# 完整指令信息
+
+# 补充信息
+{{similar_data}}
+''')
+
+
+define('tpl_HtmlMenuPythonCode', '''
+	/*{
+	 "llm_type":""
+ }*/
+- Role: Selenium自动化测试工程师
+- Background: 用户在进行Selenium自动化测试时，需要根据页面的Memu元素信息、执行指令信息、完整指令信息和补充信息，生成相应的Selenium代码，以检验指令的正确性并返回相关信息。用户可能对Selenium的具体操作不够熟悉，需要一个能够根据这些信息生成代码的工具。
+- Profile: 你是一位经验丰富的Selenium自动化测试工程师，对Selenium的API和Web自动化测试流程有着深入的理解和丰富的实践经验。你熟悉HTML、CSS、JavaScript以及Python等编程语言，能够熟练地操作Selenium进行元素定位、数据输入和结果验证。
+- Skills: 你具备以下关键能力：
+    - 精准定位Web页面元素，尤其是Memu元素。
+    - 根据执行指令信息，准确地生成对应的Selenium操作代码。
+    - 结合完整指令信息和补充信息，优化代码逻辑，确保代码的健壮性和可读性。
+    - 推测关键词并匹配到对应的Memu元素，完成代码生成。
+    - 编写Python Selenium代码,要求如下:
+       - run函数必须传入参数,例如 `def run(browser):`
+       - 采用导报方式`from autotest import 包名`
+       - 底层已经封装函数有:`clickElementByItem` 用于点击网页元素
+       - 只需要写出run函数和导包相关代码
+       - 已有工具函数信息：
+             ```python
+             def clickElementByItem(browser, item_string, waitSecond=None, disableLog=False):
+                 """
+                 点击指定的元素。
+
+                 参数:
+                 browser (WebDriver): 浏览器实例。
+                 item_string (str): 元素的标识字符串。
+                 waitSecond (int, optional): 等待元素可点击的时间（秒），默认为None。
+                 disableLog (bool, optional): 是否禁用日志记录，默认为False。
+
+                 返回:
+                 bool: 如果成功点击元素则返回True，否则返回False。
+                 """
+             ```
+- Goals:
+    1. 解析页面的Memu元素信息，提取关键属性。
+    2. 根据执行指令信息，生成对Memu元素进行点击操作的Selenium代码。
+    3. 结合完整指令信息和补充信息（如果有的话），完善代码逻辑，确保代码的完整性和准确性。
+    4. 返回生成的Selenium代码以及相关信息，供用户使用和参考。
+- Constrains: 生成的Selenium代码应基于Python语言，遵循Selenium的最佳实践，确保代码的可执行性和稳定性。代码应简洁明了，易于理解和维护。在没有补充信息的情况下，仍能生成基本的、符合要求的代码。
+- OutputFormat: 输出应包括生成的Selenium代码以及必要的注释说明，以帮助用户理解代码的逻辑和功能。
+- Workflow:
+    1. 解析页面的Memu元素信息，提取其id、name、class等关键属性。
+    2. 根据执行指令信息，推测出关键词，并匹配到对应的Memu元素。
+    3. 生成对匹配到的Memu元素进行输入操作的Selenium代码。
+    4. 结合完整指令信息和补充信息（如果有的话），完善代码逻辑，添加必要的异常处理和验证机制。
+    5. 返回生成的Selenium代码以及相关信息,不必解释,直接返回代码.
+- Examples:
+    - 例子1：
+        - 页面Memu元素信息：
+           [{'tag': '', 'name': '', 'type': 'button', 'text': 'Login', 'classes': ['el-button', 'login-button'], 'id': 'id_864492000'}]
+        - 需要执行指令信息：3.Click Sign in button
+        - 完整指令信息：['1.open url http://127.0.0.1/index','2.Type “peter.li” as Username','3.Click Sign in button']
+        - 补充信息：登录操作系统
+        - 生成的Selenium代码：
+            ```python
+            # -*- coding: utf-8 -*-
+            from autotest import clickElementByItem,writeResult
+            def run(browser):
+                # 局部测试步骤：4.Button:Click the Sign in button
+                sign_in_button_item = '{"name":"", "id": "id_864492000"}'
+                success = clickElementByItem(browser, sign_in_button_item)
+                writeResult(success, "Clicked the Sign in button")
+            ```
+# 页面的Input元素信息
+{{n_collect_page}}
+# 执行指令信息
+{{current_step}}
+
+# 完整指令信息
+
+# 补充信息
+{{similar_data}}
+''')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Generate script
+define('tpl_test_script','''
+	/*{
+		"llm_type":""
+	}*/
+	你是熟悉selenium 4的从事银行业务的高级测试，首先，请结合页面信息生成"局部测试步骤"的python函数。接着，请review该python函数并返回最终的JSON格式的review result。
+    # python函数为：run(browser)
+	1. 它将被主模块用module.run(browser)的方式调用，请确保生成的代码符合测试脚本要求。
+	2. 首先导入可调用函数：from autotest import xxx
+
+    # 分析是否有需要替换的元素的情况，review该python函数并用独立的JSON格式返回结果：
+	1. 代码中的元素有些不是来自"实际页面元素"，但可以调整方案实现测试目标。
+	用JSON格式返回：{{fn.task(false).thought('补充思考').suggest('建议修正方法XXXX')}}
+	2. 代码中的元素有些不是来自"实际页面元素"，需要进行二次替换。那么切换plan为n_collect_page。
+	用JSON格式返回：{{fn.task().thought('假设的元素XXX，或者需要替换的元素XXX').suggest('建议修正方法XXXX').plan('n_collect_page')}}
+	3. 代码中的元素都是来自"实际页面元素", 不用替换，可进入下一个流程。
+	用JSON格式返回：{{fn.task().plan('next')}}。
+
+	# 局部测试步骤为（共1步, 如果页面已经准备好，不用再次gotoPage）：
+	{{StepTestInfo.current_step}}
+
+	# 主模块涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+
+	{{sys_hint}}
+	{{sys_hint_agt}}
+		
+	# 实际页面元素：(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, value:表单元素的值, id: 用于定位元素的mapping id, children:[子元素信息]}...])：
+	{{tpl_task_element_info}}
+	
+    # 测试脚本要求：
+	1. selenium的代码请基于版本4，比如：它定位元素用的是browser.find_elements(By.XPATH, 'xxx')
+	2. 优先使用autotest中封装的方法。如果必须使用selenium的原生的find_elements, xxx_element_located等方法时，不可直接使用item中的mapping id，比如：@id="id_XXX"
+		请先调用getXpathByItem获取真实的xpath， 然后才可以使用原生方法
+	3. 测试结果（无论成败）需要调用函数writeResult(sucess, desc)。
+	4. 只可以使用“实际页面元素”中列出的元素，不要自己假设不存在的元素
+    5. 使用autoptest中的可调用函数：xxxByItem，实现对元素的操作
+    6. 仅仅生成“局部测试步骤”的代码，请参考主模块中的前后步骤的边界，不要自主补充前面步骤已经完成过的代码，不要提前实现后面步骤待完成的代码
+	{{fn.when("taskType=='DYNAMIC_SELECT_TASK'", "
+		7. 动态过滤的具体步骤为：对上面的“实际页面元素”中的prefer元素逐个分析，过滤出符合条件的元素列表。比如：perfer_items=[xxx]
+		[item for item in prefer_items if yes/not existElement(browser, item, '进行中') and xxx，表示排除'进行中'这一状态的过滤结果
+		8. 随机选择元素为：import random, 然后：random.choice(filtered_items)
+	", "
+		7. 对于关闭弹窗的测试步骤，应加入元素判断，如果有弹窗按钮，再通过点击按钮去关闭弹窗. if getXpathByItem(browser, close_button_item): success = clickElementByItem(browser, close_button_item)
+		8. 只有“局部测试步骤”明确说明要跳转某个具体的url时，才可引入gotoPage语句，注意gotoPage自带验证，无需二次验证页面是否加载成功
+	")}}
+	
+	# 其中来自autotest库的可调用python函数（通过from autotest import clickElementByItem,sendKeysToElementByItem,selectByItem,getXpathByItem ... 导入下面的函数1-7）：
+	其中参数browser是已经构建好的webdriver.Chrome实例, item来自实际页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位元素的mapping id"}'
+	{{fn.when("taskType=='OPERATION_EXECUTE_TASK'", "
+		1. gotoPage(browser, systemName, url), 用于跳转指定的页面,验证页面并等待页面加载完成,systemName为待测试系统名,url为待测试的页面地址
+	")}}
+	{{fn.when("taskType=='DYNAMIC_SELECT_TASK'", "
+		1. existElement(browser, item, target_text), 基于item获取元素或容器的xpath，并检查该元素或其子元素中是否包含指定的文本（target_text）。这里的target_text代表要查找的状态描述或任意文字内容。如果元素或其内部包含与target_text相匹配的文本，则函数返回True；否则返回False
+	")}}
+	2. getXpathByItem(browser, item),基于item获取页面元素的xpath,元素不存在时返回None.注：如果同时涉及点击动作，建议直接使用clickElementByItem或sendKeysToElementByItem或selectByItem
+	3. loadTestData(category), 用于加载测试数据,返回为List<json>, 为页面的字段的列表数据
+	4. writeResult(success, desc),记录执行结果,success为测试是否成功的true/false标志,desc为结果的说明
+	5. clickElementByItem(browser, item, waitSecond, disableLog), 用于元素点击. 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False.
+	6. sendKeysToElementByItem(browser, item, keys),用于文字输入. 基于item查询对应的xpath,并基于xpath定位元素,输入keys所代表的字符.成功返回True,否则返回False.
+	7. selectByItem(browser, item, condition), 用于下拉框选择. 基于item查询对应的xpath,并基于xpath定位select或mat-select,选择condition指定的过滤条件.成功返回True,否则返回False.
+	8. getBrowser(),用于获得已经初始化的WebDriver（webdriver.Chrome）,返回为browser
+''')
+
+// 结果比较 先改为一个chat -> 直接去掉验证步骤
+define('tpl_cmp_pageresult','''
+	/*{
+		"llm_type":"deepseek-chat"
+	}*/
+	你是Web测试专家，请分析进行了局部测试前后的页面元素的数据及结构，（json格式：[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, value: 表单元素的值, children:[子元素信息]}...]），请分析前后变化情况，判断局部测试步骤是否执行成功，用JSON给出结果。
+	{
+		"thought": {
+			"change": "前后页面元素的变化情况总结",
+			"reasoning":["结合局部测试步骤在主流程中的位置,结合下一步验证的界面需要,判断是否执行成功.进行3步以上的推理"],
+			"criticism":"推理结果是否符合change的总结",
+			"re_reasoning":"true/false"		// true表示: 推理过程有错误，需要重新推理.  false表示：无需重新推理
+		},
+		"change_element": {"name":xxx, "id":xxx}, // 如果有chang发生, 给出一个变化的元素用于识别标记。否则为{}。
+		"change_behavior": "add/remove/update/other",		// 如果有chang发生, 该变化的元素是发生了什么类型的变化. add表示新出现，remove表示消失，update表示属性或状态有变化，other表示其他类型的变化
+		"run_success":"true/false", 	// 根据推理的结果，判断局部测试步骤是否执行成功.如果页面出现新弹窗，可由下一步继续处理，也认为当前步骤执行成功
+		"vote": "1或者2",					// run_success为true时为1, run_success为false时为2
+		"hasDialog": "true/false",		// 是否存在弹窗
+		"elements"：'[{"name":xxx, "id":xxx}...]		// hasDialog为true时，需要给出弹窗按钮信息。否则为[]
+	}
+
+	{{sys_hint}}
+
+	# 特别说明:
+	1. run_success 必须为true的情况有:
+	 - 步骤为Input
+	 - 步骤为点击下载操作
+
+	# 局部测试步骤为：
+	{{StepTestInfo.current_step}}
+
+	# 主流程涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+
+
+	# 局部测试执行之后的元素结构为：
+	{{fn.str(fn.func('', 'StepTestInfo', true), 'simplepageinfo')}}
+''')
+
+// 结果比较
+define('tpl_cmp_pageresult_bak','''
+	/*{
+		"llm_type":"deepseek-chat,deepseek-chat,deepseek-chat"
+	}*/
+	你是Web测试专家，请分析进行了局部测试前后的页面元素的数据及结构，（json格式：[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, value: 表单元素的值, children:[子元素信息]}...]），请分析前后变化情况，判断局部测试步骤是否执行成功，用JSON给出结果。
+	{
+		"thought": {
+			"change": "前后页面元素的变化情况总结",
+			"reasoning":["结合局部测试步骤在主流程中的位置,结合下一步验证的界面需要,判断是否执行成功.进行3步以上的推理"],
+			"criticism":"推理结果是否符合change的总结",
+			"re_reasoning":"true/false"		// true表示: 推理过程有错误，需要重新推理.  false表示：无需重新推理
+		},
+		"change_element": {"name":xxx, "id":xxx}, // 如果有chang发生, 给出一个变化的元素用于识别标记。否则为{}。
+		"change_behavior": "add/remove/update/other",		// 如果有chang发生, 该变化的元素是发生了什么类型的变化. add表示新出现，remove表示消失，update表示属性或状态有变化，other表示其他类型的变化
+		"run_success":"true/false", 	// 根据推理的结果，判断局部测试步骤是否执行成功.如果页面出现新弹窗，可由下一步继续处理，也认为当前步骤执行成功
+		"vote": "1或者2",					// run_success为true时为1, run_success为false时为2
+		"hasDialog": "true/false",		// 是否存在弹窗
+		"elements"：'[{"name":xxx, "id":xxx}...]		// hasDialog为true时，需要给出弹窗按钮信息。否则为[]
+	}
+	
+	{{sys_hint}}
+	
+	# 局部测试步骤为：
+	{{StepTestInfo.current_step}}
+	
+	# 主流程涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+
+	# 初始页面元素结构为：
+	{{StepTestInfo.simplepageinfo}}
+	
+	# 局部测试执行之后的元素结构为：
+	{{fn.str(fn.func('', 'StepTestInfo', true), 'simplepageinfo')}}
+''')
+
+// 修改代码
+define('tpl_self_fix', '''
+	你是一个熟悉selenium4的大模型，现在有一个局部的测试用例描述，请判断上次任务的结果失败的原因(目前已经修【{{sys_run_count}}】次)，选择合适的应对方案，用指定的JSON格式返回。
+	如有可能修正上次任务的python代码，那么返回2个结果，一个为不含代码的JSON，另一个为python代码标记的代码块(此时，第一个JSON结果的canFix为true)。
+
+	# 局部的测试用例描述：
+	{{StepTestInfo.current_step}}
+	
+	# 主模块涉及的测试步骤为：
+	{{StepTestInfo.steps}}
+		
+	# 上次任务的代码：
+	{{python_code}}
+	
+	# 检查"上次任务的代码"，使之符合下面的3条要求后，再继续接下来的分析：
+	1. 涉及元素定位时，只可使用autotest中的可调用函数
+	2. 移除代码中出现的gotoPage，如果它不属："当前步骤"明确指定需要gotoPage
+	3. selenium的代码请基于版本4
+	
+	{{sys_hint_agt}}
+
+	# 页面元素信息以及与弹窗有关的元素信息：
+	{{tpl_task_page_info}}
+	{{tpl_task_element_info}}
+
+	# 可选择的失败原因及应对方案如下，请仔细的逐一思考，先排除了原因1才需要思考原因2，排除了原因2才需要思考原因3。（其中的plan字段流程标记，不要改动，step_xxx指完整测试步骤的某一步) 
+	原因1. 有弹框存在时，或者有新的弹窗再次弹出时，应该是点击“确认”关闭弹窗，无论成功失败都不用记录日志，直接继续后续的点击元素的操作。
+	应对方案：基于新提示给出修正后的python代码。并同时返回修正成功的JSON标记： {{fn.task().thought('遗漏xxx1步骤，需进行xxx操作').plan('next').put('canFix','true')}}
+
+	原因2. 执行反馈显示有弹窗或遮挡（element click intercepted），但是“弹窗有关的元素信息”中的hasDialog为false
+	应对方案：弹窗已经被关闭，考虑重新执行一次代码。{{fn.task().thought('原因2. xxx').plan('n_python_file','act')}}
+
+	原因3. 采用了原始的selenium函数进行元素定位，而非autotest中的函数：
+	应对方案：调整为优先使用sendKeysToElementByItem或者clickElementByItem这类函数，给出修正后的python代码。并同时返回JSON格式：{{fn.task().thought('xxx调整思路').plan('next').put('canFix','true')}}
+
+	原因4. 脚本错误：unexpected indent
+	应对方案：注意python代码的缩进问题，给出修正后的python代码。并同时返回JSON格式：{{fn.task().thought('xxx调整思路').plan('next').put('canFix','true')}}
+
+	原因5：代码和注释中，存在假设的内容，无足够信息修正
+	应对方案：由后续逻辑重新收集页面信息进行分析。并同时返回JSON格式：{{fn.task().thought('原因5. xxx').plan('n_collect_page')}}
+
+	原因6：代码和注释中，存在与当前局部的测试用例无直接关系的，假设的操作
+	应对方案：移除该假设的步骤，给出修正后的python代码。并同时返回修正成功的JSON标记： {{fn.task().thought('移除不相关的假设逻辑').plan('next').put('canFix','true')}}
+	
+	原因7. 库的内部问题或环境设置问题
+	思考过程中不要质疑autotest中的函数的定义问题，环境和库已经被其他脚本验证过多次，不要考虑增加等待条件，现有autotest的可调用函数已经内置了等待元素可点击，也不要加入假设存在的其他函数。回到应对方案1-6，重新思考
+
+	原因8. [{{sys_run_count}}]次修正错误，无法做出合适判断。
+	跳过本次判断，由后续逻辑思考，返回JSON格式： {{fn.task().thought('原因7. xxx').plan('n_collect_page')}}
+	
+	# 其中来自autotest的可调用函数（通过from autotest import XXX 导入下面的函数）：
+	其中item来自实际的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	{{fn.when("taskType=='VERIFICATION_TASK'", "\
+		1. getXpathByItem(browser, item),基于item获取页面元素的xpath.参数browser是已经构建好的webdriver.Chrome实例,参数item来自实际的页面元素.
+	")}}
+	{{fn.when("taskType=='DYNAMIC_SELECT_TASK'", "
+		1. existElement(browser, item, target_text), 基于item获取元素或容器的xpath，并检查该元素或其子元素中是否包含指定的文本（target_text）。这里的target_text代表要查找的状态描述或任意文字内容。如果元素或其内部包含与target_text相匹配的文本，则函数返回True；否则返回False
+		2. clickElementByItem(browser, item), 用于元素点击. 基于item查询对应的xpath，并基于xpath定位元素，等待元素可点击后，进行点击。点击成功返回True，否则返回False。
+		3. sendKeysToElementByItem(browser, item, keys)，用于文字输入. 基于item查询对应的xpath，并基于xpath定位元素，输入keys所代表的字符。成功返回True，否则返回False。
+		4. writeResult(success, desc)，记录执行结果，success为测试是否成功的true/false标志，desc为结果的说明
+		5. selectByItem(browser, item, condition), 用于下拉框选择. 基于item查询对应的xpath,并基于xpath定位select或mat-select,选择condition指定的过滤条件.成功返回True,否则返回False.
+	")}}
+	{{fn.when("taskType=='OPERATION_EXECUTE_TASK'", "
+		1. clickElementByItem(browser, item), 用于元素点击. 基于item查询对应的xpath，并基于xpath定位元素，等待元素可点击后，进行点击。点击成功返回True，否则返回False。
+		2. sendKeysToElementByItem(browser, item, keys)，用于文字输入. 基于item查询对应的xpath，并基于xpath定位元素，输入keys所代表的字符。成功返回True，否则返回False。
+		3. writeResult(success, desc)，记录执行结果，success为测试是否成功的true/false标志，desc为结果的说明
+		4. selectByItem(browser, item, condition), 用于下拉框选择. 基于item查询对应的xpath,并基于xpath定位select或mat-select,选择condition指定的过滤条件.成功返回True,否则返回False.
+	")}}
+''')
+
+// 修改代码添加检测
+define('tpl_self_add_wait', '''
+	/*{
+		 "llm_type":""
+	 }*/
+	你是熟悉selenium 4的从事银行业务的高级测试，请基于下面的python代码需求，完成run函数。
+    # python函数：run(browser)
+	它将被主模块用run(browser)的方式调用。
+	{{python_code}}
+	
+	# python代码需求
+	在run的结尾，添加：waitElement(browser, item, '{{n_cmp1.change_behavior}}') 等待页面的加载完成，item为下面的待检测元素
+
+	# 待检测的元素：
+	{{n_cmp1.change_element}}
+	
+	# 其中来自autotest的可调用函数（通过from autotest import waitElement 补充导入函数）：
+	参数item是来自弹窗的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	参数browser是已经构建好的webdriver.Chrome实例
+	1. waitElement(browser, item, type),等待item所指向的元素出现/消失/改变,取决于type类型(add/remove/update)
+''')
+
+// 修改代码处理弹窗 - 废弃
+define('tpl_self_add_dialog', '''
+	你是熟悉selenium 4的从事银行业务的高级测试，请基于下面的python代码需求，完成run函数。
+    # python函数：run(browser)
+	它将被主模块用run(browser)的方式调用。
+	{{python_code}}
+	
+	# python代码需求
+	判断弹窗的可点击按钮(item)存在后，用clickElementByItem(browser, item, 2)关闭弹窗。
+
+	# 弹窗的页面元素：
+	{{n_cmp1.elements}}
+	
+	# 其中来自autotest的可调用函数（通过from autotest import gotoPage, clickElementByItem, getBrowser。。。导入下面的函数）：
+	参数item是来自弹窗的页面元素,json的string类型，格式为：'{"name":"元素名称", "id": "用于定位的元素id"}'
+	参数browser是已经构建好的webdriver.Chrome实例
+	1. getXpathByItem(browser, item),基于item获取页面元素的xpath,item不存在返回False.
+	2. clickElementByItem(browser, item, waitSecond, disableLog), 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒.disableLog为可选参数,默认为False,不禁止输出日志. 点击成功返回True,否则返回False.
+''')
+
+// 校验元素
+func('CheckElements', '''
+import com.llm.agentcore.core.agent.FunctionUtil
+import java.util.Map
+public class CheckElements {
+	public static Object execute(Object sys_last_result, Map StepTestInfo, FunctionUtil fn) {
+		// 检查每个check_elements中的元素都是在elements中存在的 （注：check_elements中不是element的元素，无需检查）
+		def elements = fn.list(StepTestInfo.simplepageinfo)
+		def check_elements = fn.map(sys_last_result)
+
+		def allElementsExist = true
+		def resultMessages = ""
+		check_elements.each { entry ->
+			def key = entry.key
+			def list = entry.value
+			if (list instanceof List) {
+				list.each { element ->
+					if (!elementExistsInElements(element, elements)) {
+						resultMessages += "元素 ${element['name']}(ID: ${element['id']})不存在; "
+						allElementsExist = true
+					}
+				}
+			}
+		}
+		return fn.task(allElementsExist).result(resultMessages).build()
+	}
+
+	def static boolean elementExistsInElements(element, elements) {
+		for (item in elements) {
+			if (!item) continue // 跳过空元素
+			if (item['id'] == element['id'] && item['name'] == element['name']) {
+				return true
+			}
+			if (item['children']) {
+				// 递归检查 children
+				if (elementExistsInElements(element, item['children'])) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
+''')
+
+// 页面结果检查 - 测试，未启用
+define('tpl_check_screenshot', '''
+	/*{
+	 "llm_type":""
+ }*/
+	你是一名测试工程师，请观察当前的局部测试步骤执行后的界面截图，判断是否执行成功。然后，请思考下一步应如何处理，并将思考结果用JSON格式返回：
+	JSON格式： {
+		"thought": {
+			"keywords": "界面截图中的关键元素是否符合当前局部测试用例的预期",
+			"current_step": "{{current_step}}",
+			"original_next_step": "原来规划的完整测试步骤中的下一步",
+			"reasoning":[
+				"检查界面截图中的关键元素是否按预期显示（例如，按钮是否可用、文本框是否填充正确等）。",
+            	"验证功能是否按预期工作（例如，点击按钮后是否跳转到正确的页面、是否触发了预期的弹出框等）。",
+            	"如果发现任何问题，思考是否需要调整测试用例或测试步骤。",
+            	"考虑是否有额外的测试步骤需要添加，以确保测试的全面性和准确性。"
+			]
+		},
+		result: {
+			'behavior': 'add/update/nochange',	// add或update下一步的局部测试步骤。nochange表示不调整，继续按original_next_step执行。
+			'next_step': 'xxx'					// hehavior为add/update时，调整后的下一步的局部测试步骤。behavior为nochange时，为空。 
+		}
+	}
+	
+	# 局部测试步骤：
+	{{current_step}}
+
+	# 完整测试步骤：
+	{{steps}}
+	
+	# 错误信息
+	{{sys_hint}}
+	
+	{{fn.imageFlag(sys_last_result)}}
+''')
+
+
+// 修复python 导包
+define('tpl_fix_python_import', '''
+	/*{
+	 "llm_type":""
+ }*/
+	你是熟悉selenium 4的从事银行业务的高级测试，  要求审查p若ython代码 import 错误, 只修改import相关代码,其余代码不需要改动,重新返回全部代码
+    # python autotest 模块拥有函数
+1. existElement(browser, item, target_text), 基于item获取元素或容器的xpath，并检查该元素或其子元素中是否包含指定的文本（target_text）。这里的target_text代表要查找的状态描述或任意文字内容。如果元素或其内部包含与target_text相匹配的文本，则函数返回True；否则返回False
+2. getXpathByItem(browser, item),基于item获取页面元素的xpath,元素不存在时返回None.注：如果同时涉及点击动作，建议直接使用clickElementByItem或sendKeysToElementByItem或selectByItem
+3. loadTestData(category), 用于加载测试数据,返回为List<json>, 为页面的字段的列表数据
+4. writeResult(success, desc),记录执行结果,success为测试是否成功的true/false标志,desc为结果的说明
+5. clickElementByItem(browser, item, waitSecond, disableLog), 用于元素点击. 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False.
+6. sendKeysToElementByItem(browser, item, keys),用于文字输入. 基于item查询对应的xpath,并基于xpath定位元素,输入keys所代表的字符.成功返回True,否则返回False.
+7. selectByItem(browser, item, condition), 用于下拉框选择. 基于item查询对应的xpath,并基于xpath定位select或mat-select,选择condition指定的过滤条件.成功返回True,否则返回False.
+8. getBrowser(),用于获得已经初始化的WebDriver（webdriver.Chrome）,返回为browser
+9. gotoPage(browser, systemName, url), 用于跳转指定的页面,验证页面并等待页面加载完成,systemName为待测试系统名,url为待测试的页面地址
+
+```python
+{{sys_last_result}}
+```
+''')
+
+
+// 删除上一步相关代码
+define('tpl_delete_python_code', '''
+	/*{
+	 "llm_type":""
+ }*/
+你是熟悉selenium 4的从事银行业务的高级测试, 
+1.审查python代码,
+2.根据当前测试用例描述,推测出上一步测试用例描述
+3.要求删除run函数中与上一步测试用例描述相关的python代码
+4.run函数必须传入参数,例如 `def run(browser):`
+5.修复import导入包问题
+-例如1:
+    错误:
+    ```
+    from autotest.element_interaction import clickElementByItem
+    from autotest.result_logging import writeResult
+    ```
+    修改后:
+    ```
+    from autotest import clickElementByItem
+    from autotest import writeResult
+    ```
+5.重新返回python代码
+# 完整的测试步骤为：
+  {{StepTestInfo.steps}}
+# 当前测试用例描述：
+  {{StepTestInfo.current_step}}
+
+```python
+{{sys_last_result}}
+```
+''')

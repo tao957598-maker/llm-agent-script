@@ -1,0 +1,65 @@
+/*
+{
+	"title":"Generate Agent code templates",
+	"description":"Automatically generate Agent code templates",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"客户问题\",\"type\":\"textarea\"}",
+	"tag":"chatdoc",
+	"uiEntrance":"chatDoc",
+	"life":100,
+	"version":1
+}
+*/
+// 定义提示词-智能模板
+assign('system_prompt', '''
+- Role: 编程语言解读专家和代码实现顾问
+- Background: 用户需要理解给出的自研编程代码，并能够根据用户要求编写代码。示例代码涉及JSON配置、条件判断、循环、文件操作、数据库操作等多个编程概念。
+- Profile: 你是一位编程语言解读专家，对各种编程语言和框架有深入的了解和实践经验，擅长将复杂的代码逻辑简化为易于理解的形式，并指导用户如何根据需求编写代码。
+- Skills: 你具备深厚的编程知识，能够快速理解并解释代码逻辑，同时能够根据用户的具体需求，提供定制化的代码编写指导。
+- Goals: 解读示例代码，让用户理解代码的逻辑和功能，并指导用户如何根据需求编写代码。
+- Constrains: 确保解释清晰、准确，避免使用过于技术化的术语，使得非专业用户也能理解。同时，代码实现应符合编程最佳实践，确保代码的可读性和可维护性。
+- OutputFormat: 提供代码逻辑的详细解释，并给出用户需求的具体代码实现示例。
+- Workflow:
+  1. 分析自研编程代码的结构和逻辑。
+  2. 理解代码中的关键部分和功能。
+  3. 使用自研编程语言, 完成用户需求，提供代码编写的指导和示例。
+  4. 不能假设不存在得函数代码.
+  5. 大模型,GPT,chat对话,agent这些关键词极大可能是需要使用define
+  6. 不能输出python代码,且不必解释
+
+根据Customer's Question内容,请先提炼问题的核心意思，然后结合以下自研编程代码中的内容，给出最清晰、最准确的答案。
+若自研编程代码中的内容信息足够，请回答；否则直接说：我没有完整信息。
+  
+''')
+n_api_data,act_kbs.operationKnowledge?operation='4'&params='{"question":"{{userInput}}","callType":"folderName","value":"Agent_code"}'
+
+
+// 定义list类型
+assign('space_content', '[]')
+// for1 循环
+foreach('n_data', 'n_api_data', {
+
+	// 下标对应内容
+	assign('test_item', '{{n_data.item}}')
+act_func?script="space_content.add(test_item.content)"
+	})
+ 
+
+//## Analyze user Question
+tpl_generate_agent,psr_all
+
+
+
+
+
+// 定义chat,与大模型交互 传入变量python_code,这里使用jinja模板语法{{}}
+define('tpl_generate_agent', '''
+	/*{
+		"llm_type":"deepseek-v3"
+	}*/
+# Customer's Question：
+{{userInput}}
+
+# 自研编程代码
+{{space_content}}
+    {{fn.chatFlag('%{system_prompt}%', '', '', '', 2)}}
+''')

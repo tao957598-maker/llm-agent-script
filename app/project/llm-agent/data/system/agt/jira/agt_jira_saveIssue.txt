@@ -1,0 +1,18 @@
+/*
+ {
+	 "title": "自动化测试-数据库获取issue并存入jira",
+	 "description": "自动化测试-数据库获取issue并存入jira",
+	 "parameter": "test_no=测试编号",
+	 "llmType": "",
+	 "resultPlan": "n_jira_save_issue",
+	 "life": "100"
+ }
+*/
+
+// Query test steps from KB
+n_steps, act_kb.select?name=kb_testcase&column=steps&where='{"test_no":"{{test_no}}"}'
+
+//assign list
+assign('map', '{ "summary":"{{test_no}}","description":{{n_steps}}}')
+// 调用import data function to db
+n_save, act_func?name='Jira.saveIssue(map)'

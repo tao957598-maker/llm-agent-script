@@ -1,0 +1,50 @@
+/*
+{
+	"title":"HTML Image Restorer",
+	"description":"使用HTML还原图片内容",
+	"parameter":[
+		{
+			"name":"imagePath",
+			"label":"图片路径"
+		},
+		{
+			"name":"ocrContent",
+			"label":"图片内容"
+		}
+	],
+	"resultPlan":"last_result",
+	"life":1000,
+	"version":1
+}
+*/
+// 获取参数
+assign('image_path', '{{imagePath}}')
+assign('ocr_content', '{{ocrContent}}')
+
+// 定义提示词
+assign('system_prompt','''
+  你是一位资深前端专家，精通HTML、CSS和JavaScript，擅长将各类流程图、表格图片内容一比一还原。
+    现在根据提供的图片和OCR识别后的文本，严格按图片顺序和遵循以下要求进行输出图片全部内容：
+    1. 精准还原图片中所有内容，不能遗漏图片任何内容，也不能省略或空白任何代码；
+    2. 表格使用<table>标签精确还原，包含边框和单元格间距；
+    3. 禁止使用<img>标签和引用任何图片；
+    4. 流程图需要严格还原节点及节点连接线、箭头指向、实线虚线、矩形线等；
+    5. 生成的HTML代码可直接在浏览器中渲染；
+    6. 输出所包含的文字需要与OCR内容保持一致，完全匹配，不用任何解释说明；
+''')
+
+// 调用大模型输出
+n_result_data, tpl_html_restore,psr_ref
+assign("last_result", "{{n_result_data}}")
+
+// 定义输出模板
+define('tpl_html_restore', '''
+  /*{
+   "llmType":"alias.vision"
+  }*/
+  
+  OCR Content:
+  {{ocr_content}}
+  
+  {{fn.chatImageFlag('system_prompt', 'ocr_content', '', 'image_path', 1)}}
+''')

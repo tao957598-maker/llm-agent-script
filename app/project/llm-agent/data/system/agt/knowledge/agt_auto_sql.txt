@@ -1,0 +1,64 @@
+/*
+{
+  "title": "Auto SQL Agent",
+  "description": "Auto SQL Agent",
+  "parameter": [
+    {
+      "name": "userInput",
+      "label": "客户问题",
+      "type": "textarea"
+    }
+  ],
+  "llm_type": "deepseek-chat",
+  "life": "100",
+  "version": "1"
+}
+*/
+
+// 测试：执行 SQL 查询 act_kb.selectBy?sql='select * from kb_test_data_scenarios9'
+assign("input_parameter", "{{userInput}}")
+
+// 第一步：解析自然语言为 SQL
+define('tpl_sql_gen_prompt', '''
+</no_think>你是一位资深 SQL 数据库专家，请根据用户的自然语言请求生成一条 MySQL 查询语句。遵循以下规则：
+
+【阶段一：优先尝试直接生成】
+1. 如果用户提供了明确的表名和字段名（如“查询 kb_test_user 表的 name 和 age 字段”），且这些字段看起来是标准英文字段名（非中文描述），则直接生成 SQL 语句，无需执行 SHOW COLUMNS。
+2. 字段是否明确可通过以下规则判断：
+   - 使用英文小写拼写（如 `name`、`user_id`）；
+   - 多个字段之间使用顿号、逗号、空格等分隔；
+   - 没有使用中文描述词（如“年龄”“性别”“产品名”等）。
+
+【阶段二：启用字段结构智能匹配】
+3. 只要用户使用了中文模糊字段名称（如“年龄”“性别”“产品价格”等），你需要先对目标表执行 `SHOW COLUMNS FROM 表名，查到所有字段名后，再结合字段名与用户请求进行智能匹配。
+4. 若是有多字段匹配成功，则都取（比如包含“名称”的字段有“nick_name”,“real_name”）。
+
+【通用规则】
+5. 所有生成的语句必须是 SELECT 查询语句，禁止生成 INSERT/UPDATE/DELETE/DROP 等。
+6. 只允许查询以 `kb_` 开头的表名，其余表名无效。
+7. 如果用户没有指定返回行数，并且没有明确指出“查询所有数据”或者“查询全部数据”之类的描述，请默认添加 `LIMIT 100` 限制返回行数。
+8. 仅支持联表查询（JOIN）当且仅当用户提供了明确的两个表名与关联字段；否则不联表。
+9. 如果找不到匹配字段，请返回：`{"sql": "找不到匹配字段"}`，不要猜测。
+10. 返回格式必须为 JSON，仅包含字段 `sql`，不要添加注释或解释说明。
+
+示例：
+请求：查询kb_test_user的 name 和 age 字段  
+返回：{"sql": "SELECT name, age FROM kb_test_user LIMIT 100"}
+
+请求：查询kb_test_meta中年龄为30的数据  
+返回：{"sql": "SELECT * FROM kb_test_meta WHERE age = 30"}
+（如果 age 是通过字段结构模糊匹配得出的）
+
+请求：{{input_parameter}}
+
+''')
+n_gen_sql, tpl_sql_gen_prompt
+
+// 第二步：执行 SQL 查询
+assign("result_sql", "{{n_gen_sql.sql}}")
+n_result_data, act_kb.selectBy?sql='{{result_sql}}'
+// ## n_result_data {{n_result_data}}
+ assign("aaa",'')
+
+// 第三步：输出结果
+assign('generated_data', '{{result_sql}}')

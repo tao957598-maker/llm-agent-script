@@ -1,0 +1,23 @@
+/*
+{
+	"title":"Python Code Generation",
+	"description":"Read user-uploaded files and generate Python code for creating tables",
+	"parameter":[
+		{
+			"name":"count",
+			"label":"Generation Amount"
+		},
+		{
+			"name":"file_path",
+			"label":"Save path for file upload"
+		}
+	],
+	"resultPlan":"generated_python_code",
+	"life":10000,
+	"version":1
+}
+*/
+n_generated_data, agt_faker_data_csv.test_gen_data?count={{count}}&file_path={{file_path}}
+assign("generated_data", '{{sys_last_result}}')
+
+n_generated_data, agt_faker_data_csv.test_gen_data?count={{count}}&file_path={{file_path}}

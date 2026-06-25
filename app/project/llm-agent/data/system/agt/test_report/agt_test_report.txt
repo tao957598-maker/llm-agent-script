@@ -1,0 +1,82 @@
+/*
+{
+	"title":"Test Report",
+	"description":"Generate and manage automated test reports",
+	"parameter":"{\"name\":\"system\",\"label\":\"System Name\"}",
+	"resultPlan":"result,n_report",
+	"version":1
+}
+*/
+// Tip
+assign("result", 'Agent is running')
+
+n_req,act_func?name='ReportAllData.getAllData()'
+
+assign('pass_rate', "{{n_req[0]['pass_rate']}}")
+assign('passed_test_cases', "{{n_req[0]['passed_test_cases']}}")
+assign('failed_test_cases', "{{n_req[0]['failed_test_cases']}}")
+assign('total_test_cases', "{{n_req[0]['total_test_cases']}}")
+
+
+n_req,act_func?name='ReportAllData.getTestExecutionSummary()'
+// req_datareq_datareq_data
+assign('req_data', '{{n_req.data}}')
+
+assign("result_list_data", '[]')
+
+// Iterate through the test no list
+foreach('n_req_data', 'req_data', {
+
+  assign('testNo', '{{n_req_data.item.test_no}}')
+  assign('data_dict', '{{n_req_data.item}}')
+
+
+  // Query test step result from KB
+  n_req,act_func?name='ReportAllData.getTestNo(testNo)'
+  // n_imagesn_images
+  assign('images_data_list', '{{n_req.data}}')
+
+  // Define a new empty list to store the results of the result field
+  assign("image_list", '[]')
+  assign("step_list", '[]')
+  // n_imagesn_images22
+
+
+  // Iterate through the n_images list
+  foreach('n_test_step', 'images_data_list', {
+    // Get the result field of the current element
+    assign('image', '{{n_test_step.item.result}}')
+    assign('step', '{{n_test_step.item.step}}')
+
+    // Add current_result to new_result_list
+    act_func?script="image_list.add('''{{image}}''')"
+    act_func?script="step_list.add('''{{step}}''')"
+  })
+  assign('n_test_step', '')
+  assign('images', '{{fn.filepath(image_list)}}')
+  // images and step_list are lists and need to be converted to[{"images":image0,"step":step_list0},..] groove 语法
+  n_data,act_func?script='''
+  def result = []
+  for (i in 0..<images.size()) {
+      def item = [
+          "images": images[i],
+          "step": step_list[i]
+      ]
+      result.add(item)
+  }
+  return result
+  '''
+  // resultresultresultresult1
+  assign("result", '{{n_data}}')
+
+  act_func?script="data_dict.put('result', result)"
+
+  act_func?script="result_list_data.add(data_dict)"
+  // result_listresult_list1
+  assign("result_listresult_list", '{{result_list_data}}')
+
+})
+// result_listresult_list
+assign("result_listresult_list", '{{result_list_data}}')
+
+n_report, act_func.word?template='test report all.docx'&output='selenium/result/Report_OKP.docx'

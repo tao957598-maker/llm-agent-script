@@ -1,0 +1,36 @@
+/*
+{
+	"title":"Delete jira issue key",
+	"description":"Delete Jira issue key",
+	"parameter":"{\"name\":\"Jira_project_name\",\"label\":\"Jira project name\"}",
+	"resultPlan":"result",
+	"life":100,
+	"version":1
+}
+*/
+// Tip
+assign("result", 'Agent is running')
+
+// Query system configuration
+n_jira_config,act_kb.readCfg?type='jira_config'&key='1'
+assign("jiraConfig", "{{n_jira_config}}")
+assign("jql", "project={{Jira_project_name}}")
+// Get all keys
+n_jira_get_issue, act_api.doExecute?name="jira_search_issues_chatdoc"
+// Wait for 3 seconds
+act_flow.wait?second=3
+
+
+foreach('n_data', 'n_jira_get_issue.data.issues', {
+  // issues_item
+  assign('issues_item', '{{n_data.item}}')
+
+  // Get the content of the current element
+  assign('issueIdOrKey', '{{issues_item.key}}')
+  assign("result", 'Delete issue: {{issueIdOrKey}}')
+  act_api.doExecute?name="jira_delete_issue_chatdoc"&params='{"issue_key":"{{issueIdOrKey}}"}'
+
+  // act_flow.go?plan=end
+})
+// Tip
+assign("result", 'Agent task ended')

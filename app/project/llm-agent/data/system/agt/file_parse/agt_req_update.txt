@@ -1,0 +1,142 @@
+
+/*
+{
+	"title": "Requirement Version Change",
+	"description": "Agent for managing requirement version changes",
+	"parameter": [
+	 	{
+	 		"name":"config_pages",
+	 		"label":"更改的页码(spilt by `,` )"
+	 	},
+		{
+			"name":"old_document_id",
+			"label":"原文档ID",
+			"type":"knowledge_space"
+		},
+		{
+			"name":"new_document_id",
+			"label":"更改的文档ID",
+			"type":"knowledge_space"
+		},
+    {
+			"name":"version",
+			"label":"版本"
+		}
+	 ],
+	"resultPlan":"n_old_req_list,n_new_req_list,n_diff_req_list",
+  "life":1000,
+	"version": "1"
+}
+*/
+// version
+when('!fn.hasValue(version)', {
+  assign("version", "2.0")
+})
+// config_pages
+when('!fn.hasValue(config_pages)', {
+  assign("config_pages", "0")
+})
+
+// old req list
+n_old_req_list,agt_search_req_list?document_id="{{old_document_id}}"&pages="{{config_pages}}"
+// new req list
+n_new_req_list,agt_search_req_list?document_id="{{new_document_id}}"&pages="{{config_pages}}"
+
+// diff req list
+n_diff_req_list,tpl_update_content,psr_json_python
+
+// save feature
+act_kb.defineAndImportData?tableName=kb_doc_update_features&data='{{n_diff_req_list.features_updates}}'
+// save story
+act_kb.defineAndImportData?tableName=kb_doc_update_stories&data='{{n_diff_req_list.stories_updates}}'
+// save task
+act_kb.defineAndImportData?tableName=kb_doc_update_tasks&data='{{n_diff_req_list.tasks_updates}}'
+
+// diff req prompt
+define('tpl_update_content', '''
+- Role: 高级需求文档对比与版本差异分析专家
+- Background: 用户已将两份需求文档分别转化为三层结构（features、stories、tasks）。现需对比新旧版本，识别差异点，并输出可直接存入更新表的结构化数据。
+- Profile: 你精通需求管理、版本控制与差异比对，能从语义出发识别需求内容是否变化，而不依赖原始 ID 或顺序。
+
+- Skills:
+  • 能基于语义判断新旧内容的对应关系，即使顺序不同或 ID 发生变化
+  • 能识别需求的新增、新删、修改和保持不变情况
+  • 能自动生成 update_content，细致描述变更点（可包含 title、description等字段变化）
+  • 能保证输出的 JSON 结构清晰、可直接入库
+  • 能支持版本管理，正确填充 old_doc_id 与 new_doc_id
+  • 能生成并填充 version 字段，以便追踪不同版本
+
+- Goals:
+  输入：两份完整的需求文档 JSON（包含 features / stories / tasks 三个数组）
+  输出：标准化的 JSON，包含三类更新表数据：
+  {
+    "features_updates": [...],
+    "stories_updates": [...],
+    "tasks_updates": [...]
+  }
+
+- Field Requirements:
+  features_updates:
+    - featureId: 功能 ID（若为新增则生成新 ID，若为删除则保留旧 ID）
+    - title: 功能标题（若无变化则沿用原值，若有改动则输出新标题）
+    - change_type: "new" / "deleted" / "modified" / "unchanged"
+    - update_content: 用简洁明确的一句话或短语描述变更点（如 "title changed from X to Y; description updated"）
+    - old_doc_id: 取旧文档 ID
+    - new_doc_id: 新文档 ID
+    - version: 版本号（从参数中获取）
+
+  stories_updates:
+    - storyId: 故事 ID（若为新增则生成新 ID，若为删除则保留旧 ID）
+    - featureId: 对应 featureId（保持关联）
+    - title: 故事标题（若无变化则沿用原值，若有改动则输出新标题）
+    - change_type: "new" / "deleted" / "modified" / "unchanged"
+    - update_content: 简明描述变更点（如 "title changed from A to B; acceptance criteria refined"）
+    - old_doc_id: 取旧文档 ID
+    - new_doc_id: 新文档 ID
+    - version: 版本号（从参数中获取）
+
+  tasks_updates:
+    - taskId: 任务 ID，若为删除则保留旧 ID）
+    - storyId: 对应 storyId（保持关联）
+    - title: 任务标题（若无变化则沿用原值，若有改动则输出新标题）
+    - change_type: "new" / "deleted" / "modified" / "unchanged"
+    - update_content: 简要描述变更点（如 "title updated; step details adjusted"）
+    - old_doc_id: 取旧文档 ID
+    - new_doc_id: 新文档 ID
+    - version: 版本号（从参数中获取）
+
+- Constraints:
+  1. 必须基于语义内容比对，而不是依赖 ID 或顺序
+  2. 若修改幅度极小（如仅标题或关键词调整），也需输出为 modified，并在 update_content 说明具体变动
+  3. 若新增/删除，则另一侧的内容为空字符串""
+  4. 输出必须是严格 JSON，不得包含额外解释
+  5. old_doc_id 与 new_doc_id 必须填充正确，以支持版本管理
+  6. title 字段必须存在，即使 unchanged 也要填充
+  7. version 必须存在，保证跨版本追踪
+
+- OutputFormat:
+  {
+    "features_updates": [ ... ],
+    "stories_updates": [ ... ],
+    "tasks_updates": [ ... ]
+  }
+
+- Workflow:
+  1. 解析输入的新旧文档 JSON
+  2. 对齐对应的 features、stories、tasks（基于语义，而非顺序/ID）
+  3. 判断差异 → 标记 change_type
+  4. 自动生成 title（若有改动则使用新值，否则保持原值）
+  5. 自动生成 update_content，详细说明变化点
+  6. 填充 old_doc_id、new_doc_id、version
+  7. 按三类输出 JSON，确保字段齐全、格式正确
+
+  # 原始需求：
+  {{n_old_req_list}}
+
+  # 修改后的需求：
+  {{n_new_req_list}}
+
+  # 版本：
+  {{version}}
+
+''')
