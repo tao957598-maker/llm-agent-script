@@ -1,92 +1,33 @@
-/*{
-    "title": "图片OCR识别Agent",
-    "description": "接收图片文件或Base64编码，调用OCR接口识别其中的文字并返回。",
-    "parameter": [
-        {
-            "name": "image_file",
-            "label": "图片文件",
-            "type": "file",
-            "description": "请上传需要识别的图片文件（支持常见格式如PNG, JPG）"
-        },
-        {
-            "name": "image_base64",
-            "label": "图片Base64编码",
-            "type": "textarea",
-            "description": "或者，直接粘贴图片的Base64编码字符串（与文件二选一）"
-        }
-    ],
-    "llm_type": "deepseek-chat",
-    "life": 50,
-    "version": 1
-}*/
+/*
+{
+	"title":"视觉问答",
+	"description":"通过视觉大模型获取图片中指定信息",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求",
+			"required":true
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space"
+		}
+	],
+	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"s",
+	"life":100,
+	"displayOrder":0,
+	"version":2
+}
+*/
 
-// 初始化结果变量
-assign("ocr_result", "")
-assign("final_status", "processing")
+n_data,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,kb_spaces_folder_id,extension,store_uri,knowledge_name'&maxSize=1&where='{"id":{{kbSpaceFileId}}}'
+n_first_data,act_func?script='''
+                        return n_data[0]
+                    '''
+// 调用ocr接口
+n_api_data,act_api.doExecute?name='img_ocr_api'&fileNames='{{n_first_data.store_uri}}'
 
-// 主要处理逻辑：检查输入并调用OCR工具
-when('fn.hasValue(image_file)', {
-    // 情况1：用户上传了文件
-    assign("input_type", "file")
-    n_ocr_raw_result, act_api?name="img_ocr_api"&params='{"img_file": "{{image_file}}"}'
-    assign("ocr_raw_data", "{{n_ocr_raw_result}}")
-})
-
-when('fn.not(fn.hasValue(image_file)) && fn.hasValue(image_base64)', {
-    // 情况2：用户提供了Base64编码
-    assign("input_type", "base64")
-    n_ocr_raw_result, act_api?name="img_ocr_api"&params='{"img_base64": "{{image_base64}}"}'
-    assign("ocr_raw_data", "{{n_ocr_raw_result}}")
-})
-
-when('fn.not(fn.hasValue(image_file)) && fn.not(fn.hasValue(image_base64))', {
-    // 情况3：无有效输入
-    assign("final_status", "input_error")
-    assign("error_message", "错误：请提供图片文件或Base64编码。")
-    act_flow.go?plan=end
-})
-
-// 处理OCR工具的返回结果
-when('fn.hasValue(ocr_raw_data) && {{n_ocr_raw_result.success}}', {
-    // 成功调用，尝试解析结果
-    // 假设API返回格式为 {"code": 200, "data": {"text": "识别出的文字..."}, "msg": "success"}
-    assign("parsed_data", "{{fn.func(''return ${ocr_raw_data};'')}}")
-    
-    when('{{parsed_data.code}} == 200', {
-        assign("ocr_result", "{{parsed_data.data.text}}")
-        assign("final_status", "success")
-    })
-    
-    when('{{parsed_data.code}} != 200', {
-        assign("final_status", "api_error")
-        assign("error_message", "OCR接口处理失败：{{parsed_data.msg}}")
-    })
-})
-
-// 失败处理块：捕获流程中的任何异常
-on_failure({
-    assign("final_status", "failure")
-    assign("error_message", "Agent执行过程发生意外错误。")
-    // 可以在这里记录日志或发送通知
-})
-
-// 最终输出组装
-when('{{final_status}} == "success"', {
-    define('tpl_final_output', '
-        图片OCR识别成功！
-        --------------------------
-        识别结果：
-        {{ocr_result}}
-    ')
-    tpl_final_output, psr_all
-})
-
-when('{{final_status}} == "input_error"', {
-    define('tpl_final_output', '{{error_message}}')
-    tpl_final_output, psr_all
-})
-
-when('{{final_status}} == "api_error" || {{final_status}} == "failure"', {
-    define('tpl_final_output', '状态：{{final_status}}， 错误信息：{{error_message}}')
-    tpl_final_output, psr_all
-})
+//$ ocr_content
+assign('ocr_content',"{{n_api_data.ocr_content}}")

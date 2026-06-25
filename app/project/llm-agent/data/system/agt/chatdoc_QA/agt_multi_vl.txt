@@ -17,12 +17,6 @@
             "name":"pages",
             "label":"页码数组",
             "required":false
-        },
-        {
-            "name":"ConcurrencyNum",
-            "label":"并发数",
-            "required":false,
-            "defaultValue":1
         }
 	],
 	"uiEntrance":"chatdoc_QA",
@@ -144,7 +138,7 @@ agent('agt_async_pipeline',{
 //       每个agent里 
 //             PDF：根据id串行查状态。状态成功后，运行 图片数组个数的 视觉问答agent
 //             IMAGE：视觉问答agent
-agt_async_pipeline?userInput={{userInput}}&maxConcurrent={{ConcurrencyNum}}
+agt_async_pipeline?userInput={{userInput}}
 n_tmp_answers_pipeline,act_memory.retrieve?var=agt_async_pipeline_answer&global=true
 n_pipeline_result,act_func?script='''
     def data = n_tmp_answers_pipeline

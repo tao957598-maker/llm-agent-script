@@ -1,7 +1,7 @@
 /*
 {
-	"title":"Testing Workflow Agent",
-	"description": "chatdoc Testing Workflow Agent",
+	"title":"Testing Workflow Agent Deep Thinking",
+	"description": "chatdoc Testing Workflow Agent Deep Thinking",
 	"parameter":[
 		{
 			"name":"userInput",
@@ -51,7 +51,7 @@ tpl_create_workflow, psr_json
 // 工作流生成完成，开始写入结构化计划
 assign('n_workflow_plan', '{{tpl_create_workflow}}')
 // 解析执行任务清单
-n_plan_tasks, act_plan.parse?task='{{n_workflow_plan.workflow}}'
+n_plan_tasks, act_plan.parse?task='{{n_workflow_plan.workflow}}'&saveDb='true'
 
 n_thinking_data,act_func?script='''
 			def str = "";

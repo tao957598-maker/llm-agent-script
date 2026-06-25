@@ -1,5 +1,4 @@
-/*
-{
+/*{
 	"title":"Gen testcase by KB",
 	"description":"Read requirement document to generate test cases",
 	"parameter":[
@@ -13,7 +12,7 @@
 		},
 		{
 			"name":"pipelineDesignMode",
-			"label":"web|api，默认 web"
+			"label":"web|api, default web"
 		},
 		{
 			"name":"outputLanguage",
@@ -28,16 +27,14 @@
 		}
 	],
 	"llmType":"alias.highquality",
-	"resultPlan":"final_design_result",
 	"life":10000,
 	"version":2
-}
-*/
+}*/
 
 
 
 assign('design_input_data', '{{input_data}}')
-// [DESIGN-STEP2] pipelineDesignMode 由父 assign 传入，勿用 binding.hasVariable（与子 root 的 pipeline_mode 同类问题）；用模板展开
+// [DESIGN-STEP2] normalize pipeline mode and emit a lightweight debug log
 n_dbg_design_in,act_func?script='println("[agt_test_doc_design] pipelineDesignMode=" + "{{pipelineDesignMode}}" + " documentId=" + "{{documentId}}"); return ""'
 n_pipeline_design_mode_val,act_func?script='''
     def v = "{{pipelineDesignMode}}".trim().toLowerCase()
@@ -49,17 +46,17 @@ assign('pipeline_design_mode', '{{n_pipeline_design_mode_val}}')
 assign('lang_output_hint', '{{fn.optional(outputLanguage, "en")}}')
 assign('lang_output_text', '{{fn.optional(outputLanguage, "en")}}')
 when('outputLanguage == "zh"', {
-  assign('lang_output_text', '中文')
+  assign('lang_output_text', 'Simplified Chinese')
 })
 when('outputLanguage == "tw"', {
-  assign('lang_output_text', '繁体中文')
+  assign('lang_output_text', 'Traditional Chinese')
 })
 when('outputLanguage == "en"', {
-  assign('lang_output_text', '英文')
+  assign('lang_output_text', 'English')
 })
 
 when('fn.hasValue(input_data)', {
-    // [DESIGN-STEP2·page] page 必须由 Step1 从 parse.page 直接传入，Step2 不再从 source 推断
+    // [DESIGN-STEP2/page] page stays required for downstream traceability
     n_design_input_page_guard,act_func?script='''
         def p = ""
         if (input_data instanceof Map) {
@@ -67,12 +64,12 @@ when('fn.hasValue(input_data)', {
             if (v != null) p = v.toString().trim()
         }
         if (!p) {
-            throw new RuntimeException("【STEP2页码缺失】input_data.page 为空，无法生成设计数据")
+            throw new RuntimeException("STEP2 page missing: input_data.page is empty, cannot generate design data")
         }
         if (design_input_data instanceof Map) design_input_data.put("page", p)
         return p
     '''
-    // 第二步拉页：主模块与子模块页码并集后再解析。仅用 main 会漏掉「子模块单独标的页」（如 main=10,14… 而 submodule=Page20），n_pages_data 缺页后 tpl_design_rm 按证据删光 → processed_data 空 → foreach 中断；并集仍保留「用 main 补全跨页」的初衷。
+    // [DESIGN-STEP2/pages] merge main/submodule source refs for downstream page lookup
     n_design_pages_union,act_func?script='''
         def m = (input_data.main_module_source ?: "").toString().trim()
         def s = (input_data.submodule_source ?: "").toString().trim()
@@ -81,26 +78,61 @@ when('fn.hasValue(input_data)', {
         return s
     '''
     assign('design_pages', '{{n_design_pages_union}}')
-    // [DESIGN-STEP2·pages] agt_get_page_data：design_pages 为 main+submodule 页并集字符串；documentId 必须与 root 传入的 effectiveDocumentId 一致否则 KB 查空
+    // [DESIGN-STEP2/pages] resolve page data by explicit page refs first
     n_pages,agt_get_page_data?page={{design_pages}}&documentId="{{documentId}}"
-    // [MULTI-DOC] build source-aware page query; prefer fileName#PageN refs, fallback to legacy documentId+page
+    // [MULTI-DOC] build source-aware page query; normalize deterministic source refs before fail-fast
     n_pages_source_where,act_func?script=''' 
         def src = (design_pages ?: "").toString()
         def byFile = new LinkedHashMap()
-        src.split(/[;,]/).each { raw ->
-            def t = (raw == null ? "" : raw.toString().trim())
-            if (!t) return
-            def idx = t.toLowerCase().lastIndexOf("#page")
-            if (idx <= 0) return
-            def fn = t.substring(0, idx).trim()
-            def pg = t.substring(idx + 5).replaceAll(/[^0-9]/, "").trim()
-            if (!fn || !pg) return
+        def expandPages = { raw ->
+            def out = []
+            if (raw == null) return out
+            def txt = raw.toString().trim()
+            if (!txt) return out
+            def nums = []
+            (txt =~ /\d+/).each { nums.add(it.toString()) }
+            if (nums.isEmpty()) return out
+            if (nums.size() == 1) {
+                out.add(Integer.parseInt(nums[0]).toString())
+                return out
+            }
+            if (nums.size() == 2 && txt.contains("-")) {
+                int start = Integer.parseInt(nums[0])
+                int end = Integer.parseInt(nums[1])
+                if (end < start) { int tmp = start; start = end; end = tmp }
+                for (int i = start; i <= end; i++) out.add(i.toString())
+            }
+            return out
+        }
+        def rememberPages = { fn, pages ->
+            if (!fn || pages == null || pages.isEmpty()) return
             def list = byFile.get(fn)
             if (list == null) {
                 list = new LinkedHashSet()
                 byFile.put(fn, list)
             }
-            list.add(pg)
+            pages.each { pg ->
+                def p = (pg == null ? "" : pg.toString().trim())
+                if (p) list.add(p)
+            }
+        }
+        def lastFile = ""
+        src.split(/[;,]/).each { raw ->
+            def t = (raw == null ? "" : raw.toString().trim())
+            if (!t) return
+            def idx = t.toLowerCase().lastIndexOf("#page")
+            if (idx > 0) {
+                def fn = t.substring(0, idx).trim()
+                def pages = expandPages(t.substring(idx + 5).trim())
+                if (!fn || pages.isEmpty()) return
+                rememberPages(fn, pages)
+                lastFile = fn
+                return
+            }
+            def barePages = expandPages(t)
+            if (!barePages.isEmpty() && lastFile) {
+                rememberPages(lastFile, barePages)
+            }
         }
         if (!byFile.isEmpty()) {
             def clauses = []
@@ -112,7 +144,7 @@ when('fn.hasValue(input_data)', {
         }
         return [whereSql: 'documentId="{{documentId}}" and page in {{n_pages.pages}}']
     '''
-    // 查询kb_okp_page_data表，按page字段升序排序，筛选system_name='OKP'且page等于提取的数字的数据
+    // Source-aware page lookup prefers fileName#PageN refs, with a documentId fallback for legacy rows.
     n_pages_data, act_kb.selectBy?sql='''
     select 
     documentId,
@@ -124,16 +156,31 @@ when('fn.hasValue(input_data)', {
     END AS content
     from kbs_doc_page_parse 
     where {{n_pages_source_where.whereSql}} order by fileName, page asc'''
+    n_design_page_data_guard,act_func?script=''' 
+        def rows = n_pages_data
+        if (rows == null || !(rows instanceof List) || rows.isEmpty()) {
+            throw new RuntimeException("STEP2 page evidence missing: no page rows matched current source refs, please check source_ref/fileName mapping")
+        }
+        int totalChars = 0
+        rows.each { r ->
+            if (!(r instanceof Map)) return
+            totalChars += (r.get("content") ?: "").toString().length()
+        }
+        if (totalChars > 80000) {
+            println("[WARN][STEP2] page evidence totalChars=" + totalChars + " 超 80K，继续执行但可能影响设计点质量")
+        }
+        return [rowCount: rows.size(), totalChars: totalChars]
+    '''
 
-    // [DESIGN-STEP2·tpl] api 用 tpl_get_design_api（HTTP 契约）；web 用 tpl_get_design2；二者共用 tpl_design_rm 后处理
+    // [DESIGN-STEP2/template] choose API or Web prompt, then normalize output
     when('pipeline_design_mode == "api"', {
-        n_get_design,tpl_get_design_api,psr_json
+        n_get_design,tpl_get_design_api_v2,psr_json
     }, {
-        n_get_design,tpl_get_design2,psr_json
+        n_get_design,tpl_get_design_web_v2,psr_json
     })
-    tpl_design_rm
-    // 获取大模型处理结果
-    assign('processed_data', '{{tpl_design_rm.data}}')
+    tpl_design_rm_v2
+    // collect normalized prompt output
+    assign('processed_data', '{{tpl_design_rm_v2.data}}')
     assign('processed_data_list', '[]')
     foreach('n_data', 'processed_data', {
         assign('value', '{{n_data.item}}')
@@ -158,7 +205,7 @@ when('fn.hasValue(input_data)', {
         '''
         act_func?script='''processed_data_list.add(value)'''
     })
-    // 二次裁剪测试点：模块字段 + 页面正文证据；去重；缺关键 id 时补齐（仅第二步）
+    // Evidence-guided trimming keeps only high-signal ids before downstream normalization.
     act_func?script='''
         def pageTxt = ""
         try {
@@ -185,14 +232,13 @@ when('fn.hasValue(input_data)', {
         def isApiPipeline = false
         try { isApiPipeline = "api".equalsIgnoreCase((pipeline_design_mode ?: "").toString()) } catch (Throwable ignoreApi) { isApiPipeline = false }
 
-        // Step2 收口但不漏：按模式严格分流（Web/API 规则独立，避免互相污染）
-        // - api：只允许接口契约/鉴权/流程/逻辑相关 id，严格屏蔽 UI 类 id（10/11/13/15/16/17/18）
-        // - web：沿用原有 UI 优先策略（与 gen_test_case 一致）
+        // Lightweight heuristic guard keeps Web/API filtering separate without changing the output schema.
+        // Step2 lightweight filtering keeps Web/API paths separate without changing schema
         def moduleText = (((input_data.submodule_name ?: "") + " " + (input_data.submodule_description ?: "")).toLowerCase())
         def isNonInterface = moduleText.contains("non-interface")
         def allow = new LinkedHashSet()
         if (isApiPipeline) {
-            // API Step2 固定为正/负案例两条：仅保留 40/41
+            // API mode keeps only polarity-oriented ids 40/41 at the initial allowlist stage.
             allow.addAll(["40","41"])
         } else {
             allow.addAll(isNonInterface
@@ -228,7 +274,7 @@ when('fn.hasValue(input_data)', {
             if (hasAny(txt, ["font","icon","spacing","visual"])) {
                 allow.add("17")
             }
-            if (hasAny(txt, ["responsive","resolution","layout","横竖屏"])) {
+            if (hasAny(txt, ["responsive","resolution","layout"])) {
                 allow.add("18")
             }
         }
@@ -248,7 +294,7 @@ when('fn.hasValue(input_data)', {
                     deduped.add(m)
                 }
             }
-            // Web 收紧优化：仅做轻量去重，不再强制删除 31 或 40，避免收紧过度
+            // Web path trims duplicate families to avoid noisy design points
             if (!isApiPipeline) {
                 def familyOf = { sid ->
                     def s = (sid ?: "").toString()
@@ -261,17 +307,16 @@ when('fn.hasValue(input_data)', {
                     if (s in ["40","41","42","43","44"]) return "logic"
                     return "other"
                 }
+                // 放宽家族限制，目标 Step1→Step2 ~5-6x
                 def familyLimit = { fam ->
                     if (isNonInterface) {
-                        if (fam == "process" || fam == "logic") return 3
-                        if (fam == "function") return 2
-                        if (fam == "i18n") return 1
-                        return 1
+                        if (fam == "process" || fam == "logic") return 5
+                        if (fam == "function") return 4
+                        return 3
                     }
-                    if (fam == "ui_action" || fam == "ui_content" || fam == "function" || fam == "process" || fam == "logic") return 3
-                    if (fam == "i18n") return 1
-                    if (fam == "compat") return 2
-                    return 1
+                    if (fam == "ui_action" || fam == "ui_content" || fam == "function" || fam == "process" || fam == "logic") return 6
+                    if (fam == "i18n" || fam == "compat") return 3
+                    return 3
                 }
                 def famCount = [:].withDefault { 0 }
                 def compacted = []
@@ -310,77 +355,25 @@ when('fn.hasValue(input_data)', {
             }
             return hit ?: (processed_data_list ? processed_data_list[0] : null)
         }
-
         def target = pickRow()
         if (target != null) {
-            def tc = target.test_content instanceof List ? (target.test_content as List) : []
-            if (!isApiPipeline) {
-                if (needNavInteract && !allIds.contains("10") && !allIds.contains("11")) {
-                    tc.add(["sub_category": "Navigation flow: menu hierarchy, sub-page navigation", "sub_id": "10"])
-                    allIds.add("10")
-                }
-                if (isButtonMod && !allIds.contains("11")) {
-                    tc.add(["sub_category": "Interaction: buttons, links, download, navigation", "sub_id": "11"])
-                    allIds.add("11")
-                }
-                if (isButtonMod && !allIds.contains("31") && !allIds.contains("32")) {
-                    tc.add(["sub_category": "Process: enter feature flow", "sub_id": "31"])
-                    allIds.add("31")
-                }
-                if (hasLanguageEvidence && !allIds.contains("15")) {
-                    tc.add(["sub_category": "Localization and internationalization: EN TC SC UI text", "sub_id": "15"])
-                    allIds.add("15")
-                }
-            }
-            target.test_content = tc
+            // [DESIGN-CLEAN] \u4e0d\u518d\u81ea\u52a8\u8865\u586b sub_id\uff1b\u7f3a\u5931\u8bbe\u8ba1\u70b9\u7531\u540e\u7eed minimum coverage guard \u4ee5 fail-fast \u5904\u7406
         }
 
-        // 若裁剪后覆盖过低，启用兜底：仅 Web 走兜底；API 严格不补点（必须由参数复杂度 + 证据驱动）
+        // [DESIGN-CLEAN] 最小覆盖闸门：输出过少时 fail-fast，不再靠脚本硬补设计点
         def allIdsAfterTrim = new LinkedHashSet()
         processed_data_list.each { row ->
             (row.test_content instanceof List ? row.test_content as List : []).each { m ->
                 allIdsAfterTrim.add((m["sub_id"] ?: "").toString())
             }
         }
-        def minCoverage = isApiPipeline ? 0 : 3
-        if (!isApiPipeline && allIdsAfterTrim.size() < minCoverage) {
-            def fallbackIds = (isNonInterface ? ["32","33","40","41","43"] : ["10","11","13","20","22","32"])
-            if (hasLanguageEvidence) {
-                fallbackIds.add("15")
-            }
-
-            def idNameMap = [
-                "10":"Navigation flow: menu hierarchy, sub-page navigation",
-                "11":"Interaction: buttons, links, download, navigation",
-                "13":"Static content: labels, help text, button text",
-                "15":"Localization and internationalization: EN TC SC UI text",
-                "20":"Function validation: field input controls",
-                "22":"Function validation: data rules and validation",
-                "32":"Process: normal business process",
-                "33":"Process: exception business process",
-                "40":"Logic: positive logic",
-                "41":"Logic: negative logic",
-                "43":"Logic: trigger conditions"
-            ]
-
-            def row = processed_data_list ? processed_data_list[0] : null
-            if (row == null) {
-                row = ["design_element": (isNonInterface ? "Process" : "UI Page"), "test_content": []]
-                processed_data_list.add(row)
-            }
-            if (!(row.test_content instanceof List)) row.test_content = []
-            def tc = row.test_content as List
-            def localSeen = new LinkedHashSet(tc.collect { (it["sub_id"] ?: "").toString() })
-            fallbackIds.each { fid ->
-                if (!localSeen.contains(fid)) {
-                    tc.add(["sub_category": (idNameMap[fid] ?: ("Category " + fid)), "sub_id": fid])
-                    localSeen.add(fid)
-                }
-            }
-            row.test_content = tc
+        // 有有效结果就继续，不设最低数量判断；空结果才 skip
+        if (!isApiPipeline && allIdsAfterTrim.isEmpty()) {
+            println("[WARN][STEP2·skip] submodule=" + (input_data.submodule_name ?: "") + " 过滤后设计点数为 0，跳过")
+            processed_data_list = []
         }
 
-        // API：固定两条（正/负案例）
+        // API path stays intentionally compact to avoid over-generation from contract text.
         def complexityBonus = 0
         def maxKeepApi = 2
         if (isApiPipeline) {
@@ -391,7 +384,7 @@ when('fn.hasValue(input_data)', {
         int apiRawCount = 0
         int apiAllowCount = 0
         int apiDedupCount = 0
-        // 第二步仅做温和收敛：仅在同一模块内去重，避免跨模块误删
+        // per-row dedupe and priority trim before final guard
         processed_data_list.each { row ->
             def tc = row.test_content instanceof List ? (row.test_content as List) : []
             if (isApiPipeline) apiRawCount += tc.size()
@@ -407,8 +400,9 @@ when('fn.hasValue(input_data)', {
             }
             if (isApiPipeline) apiAllowCount += tc.size()
             if (isApiPipeline) apiDedupCount += deduped.size()
-            // 轻量收口：按模块类型控制每个 design_element 的测试小项上限，优先保留高价值 id
-            // API：优先契约/鉴权/状态码/正反逻辑（与 Web 的 10/11/15 优先级不同）；单模块设计点上限更小，避免 30 接口 × 8 点爆炸
+            // Deduplicate per design element first, then apply compact priority trimming for the final set.
+            // Web keeps broader coverage order; API stays focused on polarity and contract semantics.
+            // API keeps a smaller polarity-focused set; Web keeps broader coverage order
             def priority = isApiPipeline
                 ? ["40","41","43","21","31","32","20","22","33","30","42","44"]
                 : (isNonInterface
@@ -425,13 +419,13 @@ when('fn.hasValue(input_data)', {
                 def rb = rank(b["sub_id"])
                 return ra <=> rb
             }
-            // Web：单 design_element 最多 8 条；API：固定 2 条（正/负）
-            def maxKeep = isApiPipeline ? maxKeepApi : (isNonInterface ? 4 : ((hasActionEvidence || hasInputEvidence || hasPermissionEvidence) ? 5 : 3))
+            // 放宽保留数量，目标 Step1→Step2 ~5-6x
+            def maxKeep = isApiPipeline ? maxKeepApi : (isNonInterface ? 7 : ((hasActionEvidence || hasInputEvidence || hasPermissionEvidence) ? 8 : 6))
             if (deduped.size() > maxKeep) deduped = deduped.subList(0, maxKeep)
             row.test_content = deduped
         }
 
-        // API 额外收敛：跨 design_element 全局去重，避免同一 sub_id 在多行重复导致第二步行数膨胀
+        // API path collapses cross-row duplicates into one compact contract-focused row
         if (isApiPipeline) {
             def globalSeen = new LinkedHashSet()
             def merged = []
@@ -447,21 +441,20 @@ when('fn.hasValue(input_data)', {
                 }
             }
             if (merged.size() > maxKeepApi) merged = merged.subList(0, maxKeepApi)
-            // API Step2 强化：无论模型返回什么，最终固定输出正/负两条（40/41）
-            def pickById = { sid, defLabel ->
-                return ["sub_category": defLabel, "sub_id": sid]
+            // API Step2 only keeps 40/41 polarity ids and preserves model-generated display text
+            merged = merged.findAll { m ->
+                def sid = (m["sub_id"] ?: "").toString().trim()
+                return sid in ["40", "41"]
             }
-            merged = [
-                pickById("40", "Positive logic"),
-                pickById("41", "Negative logic")
-            ]
             def anchor = processed_data_list ? processed_data_list[0] : null
             if (anchor == null) {
-                anchor = ["design_element": "HTTP Contract", "test_content": []]
+                anchor = ["design_element": "", "test_content": []]
                 processed_data_list.add(anchor)
             }
-            // API 输出统一为契约语义，避免落库出现 "UI页面"
-            anchor.design_element = "HTTP Contract"
+            // If API output leaves design_element blank, anchor it to the current module name.
+            if (!(anchor.design_element instanceof String) || !anchor.design_element.toString().trim()) {
+                anchor.design_element = ((input_data.submodule_name ?: input_data.main_module_name ?: "") as String).trim()
+            }
             anchor.test_content = merged
             if (processed_data_list.size() > 1) {
                 processed_data_list = [anchor]
@@ -474,13 +467,68 @@ when('fn.hasValue(input_data)', {
                 + " maxKeepApi=" + maxKeepApi)
         }
 
-        // 回写后剔除空行
+        // drop rows with no surviving test content
         processed_data_list = processed_data_list.findAll { row ->
             def tc = row.test_content instanceof List ? (row.test_content as List) : []
             return tc.size() > 0
         }
     '''
-    // 将结果存入input_data
+    // Step2 final guard: keep prompt output, do lightweight validation only, and fail instead of blind backfill
+    act_func?script=''' 
+        def isApiPipeline = false
+        try { isApiPipeline = "api".equalsIgnoreCase((pipeline_design_mode ?: "").toString()) } catch (Throwable ignoreApi) { isApiPipeline = false }
+        def validIds = new LinkedHashSet(["10","11","12","13","14","15","16","17","18","20","21","22","30","31","32","33","34","40","41","42","43","44"])
+        def apiIds = new LinkedHashSet(["40","41"])
+        def lang = "{{outputLanguage}}".toString().trim().toLowerCase()
+        def hasCjk = { s ->
+            def v = (s == null ? "" : s.toString())
+            return (v =~ /.*\p{script=Han}.*/).matches()
+        }
+        def cleaned = []
+        def langViolations = []
+        processed_data_list = (processed_data_list instanceof List) ? processed_data_list : []
+        processed_data_list.each { row ->
+            if (!(row instanceof Map)) return
+            def de = (row.design_element ?: "").toString().trim()
+            def tc = row.test_content instanceof List ? (row.test_content as List) : []
+            def seen = new LinkedHashSet()
+            def outTc = []
+            tc.each { item ->
+                if (!(item instanceof Map)) return
+                def sid = (item["sub_id"] ?: "").toString().trim()
+                def sc = (item["sub_category"] ?: "").toString().trim()
+                if (!sid || !sc) return
+                if (!validIds.contains(sid)) return
+                if (isApiPipeline && !apiIds.contains(sid)) return
+                if (seen.contains(sid)) return
+                seen.add(sid)
+                if (lang in ["zh","tw"] && !hasCjk(sc)) {
+                    langViolations.add("sub_id=" + sid + ", sub_category=" + sc)
+                }
+                outTc.add([sub_category: sc, sub_id: sid])
+            }
+            if (isApiPipeline) {
+                outTc = outTc.findAll { it.sub_id in ["40", "41"] }
+                if (outTc.size() > 3) outTc = outTc.subList(0, 3)
+            } else if (outTc.size() > 12) {
+                outTc = outTc.subList(0, 12)
+            }
+            if (!outTc.isEmpty()) {
+                if (!de) de = ((input_data.submodule_name ?: input_data.main_module_name ?: "") as String).trim()
+                row.design_element = de
+                row.test_content = outTc
+                cleaned.add(row)
+            }
+        }
+        if (!langViolations.isEmpty()) {
+            println("[WARN][STEP2] sub_category language drift detected: " + langViolations.take(3).join(" | "))
+        }
+        processed_data_list = cleaned
+        if (processed_data_list.isEmpty()) {
+            println("[WARN][STEP2·skip] submodule=" + (input_data.submodule_name ?: "") + " no valid design points after cleaning, skipping")
+        }
+    '''
+    // [DESIGN-CLEAN] store cleaned result back to input_data for downstream compatibility
     act_func?script="design_input_data.put('data', processed_data_list)"
     assign("final_result",'{{design_input_data}}')
 })
@@ -488,180 +536,135 @@ when('fn.hasValue(input_data)', {
 // final_design_result
 assign("final_design_result",'{{design_input_data}}')
 
+// active prompt set v2: only reachable prompt definitions remain in the file
+define('tpl_get_design_web_v2', '''
+Answer only if you are confident.
 
+# Task
+You are generating Step2 design points for a multi-document Web testing workflow.
+Read the module description and page evidence, then return a compact JSON structure.
 
+# Output language
+- All user-visible text must be in {{lang_output_text}}.
+- `sub_category` must follow {{lang_output_text}}.
+- `sub_id` must stay numeric and unchanged.
 
+# Allowed design ids for Web
+| Category | Meaning | id |
+|---|---|---|
+| UI Page | navigation flow | 10 |
+| UI Page | interactive actions | 11 |
+| UI Page | state change / sorting / enable-disable / pagination | 12 |
+| UI Page | static content | 13 |
+| UI Page | dynamic content | 14 |
+| UI Page | localization / multi-language | 15 |
+| UI Page | compatibility / device-browser adaptation | 16 |
+| UI Page | visual consistency | 17 |
+| UI Page | responsive layout | 18 |
+| Functionality | field input control | 20 |
+| Functionality | field output display | 21 |
+| Functionality | validation / data rules | 22 |
+| Process | login flow | 30 |
+| Process | enter feature flow | 31 |
+| Process | normal business flow | 32 |
+| Process | exception business flow | 33 |
+| Process | query/result flow after completion | 34 |
+| Logic | positive logic | 40 |
+| Logic | negative logic | 41 |
+| Logic | system feedback / message trigger | 42 |
+| Logic | trigger conditions | 43 |
+| Logic | condition combinations | 44 |
 
-
-// 定义 LLM 模板
-define('tpl_get_design', '''
-Answer only if you are confident
-
-
-# 根据这个模块内容和页面内容,符合哪些设计要素,按照设计要素输出测试内容.
-# 保持原有的语言类型,并输出具有层级关系的json.建议
+# Hard requirements
+1. Return JSON only.
+2. Use this schema exactly:
 ```json
-{"data":[{"design_element":"测试项名称","test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id'],...]},{...},...]}
-
+{"data":[{"design_element":"...", "test_content":[["localized sub category","10"],["localized sub category","32"]]}]}
 ```
-其中"test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id']...],list中的元素必须是list
+3. `test_content` must be a list of two-item lists, not objects.
+4. Keep only high-confidence items supported by the evidence.
+5. Do not invent ids outside the table.
+6. Do not repeat the same `sub_id` inside one `design_element`.
+7. If the evidence does not support a point, do not output it.
+8. Keep `design_element` concise and module-specific, not generic.
 
-# 模块内容
+# Module input
 {{input_data}}
 
-# 具体页面内容,存在章节内容跨页面内容.
+# Page evidence
 {{n_pages_data}}
-
-''')
-// 定义 LLM 模板
-define('tpl_get_design2', '''
-Answer only if you are confident
-
-# 需求分析中的详细设计要素:
-| 测试项       | 测试小项                                      | 出处                                  | 测试小项id |
-|--------------|---------------------------------------------|---------------------------------------|------------|
-| UI Page       | 导航流程：菜单层级、子页面跳转               | 需求流程描述                          | 10         |
-|              | 交互功能：按钮、链接、下拉选框、复选框、导入导出、打印、下载、保存 | 需求文档“输入”、“输出”功能栏位说明     | 11         |
-|              | 状态转换：排序、筛选、禁用/启用、删除、修改、下页、放大/缩小按钮、加载动画、滚动条 | 需求文档“输入”、“输出”功能栏位说明     | 12         |
-|              | 静态内容：菜单名称、栏位名称、说明内容、按钮名称 | 需求文档“输入”、“输出”功能栏位说明     | 13         |
-|              | 动态内容：用户名称、用户编号、部门名称       | 需求文档“输入”、“输出”功能栏位说明     | 14         |
-|              | 本地化与国际化：菜单名称、栏位名称、说明内容、按钮名称、栏位选项的各种语言适配 | 需求文档“输入”、“输出”功能栏位说明     | 15         |
-|              | 设备渲染：IE,Edge,Chome,Safari,Firefox,QQ流浏览器、IOS,Android,HarminyOS移动设备下功能页面内容显示 | 需求文档“业务处理说明”                | 16         |
-|              | 视觉一致性：字体、图标、行间距               | 需求文档“业务页面图”                  | 17         |
-|              | 响应式布局：分辨率适配、横竖屏切换、内容折叠与展开 | 需求文档“业务处理说明”                | 18         |
-| Functionality         | 功能验证-栏位输入控制                        | 需求文档的“输入”控制长度说明          | 20         |
-|              | 功能验证-栏位输出显示                        | 需求文档的“输出”控制长度说明          | 21         |
-|              | 功能验证-数据                                | 需求文档的“输入”控制逻辑说明          | 22         |
-| Process         | 流程-登录流程                                | 功能描述                              | 30         |
-|              | 流程-进入功能流程                            | 功能描述                              | 31         |
-|              | 流程-正常业务流程                            | 业务处理流程图、业务处理说明          | 32         |
-|              | 流程-异常业务流程                            | 业务处理流程图、业务处理说明          | 33         |
-|              | 流程-业务完成后查询结果流程                  | 业务处理说明                          | 34         |
-| Logic         | 逻辑-正面逻辑                                | 业务处理描述、业务规则说明            | 40         |
-|              | 逻辑-反面逻辑                                | 业务处理描述、业务规则说明            | 41         |
-|              | 逻辑-各逻辑触发系统提示信息                  | 业务处理描述、业务规则说明            | 42         |
-|              | 逻辑-逻辑触发条件                            | 业务处理描述、业务规则说明            | 43         |
-|              | 逻辑-各条件逻辑组合                          | 业务处理描述、业务规则说明            | 44         |
-
-# 根据这个模块内容和页面内容,符合哪些设计要素,按照设计要素输出测试内容.
-# 保持原有的语言类型,并输出具有层级关系的json.输出内容必须为{{lang_output_text}},design_element内容必须为{{lang_output_text}}
-```json
-{"data":[{"design_element":"测试项名称","test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id'],...]},{...},...]}
-
-```
-其中"test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id']...],list中的元素必须是list
-必须遵守以下选择规则：
-1) 仅输出输入文本有明确证据支撑的测试小项，不可为了“覆盖完整”而补充无证据项。
-2) 优先输出与当前模块直接相关的测试小项；同一模块建议 2-6 个小项，先保证覆盖关键风险，再做轻量表达，避免冗余泛化。
-3) 若模块描述出现按钮/跳转/上传/下载，必须包含 10 或 11 以及至少一个流程项（31/32/33）。
-4) 同一 design_element 内，如果多个小项只是措辞不同但流程/断言本质相近，只保留最能代表风险的一条，不要平行扩写。
-5) 若模块描述出现多语言/EN/TC/SC/localization，必须包含 15。
-5) 16/17/18（设备渲染/视觉一致性/响应式）仅在输入文本明确提及相关要求时才可输出。
-
-# 模块内容
-{{input_data}}
-
-# 具体页面内容,存在章节内容跨页面内容.
-{{n_pages_data}}
-
 ''')
 
+define('tpl_get_design_api_v2', '''
+Answer only if you are confident.
 
-define('tpl_get_design_api', '''
-Answer only if you are confident
+# Task
+You are generating Step2 design points for an API contract workflow.
+Read the module description and page/spec evidence, then return compact JSON.
 
-# API / HTTP contract design points
-Use the same JSON schema as the Web table below, but **select test sub-items by API evidence only** (methods, paths, parameters, headers, auth, status codes, request/response schema, errors, pagination, idempotency).
+# Output language
+- All user-visible text must be in {{lang_output_text}}.
+- `sub_category` must follow {{lang_output_text}}.
+- `sub_id` must stay numeric.
 
-Important:
-1) Prefer semantic judgment from the provided module/spec text. Do not rely on fixed keyword tricks.
-2) If the document evidence is weak, keep output conservative (fewer but high-confidence items).
-3) For pure API docs, do not output browser UI/navigation semantics.
-
-## 表字段仍为 design_element / sub_category / sub_id —语义按接口写
-- **design_element**：用「契约域」命名，如 `HTTP /{resource}`、`Auth`、`Errors` 或文档中的 tag/服务名，不要用「UI页面」除非真有浏览器流程。
-- **sub_category（LLM 输出的简称）**：API 模式只能输出固定两个值：`Positive logic` 或 `Negative logic`。不要把「4xx 错误体」「鉴权失败」「必填 query」「响应 schema」等说明写入 `sub_category`；这些说明放到 `design_element`、模块描述或后续用例描述中。
-- **sub_id**：仍用同一套数字 id（与 Web 表同源），但只选上表与 API 证据相关的项。
-
-## API semantic contract (hard requirement for this template)
-- Treat this task as API-contract analysis, not UI-page analysis.
-- `design_element` should be API-oriented (METHOD/path, Auth, Errors, Validation, Contract), never UI page labels in pure API context.
-- `sub_category` must be exactly `Positive logic` or `Negative logic` in API mode.
-- If unsure between API vs UI intent, choose API contract intent when endpoint/method/param evidence exists.
-
-| 测试项 | 测试小项 | id |
-| Logic | Positive logic / Negative logic only | 40-41 |
-| Function | request/response validation | 20-22 |
-| Process | auth/token/sequence | 31-33 |
-
-(Full id legend is identical to the Web template when you need numeric ids.)
-
-# Output JSON ({{lang_output_text}}, same shape as Web):
+# API hard requirements
+1. Treat this as API contract analysis, not UI page analysis.
+2. `design_element` must be API-oriented, such as method/path, auth, errors, validation, contract area, or endpoint group.
+3. In API mode, only output:
+   - positive logic -> `40`
+   - negative logic -> `41`
+4. `sub_category` must stay aligned with `sub_id`.
+5. Return JSON only.
+6. Use this schema exactly:
 ```json
-{"data":[{"design_element":"METHOD path or contract area","test_content":[["Positive logic","40"],["Negative logic","41"]]},...]}
+{"data":[{"design_element":"METHOD /path or contract area","test_content":[["localized positive logic","40"],["localized negative logic","41"]]}]}
 ```
+7. `test_content` must be a list of two-item lists.
+8. Do not output browser UI, navigation, button, layout, or visual semantics in pure API context.
 
-# Module
+# Module input
 {{input_data}}
 
-# Spec / page content
+# Spec / page evidence
 {{n_pages_data}}
-
 ''')
 
+define('tpl_design_rm_v2', '''
+Answer only if you are confident.
 
-// 定义 LLM 模板
-define('tpl_design_rm', '''
+# Task
+Normalize the raw Step2 design output into the final JSON used by downstream scripts.
+You may merge duplicates, trim weak items, and keep only evidence-backed design points.
 
-# 需求分析中的详细设计要素:
-| 测试项       | 测试小项                                      | 出处                                  | 测试小项id |
-|--------------|---------------------------------------------|---------------------------------------|------------|
-| UI页面       | 导航流程：菜单层级、子页面跳转               | 需求流程描述                          | 10         |
-|              | 交互功能：按钮、链接、下拉选框、复选框、导入导出、打印、下载、保存 | 需求文档“输入”、“输出”功能栏位说明     | 11         |
-|              | 状态转换：排序、筛选、禁用/启用、删除、修改、下页、放大/缩小按钮、加载动画、滚动条 | 需求文档“输入”、“输出”功能栏位说明     | 12         |
-|              | 静态内容：菜单名称、栏位名称、说明内容、按钮名称 | 需求文档“输入”、“输出”功能栏位说明     | 13         |
-|              | 动态内容：用户名称、用户编号、部门名称       | 需求文档“输入”、“输出”功能栏位说明     | 14         |
-|              | 本地化与国际化：菜单名称、栏位名称、说明内容、按钮名称、栏位选项的各种语言适配 | 需求文档“输入”、“输出”功能栏位说明     | 15         |
-|              | 设备渲染：IE,Edge,Chome,Safari,Firefox,QQ流浏览器、IOS,Android,HarminyOS移动设备下功能页面内容显示 | 需求文档“业务处理说明”                | 16         |
-|              | 视觉一致性：字体、图标、行间距               | 需求文档“业务页面图”                  | 17         |
-|              | 响应式布局：分辨率适配、横竖屏切换、内容折叠与展开 | 需求文档“业务处理说明”                | 18         |
-| 功能         | 功能验证-栏位输入控制                        | 需求文档的“输入”控制长度说明          | 20         |
-|              | 功能验证-栏位输出显示                        | 需求文档的“输出”控制长度说明          | 21         |
-|              | 功能验证-数据                                | 需求文档的“输入”控制逻辑说明          | 22         |
-| 流程         | 流程-登录流程                                | 功能描述                              | 30         |
-|              | 流程-进入功能流程                            | 功能描述                              | 31         |
-|              | 流程-正常业务流程                            | 业务处理流程图、业务处理说明          | 32         |
-|              | 流程-异常业务流程                            | 业务处理流程图、业务处理说明          | 33         |
-|              | 流程-业务完成后查询结果流程                  | 业务处理说明                          | 34         |
-| 逻辑         | 逻辑-正面逻辑                                | 业务处理描述、业务规则说明            | 40         |
-|              | 逻辑-反面逻辑                                | 业务处理描述、业务规则说明            | 41         |
-|              | 逻辑-各逻辑触发系统提示信息                  | 业务处理描述、业务规则说明            | 42         |
-|              | 逻辑-逻辑触发条件                            | 业务处理描述、业务规则说明            | 43         |
-|              | 逻辑-各条件逻辑组合                          | 业务处理描述、业务规则说明            | 44         |
+# Output language
+- All user-visible text must be in {{lang_output_text}}.
+- Keep `sub_id` numeric strings.
 
+# Final schema
+```json
+{"data":[{"design_element":"...", "test_content":[["localized sub category","10"],["localized sub category","32"]]}]}
+```
 
-# 模块内容
+# Rules
+1. Return JSON only.
+2. Keep `test_content` as a list of two-item lists.
+3. Remove duplicated `sub_id` inside the same `design_element`.
+4. Remove obviously unsupported or contradictory items.
+5. Keep the result compact and reliable.
+6. For Web, only keep ids supported by module text and page evidence.
+7. For API, keep only ids `40` and `41`.
+8. If evidence clearly mentions localization or EN/TC/SC, keep `15`.
+9. For ids `16/17/18`, keep them only when the evidence clearly supports compatibility, visual consistency, or responsive layout.
+10. If button/upload/download/navigation evidence is clear, keeping `10` or `11` is allowed.
+
+# Module input
 {{input_data}}
 
-# 具体页面内容,存在章节内容跨页面内容.
+# Page evidence
 {{n_pages_data}}
 
-# 设计要素Json数据
+# Raw design JSON
 ```json
 {{n_get_design}}
 ```
-# 保持原有的语言类型,并输出具有层级关系的json.建议
-```json
-{"data":[{"design_element":"测试项名称","test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id'],...]},{...},...]}
-
-```
-其中"test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id']...],list中的元素必须是list
-要求必须根据页面内容,排除Json数据中未明确测试项.直接返回json数据.
-补充规则（与生成阶段一致）:
-1) 不得输出无页面/模块证据的测试小项；同一 design_element 内 sub_id 不得重复。
-2) 若页面或模块涉及按钮、上传、下载、跳转流程，输出中须包含 10 或 11，并包含流程类 31/32/33 中至少一项。
-3) 若页面或模块明确 EN/TC/SC 或多语言，须包含 15。
-4) 16/17/18 仅在原文明确提及时保留。
-
-
 ''')

@@ -59,7 +59,15 @@ assign('language', '{{fn.str(n_envinfo, "language")}}')
 // Load steps if not provided
 when('{{fn.equals(steps, "")}}', {
     // Load steps from knowledge base
-    act_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("test_no,test_no,application,system,version,version")}}',act_memory.assign?var=steps 
+    // act_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("test_no,test_no,application,system,version,version")}}',act_memory.assign?var=steps 
+    n_steps, act_kb.selectBy?sql="SELECT step
+FROM kb_testcase_step
+WHERE test_no = '{{test_no}}'
+  AND application = '{{system}}'
+  AND version = '{{version}}'
+ORDER BY CAST(SUBSTRING_INDEX(step, '.', 1) AS UNSIGNED)"
+n_steps,act_func.run?script='return sys_last_result.collect { it.step } '
+ act_memory.assign?var=steps&value='{{n_steps}}'
 })
 // TODO callback
 n_plan_steps, act_plan.convert?var=steps&callback=agt_plan_save_testcase_step.rpa
@@ -169,7 +177,8 @@ foreach('n_test_step', 'n_plan_steps', {
 				['agt_test_selenium.test','OPERATION_EXECUTE_TASK','Execute'],
 				['agt_test_selenium_pamp.test','PAMP_EXECUTE_TASK','Pamp'],
 				['agt_test_selenium_dyna.test','DYNAMIC_SELECT_TASK','Select'],
-				['agt_test_planlist.test','DYNAMIC_PLAN_TASK','Plan']]
+				['agt_test_planlist.test','DYNAMIC_PLAN_TASK','Plan']],
+        ['agt_test_planlist.webTestAutomation.test','DYNAMIC_PLAN_TASK2','Plan2']]
 			'''
     })
     // **Log** ✅
@@ -178,11 +187,11 @@ foreach('n_test_step', 'n_plan_steps', {
 
 // Update test result in knowledge base
 act_kb.merge?name=kb_testcase&columnValues='{"test_result":"Pass"}'&where='{"test_no":"{{test_no}}"}'
-
+// 等待3秒
+act_flow.wait?second=3
 // Generate test report
 n_word_report, agt_test_wordreport?test_no={{test_no}}&application={{system}}&version={{version}}
-// aaaaaaaaaaaa
-assign('aaaaaaaaaaaa', '{{n_plan_steps}}')
+
 // Process and store steps
 n_steps, act_kb.select?name=kb_testcase_step&column=step&where='{{fn.json("test_no,test_no,application,system,version,version")}}'
 n_result, act_func?script='''

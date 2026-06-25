@@ -2,11 +2,11 @@
 {
 	"title":"API functional decomposition",
 	"description":"Decompose API specification text into module/submodule tree (parallel to Web func_modules)",
-	"parameter":"{\"name\":\"input_data\",\"label\":\"Knowledge space path\"}",
+	"parameter":"{\"name\":\"input_data\",\"label\":\"Knowledge space path\"},{\"name\":\"outputLanguage\",\"label\":\"Output Language\",\"type\":\"select\",\"defaultValue\":\"en\",\"args\":[{\"label\":\"English\",\"value\":\"en\"},{\"label\":\"Chinese\",\"value\":\"zh\"},{\"label\":\"Traditional Chinese\",\"value\":\"tw\"}]}",
 	"llmType":"alias.highquality",
 	"resultPlan":"result_functional",
 	"life":10000,
-	"version":1
+	"version":2
 }
 */
 when('!fn.hasValue(input_data)', {
@@ -14,6 +14,19 @@ when('!fn.hasValue(input_data)', {
   assign("result", '')
 },{
 n_dbg_fm_api_in,act_func?script='println("[agt_test_doc_func_modules_api] input_data_present=true"); return ""'
+
+assign('lang_output_hint', '{{fn.optional(outputLanguage, "en")}}')
+assign('lang_output_text', '{{fn.optional(outputLanguage, "en")}}')
+when('outputLanguage == "zh"', {
+  assign('lang_output_text', '中文')
+})
+when('outputLanguage == "tw"', {
+  assign('lang_output_text', '繁体中文')
+})
+when('outputLanguage == "en"', {
+  assign('lang_output_text', '英文')
+})
+
 // [FUNC-API] LLM 仅契约分解；调用方须为 root 拆分后的 api functional 列表序列化结果，不可混入 Web 行
 n_get_functional, tpl_get_functional_api, psr_json
 //# functional result
@@ -50,7 +63,7 @@ define('tpl_get_functional_api', '''
 - `DELETE /api/user/{id}` -> module name `Delete User`
 
 ---
-# Output JSON (English), same shape as Web func_modules:
+# Output JSON ({{lang_output_text}}), same shape as Web func_modules:
 ```json
 {
   "platform": "system or API name",

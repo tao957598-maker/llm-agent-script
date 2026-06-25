@@ -41,20 +41,56 @@
 	"version":1
 }
 */
-// 从当前current_step中获得 验证类型
-assign('step_type', '由调用处给定')
-when('VerifyExist',{
+// 验证成功后，需要将对应步骤改成 执行成功 kb_test_case_instance_intermediates
+//# 映射被验证步骤的类型
+n_verified_executor,act_func?script='''
+def tmp = current_step
+def executor = tmp.executor
+def mapping = [
+    "VERIFICATION_TASK": "VERIFICATION_TASK",
+    "VERIFICATION_TRIPLE_TASK": "TRIPLE_TASK", 
+    "VERIFICATION_EXECUTE_TASK": "OPERATION_EXECUTE_TASK",
+    "VERIFICATION_EXIST_TASK": "OPERATION_EXIST_TASK"
+]
+
+def result = mapping[executor] ?: executor
+return result
+'''
+assign('n_tpl_task_element_info', '')
+//# 获取被验证步骤的 step_id
+assign('query_step_id_sql', 'select id from kb_testcase_step where version = "{{current_step.version}}" and test_no = "{{current_step.test_no}}" and application = "{{current_step.application}}" and step="{{current_step.step}}" and executor="{{n_verified_executor}}"')
+n_verified_id,act_kb.selectBy?sql='{{query_step_id_sql}}'
+//# 由于表kb_testcase_step设计有问题，查询字段并不是唯一查询，所以这里检查查询结果并处理。已告知相关人员处理
+n_step_id_tmp,act_func?script='''
+def data = n_verified_id
+if (data instanceof List && data.size() > 0) {
+	return data[0].id
+} else if (data instanceof String) {
+	return data
+}
+return ''
+'''
+assign('n_verified_id', '{{n_step_id_tmp}}')
+when('!fn.hasValue(n_verified_id)',{
+	act_flow.go?plan=end
+})
+assign('n_verify_data', '{}')
+
+//# 从当前current_step中获得 验证类型
+assign('step_type', '{{current_step.executor}}')
+//# 验证类型选择
+//# VERIFICATION_EXIST_TASK
+when('step_type=="VerifyExist" || step_type=="VERIFICATION_EXIST_TASK"',{
 	//# 从数据库查询用于验证的数据
-	n_verify_data, act_kb.selectBy?sql='select * from kb_test_case_instance_intermediates where test_step_id="{{step_id}}" '
+	n_verify_data, act_kb.selectBy?sql='select * from kb_test_case_instance_intermediates where test_step_id="{{n_verified_id}}" '
 
     // 需要从原来执行那里给参数过来，领导说的是存储到数据库，再查出来
 	assign('sys_last_result', '{{n_verify_data.python_code_used}}')
     //# Check and compare the execution result
-    n_cmp1, tpl_cmp_pageresult_Exist, vrf_flag?value='fn.str(sys_last_result.thought.re_reasoning)=="false" || sys_last_result.hasDialog',\
-    agt_save_explorer?columns='page_change,tpl_cmp_pageresult.thought.change,reasoning,tpl_cmp_pageresult.thought.reasoning'
+    n_cmp1, tpl_cmp_pageresult_Exist
 })
-
-when('step_type=="Verify"', {
+//# VERIFICATION_TASK
+when('step_type=="Verify" || step_type=="VERIFICATION_TASK"', {
     // 需要从原来执行那里给参数过来，领导说的是存储到数据库，再查出来
     // Try to run existed code
     agt_test_run_exist_code?test_no={{test_no}}&current_step={{current_step}}&steps={{steps}}&system={{system}}&envinfo={{envinfo}}
@@ -73,16 +109,15 @@ when('step_type=="Verify"', {
     // Run Find and check target element successfully, go to end
     act_flow.go?plan=end
 })
-
-when('step_type=="VerifyTriple"', {
+//# VERIFICATION_TRIPLE_TASK
+when('step_type=="VerifyTriple" || step_type=="VERIFICATION_TRIPLE_TASK"', {
 	//# 从数据库查询用于验证的数据
-	n_verify_data, act_kb.selectBy?sql='select * from kb_test_case_instance_intermediates where test_step_id="{{step_id}}" '
+	n_verify_data, act_kb.selectBy?sql='select * from kb_test_case_instance_intermediates where test_step_id="{{n_verified_id}}" '
 
     // 需要从原来执行那里给参数过来，领导说的是存储到数据库，再查出来
 	assign('sys_last_result', '{{n_verify_data.python_code_used}}')
     //# Check and compare the execution result
-    n_cmp1, tpl_cmp_pageresult_Triple, vrf_flag?value='fn.str(sys_last_result.thought.re_reasoning)=="false" || sys_last_result.hasDialog',\
-    agt_save_explorer?columns='page_change,tpl_cmp_pageresult.thought.change,reasoning,tpl_cmp_pageresult.thought.reasoning'
+    n_cmp1, tpl_cmp_pageresult_Triple
     assign('python_code', '{{fn.readFile(n_similar_file.filename)}}')
     // Check if page doesnot change
     when('fn.not(n_cmp1.run_success)', {
@@ -103,25 +138,14 @@ when('step_type=="VerifyTriple"', {
         })
     })
 })
-
-when('step_type=="VerifyExecute"', {
+//# VERIFICATION_EXECUTE_TASK
+when('step_type=="VerifyExecute" || step_type=="VERIFICATION_EXECUTE_TASK"', {
 	//# 从数据库查询用于验证的数据
-	n_verify_data, act_kb.selectBy?sql='select * from kb_test_case_instance_intermediates where test_step_id="{{step_id}}" '
+	n_verify_data, act_kb.selectBy?sql='select * from kb_test_case_instance_intermediates where test_step_id="{{n_verified_id}}" '
 
     // 需要从原来执行那里给参数过来，领导说的是存储到数据库，再查出来
 	assign('sys_last_result', '{{n_verify_data.python_code_used}}')
-    when('n_result.action_type=="3"', {
-        //# Check and compare the execution result
-        n_cmp1, tpl_cmp_pageresult_Execute, vrf_flag?value='fn.str(sys_last_result.thought.re_reasoning)=="false" || sys_last_result.hasDialog',\
-                agt_save_explorer?columns='page_change,tpl_cmp_pageresult.thought.change,reasoning,tpl_cmp_pageresult.thought.reasoning'
-    },
-    {   
-        assign('action_result', '{{n_result.action_result}}')
-        
-        vrf_flag?value='fn.str(action_result.thought.re_reasoning)=="false" || action_result.hasDialog',\
-            agt_save_explorer?columns='page_change,action_result.thought.change,reasoning,action_result.thought.reasoning'
-        assign('n_cmp1', '{{n_result.action_result}}')
-    })
+    n_cmp1, tpl_cmp_pageresult_Execute
 
 	// Check if page doesnot change
 	when('fn.not(n_cmp1.run_success)', {
@@ -156,15 +180,14 @@ when('step_type=="VerifyExecute"', {
 	})
 
 })
-
-when('step_type=="VerifyPamp"', {
+//# VERIFICATION_PAMP_TASK
+when('step_type=="VerifyPamp" || step_type=="VERIFICATION_PAMP_TASK"', {
 	//# 从数据库查询用于验证的数据
-	n_verify_data, act_kb.selectBy?sql='select * from kb_test_case_instance_intermediates where test_step_id="{{step_id}}" '
+	n_verify_data, act_kb.selectBy?sql='select * from kb_test_case_instance_intermediates where test_step_id="{{n_verified_id}}" '
 
     // 需要从原来执行那里给参数过来，领导说的是存储到数据库，再查出来
 	assign('sys_last_result', '{{n_verify_data.python_code_used}}')
-    n_cmp1,tpl_cmp_pageresult_Pamp, vrf_flag?value='fn.str(sys_last_result.thought.re_reasoning)=="false" || sys_last_result.hasDialog',\
-    agt_save_explorer?columns='page_change,tpl_cmp_pageresult.thought.change,reasoning,tpl_cmp_pageresult.thought.reasoning'
+    n_cmp1,tpl_cmp_pageresult_Pamp
 	// Check if page doesnot change
 	when('fn.not(n_cmp1.run_success)', {
 		// Show warning information
@@ -201,8 +224,58 @@ when('step_type=="VerifyPamp"', {
 	})
 })
 
+// 异常处理
+// Try to fix script error
+on_failure({
+	//# 构建StepTestInfo
+	n_tmp_info,act_func?script='''
+	return [
+		current_step: current_step ?: "",
+		steps: steps ?: [],
+		tpl_task_element_info: n_tpl_task_element_info ?: [:],
+		simplepageinfo: n_verify_data.dom_before ?: "",
+		new_collect_page: n_verify_data.dom_after ?: ""
+	]
+	'''
+	// Collect page information when failure
+	n_fail_rpa_coll, act_rpa.send?command=CollectPageInfo
+
+	// Analysis page information
+	rag_func?name=StepTestInfo, tpl_task_page_info, agt_save_explorer?columns='page,tpl_task_page_info.pageName,url,tpl_task_page_info.pageUrl,page_type,tpl_task_page_info.pageType,tip_message,tpl_task_page_info.tipMessage!'
+
+	// Check for multiple failures
+	when('sys_run_count>3', {
+		// Multiple failures, announce task failure
+		act_flow.fail?result={{fn.json("failure_count, sys_run_count, error_info, sys_hint_agt")}}
+	})
+	
+	// Try to restore original page
+	when('fn.bool(tpl_task_page_info.hasDialog) && !fn.bool(tpl_task_element_info.hasDialog)', {
+		// Click the cancel button
+		act_rpa.send?command=RunDynamicScript&name='clickElementByItem(browser, "{{tpl_task_page_info.cancelElementId}}")'
+	})
+
+	// Try to fix the script
+	when('fn.hasValue(python_code)', {
+		// Collect page elements
+		tpl_task_element_info
+	
+		// Fix the script
+		n_fix_python_code,tpl_self_fix,psr_json_python
+		assign('python_code', "{{n_fix_python_code}}")
+		act_flow.go?plan={{fn.optional(plan, 'n_python_file_2')}}&step=act
+	}, {
+		// No python code, announce task failure 
+		act_flow.fail?result={{fn.json("failure_count, sys_run_count, error_info, sys_hint_agt")}}
+	})
+})
+
+
 // 不属于可支持的类型
 log('不支持该种类型的验证')
+
+
+
 
 
 // Exist 结果比较
@@ -365,12 +438,25 @@ define('tpl_cmp_pageresult_Pamp','''
 	# 局部测试执行之后的元素结构为：
 	{{new_collect_page}}
 ''')
-// Save explorer
-agent('agt_save_explorer', {
-	// Save to kb_testcase_step_explorer
-	act_kb.merge?name=kb_testcase_step_explorer&columnValues='''
-			{{fn.json(columns)}}
-		'''&where='''
-			{{fn.json("test_no, test_no, step, StepTestInfo.current_step")}}
-		'''
-})
+// 分析页面结构
+define('tpl_task_page_info', '''
+	你是熟悉selenium的大模型，请按照检查方法的引导，检查“页面信息”，请分析出页面名称、弹窗信息，用json回复。
+	
+	# json回复格式：
+	{"pageName":xxx页面，"pageUrl":页面url, "tipMessage":xxx页面提示信息，"pageType": 界面类型(可选为：表格界面，表单界面，其他), "hasDialog":true/fase, "elements":[{"name":xxx, "id":xxx}...], "cancelElementId":xxx, "confirmElementI":xxx}
+
+	# JSON回复内容的要求：
+	1. 数据需要来自页面信息，不可自己假设数据
+	2. tipMessage是查询页面的没有匹配的提示，或者是输入页面的输入错误提示。没有tipMessage时，无需返回tipMessage
+	3. elements为弹窗的页面元素，包括：确认按钮，取消按钮，其中cancelElementId为取消按钮的id, confirmElementId为确认按钮的id。hasDialog为false时，无需返回:elements,cancelElementId,confirmElementId
+	4. elements宁愿返回空值，也不可编造，每个值必须完全来自页面信息
+
+	# 检查方法：
+	1. 页面名称：先分析页面布局，聚焦他的顶部内容进行分析，特别是导航关键词：“主页>xxx”。 同时结合pageUrl所表示的含义，进行确定。依然无法确定时，回复不确定。
+	2. 弹窗元素信息：需要识别出弹窗的框体元素，确认按钮，取消按钮。
+	3. tipMessage：如果有显示，通常其位置是紧随在页面的头部下边。
+	4. pageUrl：来自页面信息中的字段pageUrl
+	
+	# 页面信息(结构为json,[{tag:标签类型, name:元素名称,	type:元素类型, id: 用于定位的元素id, rect: 元素坐标，children:[子元素信息]}...])：
+	{{StepTestInfo.pageinfo}}
+''')

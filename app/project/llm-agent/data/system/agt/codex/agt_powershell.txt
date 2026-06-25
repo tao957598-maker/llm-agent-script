@@ -29,6 +29,16 @@
 assign('userInputuserInput',"{{userInput}}")
 
  
-// n_collect_data
-n_collect_data, act_rpa.send?command=PowershellCommand&parameters='{"command":"{{userInput}}"}'
-assign('n_collect_datan_collect_data',"{{n_collect_data}}")
+act_rpa.send?command=PowershellCommand&parameters='{"command":"pwd"}'
+
+act_rpa.send?command=PowershellView
+
+act_rpa.send?command=PowershellClose
+
+act_rpa.send?command=file&parameters='{"path":"c:/sda/","file":'.md'}'
+
+// 从知识空间下载文件或者文件夹
+act_rpa.send?command=DownloadKB&parameters='{"path":"c:/sda/","KBFilePath":''}'
+
+// 本地上传文件或者文件夹
+act_rpa.send?command=DownloadKB&parameters='{"path":"c:/sda/","KBFilePath":''}'

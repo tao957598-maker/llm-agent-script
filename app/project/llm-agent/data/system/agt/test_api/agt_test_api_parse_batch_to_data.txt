@@ -19,7 +19,7 @@
 	"life":1000
 }
 */
-//# application
+// application
 assign("application", '{{application}}')
 // 获取文件Id集合
 n_list_id,act_func.run?script="return kbSpaceFileId.split(',')"

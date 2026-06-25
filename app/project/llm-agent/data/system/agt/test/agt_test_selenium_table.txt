@@ -102,8 +102,10 @@ def run(browser,item = {"id":"id_2442932471","name":"OKP FI CI Maintenance","tag
 # 局部测试步骤为:
 {{current_step}}
 
-收集到的表格数据元素信息为：
+# 收集到的表格数据元素信息为：
 {{n_table}}
+## 目标元素信息：
+{{n_collect_page}}
 """
 )
 

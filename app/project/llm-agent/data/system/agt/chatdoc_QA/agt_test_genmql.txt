@@ -1,90 +1,72 @@
 /*
 {
-	"title":"Gen MQL Agent",
-	"description":"根据语义解析结果生成合法的 MongoDB 查询语句（MQL）",
-	"parameter":[
-		{
-			"name":"matchedVerbs",
-			"label":"匹配的动词",
-			"required":true,
-			"maxLength":500,
-			"hidden":false,
-			"readOnly":false,
-			"type":"textarea"
-		},
-		{
-			"name":"extractedNumber",
-			"label":"提取的数值",
-			"required":false,
-			"maxLength":50,
-			"hidden":false,
-			"readOnly":false,
-			"type":"text"
-		},
-		{
-			"name":"clusterName",
-			"label":"建议字段簇",
-			"required":true,
-			"maxLength":100,
-			"hidden":false,
-			"readOnly":false,
-			"type":"text"
-		},
-		{
-			"name":"actualFields",
-			"label":"实际可用字段",
-			"required":true,
-			"maxLength":1000,
-			"hidden":false,
-			"readOnly":false,
-			"type":"textarea"
-		},
-		{
-			"name":"verbsStr",
-			"label":"动词字符串",
-			"required":true,
-			"maxLength":500,
-			"hidden":false,
-			"readOnly":false,
-			"type":"text"
-		},
-		{
-			"name":"numberStr",
-			"label":"数值字符串",
-			"required":false,
-			"maxLength":50,
-			"hidden":false,
-			"readOnly":false,
-			"type":"text"
-		},
-		{
-			"name":"fieldsStr",
-			"label":"字段字符串",
-			"required":true,
-			"maxLength":500,
-			"hidden":false,
-			"readOnly":false,
-			"type":"text"
-		},
-		{
-			"name":"timeContext",
-			"label":"时间上下文",
-			"required":false,
-			"maxLength":100,
-			"hidden":false,
-			"readOnly":false,
-			"type":"text"
-		}
-	],
+  "title": "gen_mql",
+  "description": "根据语义解析结果生成合法的 MongoDB 查询语句（MQL）",
+  "parameter": [
+    {
+      "name": "matchedVerbs",
+      "label": "匹配的动词",
+      "type": "textarea",
+      "required": true,
+      "maxLength": 500
+    },
+    {
+      "name": "extractedNumber",
+      "label": "提取的数值",
+      "type": "text",
+      "required": false,
+      "maxLength": 50
+    },
+    {
+      "name": "clusterName",
+      "label": "建议字段簇",
+      "type": "text",
+      "required": true,
+      "maxLength": 100
+    },
+    {
+      "name": "actualFields",
+      "label": "实际可用字段",
+      "type": "textarea",
+      "required": true,
+      "maxLength": 1000
+    },
+    {
+      "name": "verbsStr",
+      "label": "动词字符串",
+      "type": "text",
+      "required": true,
+      "maxLength": 500
+    },
+    {
+      "name": "numberStr",
+      "label": "数值字符串",
+      "type": "text",
+      "required": false,
+      "maxLength": 50
+    },
+    {
+      "name": "fieldsStr",
+      "label": "字段字符串",
+      "type": "text",
+      "required": true,
+      "maxLength": 500
+    },
+    {
+      "name": "timeContext",
+      "label": "时间上下文",
+      "type": "text",
+      "required": false,
+      "maxLength": 100
+    }
+  ],
 	"tag":"chatdoc_QA",
-	"uiEntrance":"chatdoc_QA",
-	"displayOrder":7,
-	"version":1
+	"life":100,
+	"displayOrder":6,
+	"version":3
 }
 */
-// ============================
-// 1. 常量定义
-// ============================
+
 assign("COLLECTION_NAME", "loan_records")
 assign("DEFAULT_LIMIT", "100")
 

@@ -8,20 +8,9 @@
 			"type":"knowledge_space"
 		},
 		{
-			"name":"source_type",
-			"label":"Source Type",
-			"args":[
-				{"label":"Web","value":"web"},
-				{"label":"Api","value":"api"},
-                {"label":"Auto","value":"auto"},
-			],
-			"defaultValue":"web",
-			"required":true,
-			"type":"select"
-		},
-		{
-			"name":"pages",
-			"label":"Pages (spilt by `,` )"
+			"name":"systemName",
+			"label":"System Name",
+			"required":true
 		},
 		{
 			"name":"version",
@@ -30,19 +19,19 @@
 		},
 		{
             "name":"resumeMode",
-            "label":"执行模式",
+            "label":"Execution Mode",
             "type":"select",
             "defaultValue":"full",
             "args":[
-                {"label":"完整执行","value":"full"},
-                {"label":"自动续跑","value":"auto"},
-                {"label":"从模块设计开始","value":"from_step2"},
-                {"label":"从测试用例开始","value":"from_step3"}
+                {"label":"Full Execution","value":"full"},
+                {"label":"Auto-Resume","value":"auto"},
+                {"label":"Start from Module Design","value":"from_step2"},
+                {"label":"Start from Test Cases","value":"from_step3"}
             ]
         },
         {
             "name":"resumeSubmoduleName",
-            "label":"续跑子模块名"
+            "label":"Resume Submodule Name"
         },	
         {
 			"name":"fixedThreeLanguage",
@@ -66,21 +55,21 @@
 			]
 		}
   ],
-	"resultPlan":"routed_source_type,status,n_combined_result,n_doc_mind_map,n_entry_result",
+	"resultPlan":"status,n_combined_result,n_doc_md_bundle,n_doc_mind_map,n_doc_mind_map_bundle,n_skipped_docs,n_entry_result",
     "tag":"Automated Testing",
-	"version":8
+	"version":9
 }*/
 //# Agent status
 assign("status", 'Agent is running')
-assign("routed_source_type", "{{source_type}}")
-// select：仅用 fn.hasValue；为空说明传参或元数据异常，不要用 fn.optional 掩盖问题
-when('!fn.hasValue(source_type)', {
-n_param_err_st,act_func?script='throw new RuntimeException("【ROOT】source_type 为空：select 应有 default，空说明调用链或 UI 未注入")'
+assign("routed_source_type", "web")
+// 多文档当前正式只支持 Web 文档；若旧调用链仍传 api/auto，直接失败，避免误走未收口链路
+when('fn.hasValue(source_type) && source_type != "web"', {
+n_param_err_st,act_func?script='throw new RuntimeException("【ROOT】当前多文档链路暂只支持 web 文档，请勿传 source_type={{source_type}}")'
 })
 when('!fn.hasValue(resumeMode)', {
 n_param_err_rm,act_func?script='throw new RuntimeException("【ROOT】resumeMode 为空：select 应有 default，空说明调用链或 UI 未注入")'
 })
-// input：version / 文件必填；pages 为空表示全页（见下方 when(!pages)）
+// input：version / 文件必填；多文档入口不再暴露 pages 过滤参数
 when('!fn.hasValue(version)', {
 n_param_err_ver,act_func?script='throw new RuntimeException("【ROOT】version 不能为空")'
 })
@@ -88,18 +77,22 @@ when('!fn.hasValue(kbSpaceFileId)', {
 n_param_err_kb,act_func?script='throw new RuntimeException("【ROOT】kbSpaceFileId 不能为空")'
 })
 // resumeMode：full / from_step2 / from_step3；resumeSubmoduleName 有值则按子模块断点续跑，无值则按 resumeMode 走对应全流程
+when('!fn.hasValue(systemName)', {
+n_param_err_sys,act_func?script='throw new RuntimeException("systemName is required")'
+})
 assign('requested_resume_mode', '{{resumeMode}}')
 assign('resume_mode', '{{resumeMode}}')
 assign('resume_submodule_name', '{{fn.optional(resumeSubmoduleName, "")}}')
-assign('pipeline_mode', '{{source_type}}')
+assign('pipeline_mode', 'web')
 assign('gen_change_type', '{{fn.optional(change_type, "NEW")}}')
+assign('system_name', '{{systemName}}')
 // 诊断：CallAgent 子图里 assign 的变量未必进入 Groovy binding；n_work_queue 必须直接使用 {{pipeline_mode}} 模板展开
-n_root_param_echo,act_func?script='println("[ROOT] pipeline_mode=" + "{{pipeline_mode}}" + " source_type=" + "{{source_type}}" + " resume_mode=" + "{{resume_mode}}"); return ""'
-// auto：仅用 web_pages_csv / api_pages_csv 给 n_work_queue 分流；不再对外暴露 web_pages/api_pages
+n_root_param_echo,act_func?script='println("[ROOT] pipeline_mode=" + "{{pipeline_mode}}" + " source_type=fixed_web requested_source_type=" + "{{fn.optional(source_type, "")}}" + " resume_mode=" + "{{resume_mode}}"); return ""'
+// 当前入口固定走 Web；API/auto 分流链路暂不对外开放
 
-// [MULTI-DOC] fixed platform for first delivery; later replace this assign with upstream value
-assign("fixed_platform", "DEMO-platform")
-// [MULTI-DOC] parse kbSpaceFileId as single id, comma-separated ids, or JSON-like array
+// [MULTI-DOC] platform is now provided by required upstream systemName
+assign("fixed_platform", "{{systemName}}")
+// [MULTI-DOC] parse kbSpaceFileId as comma-separated file ids
 assign("kb_space_file_id_raw", "{{kbSpaceFileId}}")
 // [MULTI-DOC] build SQL-safe file id list and keep the first id as compatibility documentId
 n_file_id_parse,act_func?script='''
@@ -128,22 +121,59 @@ assign("effectiveDocumentId", "{{n_file_id_parse.primaryDocumentId}}")
 assign("input_mode", "{{n_file_id_parse.inputMode}}")
 // [MULTI-DOC] file metadata for display, export base directory, and document manifest
 n_file_meta, act_kb.selectBy?sql='select id, knowledge_name, store_uri from kb_spaces_folder_knowledge where id in ({{file_id_sql_values}})'
-// [MULTI-DOC] derive system-level display file name from fixed platform and number of files
+// [MULTI-DOC] LLM classifies each document's role from filename — no hardcoded keyword lists
+n_file_role_classify, tpl_detect_doc_roles, psr_json
+// [MULTI-DOC] derive document manifest with LLM-classified doc role / alias
 n_file_name_resolve,act_func?script='''
     def rows = n_file_meta
     if (rows == null || !(rows instanceof List)) rows = []
-    def names = []
-    rows.each { r ->
-        if (r instanceof Map) {
-            def n = (r.get("knowledge_name") ?: r.get("KNOWLEDGE_NAME") ?: "").toString().trim()
-            if (n) names.add(n)
+    // Parse LLM role classifications; fallback to "other" if missing
+    def roleMap = [:]
+    def llmResult = n_file_role_classify
+    if (llmResult instanceof List) {
+        llmResult.each { entry ->
+            if (entry instanceof Map) {
+                def eid = (entry.get("id") ?: entry.get("ID") ?: "").toString().trim()
+                def erole = (entry.get("doc_role") ?: entry.get("role") ?: "other").toString().trim().toLowerCase()
+                if (eid && erole in ["functional","background","business","api","compliance","other"]) {
+                    roleMap.put(eid, erole)
+                }
+            }
         }
     }
-    def base = "DEMO-platform"
-    if (names.size() == 1) base = names[0]
-    else if (names.size() > 1) base = "DEMO-platform_multi_doc"
-    fn.put("document_manifest", rows)
-    return [fileName: base, count: rows.size()]
+    def fixedPlatform = "{{fixed_platform}}".toString().trim()
+    def names = []
+    def aliasSeq = new LinkedHashMap()
+    def roleAlias = [functional:"FUNC", business:"BIZ", background:"BG", api:"API", compliance:"CMP", other:"DOC"]
+    def manifest = []
+    rows.each { r ->
+        if (r instanceof Map) {
+            def id = (r.get("id") ?: r.get("ID") ?: "").toString().trim()
+            def n = (r.get("knowledge_name") ?: r.get("KNOWLEDGE_NAME") ?: "").toString().trim()
+            def uri = (r.get("store_uri") ?: r.get("STORE_URI") ?: "").toString().trim()
+            if (n) names.add(n)
+            def role = roleMap.get(id) ?: "other"
+            def aliasBase = roleAlias.get(role) ?: "DOC"
+            def seq = ((aliasSeq.get(aliasBase) ?: 0) as int) + 1
+            aliasSeq.put(aliasBase, seq)
+            def alias = seq == 1 ? aliasBase : (aliasBase + seq)
+            manifest.add([
+                id: id,
+                knowledge_name: n,
+                store_uri: uri,
+                doc_role: role,
+                doc_alias: alias,
+                system_name: fixedPlatform
+            ])
+        }
+    }
+    def base = fixedPlatform
+    if (!base) {
+        if (names.size() == 1) base = names[0]
+        else if (names.size() > 1) base = "multi_doc"
+    }
+    fn.put("document_manifest", manifest)
+    return [fileName: base, count: manifest.size()]
 '''
 // [MULTI-DOC] public display name remains file_name for existing UI/result templates
 assign("file_name", "{{n_file_name_resolve.fileName}}")
@@ -161,7 +191,7 @@ n_export_paths,act_func?js='''
         : requirementUri.replace(/\/[^\/]*$/, '');
     return {
         modulePath: baseDir + '/Test Module/test_module_' + baseFileName + '.xlsx',
-        designPath: baseDir + '/Test Module Design/test_module_design_' + baseFileName + '.xlsx',
+        designPath: baseDir + '/Test Point/test_point_' + baseFileName + '.xlsx',
         casePath: baseDir + '/Test Case/test_case_' + baseFileName + '.xlsx'
     };
 })();
@@ -169,9 +199,44 @@ n_export_paths,act_func?js='''
 
 when('resume_mode == "auto"', {
     n_auto_last_case_submodule,act_kb.selectBy?sql='select submodule_name from kb_gen_test_case where version = "{{version}}" and document_id in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") and submodule_name is not null and submodule_name <> "" order by id desc limit 1'
-    n_auto_case_design_hit,act_kb.selectBy?sql='select submodule_name from kb_gen_test_module_design where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") and submodule_name = "{{n_auto_last_case_submodule[0].submodule_name}}" limit 1'
+    n_auto_last_case_name,act_func?script='''
+        def rows = n_auto_last_case_submodule
+        if (rows == null || !(rows instanceof List) || rows.isEmpty()) return ""
+        def r0 = rows[0]
+        if (!(r0 instanceof Map)) return ""
+        return (r0.get("submodule_name") ?: r0.get("SUBMODULE_NAME") ?: "").toString().trim()
+    '''
+    assign('auto_last_case_submodule_name', '{{n_auto_last_case_name}}')
+    when('fn.hasValue(auto_last_case_submodule_name)', {
+        assign('resume_mode', 'from_step3')
+        assign('resume_submodule_name', '{{auto_last_case_submodule_name}}')
+        assign('auto_resume_reason', 'auto_resume_step3_from_case')
+    }, {
+        n_auto_last_design_submodule,act_kb.selectBy?sql='select submodule_name from kb_gen_test_module_design where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") and submodule_name is not null and submodule_name <> "" order by id desc limit 1'
+        n_auto_last_design_name,act_func?script='''
+            def rows = n_auto_last_design_submodule
+            if (rows == null || !(rows instanceof List) || rows.isEmpty()) return ""
+            def r0 = rows[0]
+            if (!(r0 instanceof Map)) return ""
+            return (r0.get("submodule_name") ?: r0.get("SUBMODULE_NAME") ?: "").toString().trim()
+        '''
+        assign('auto_last_design_submodule_name', '{{n_auto_last_design_name}}')
+        when('fn.hasValue(auto_last_design_submodule_name)', {
+            assign('resume_mode', 'from_step2')
+            assign('resume_submodule_name', '{{auto_last_design_submodule_name}}')
+            assign('auto_resume_reason', 'auto_resume_step2_from_design')
+        }, {
+            assign('resume_mode', 'full')
+            assign('resume_submodule_name', '')
+            assign('auto_resume_reason', 'auto_resume_full')
+        })
+    })
+    n_root_auto_resume_echo,act_func?script='println("[ROOT][AUTO-RESUME] requested=" + "{{requested_resume_mode}}" + " resolved=" + "{{resume_mode}}" + " submodule=" + "{{resume_submodule_name}}" + " reason=" + "{{auto_resume_reason}}"); return ""'
+})
+
+when('resume_mode == "auto_v1_disabled"', {
+    n_auto_last_case_submodule,act_kb.selectBy?sql='select submodule_name from kb_gen_test_case where version = "{{version}}" and document_id in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") and submodule_name is not null and submodule_name <> "" order by id desc limit 1'
     n_auto_last_design_submodule,act_kb.selectBy?sql='select submodule_name from kb_gen_test_module_design where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") and submodule_name is not null and submodule_name <> "" order by id desc limit 1'
-    n_auto_design_module_hit,act_kb.selectBy?sql='select submodule_name from kb_gen_test_module where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") and submodule_name = "{{n_auto_last_design_submodule[0].submodule_name}}" limit 1'
     n_auto_resume_resolve,act_func?script='''
         def pickName = { rows ->
             if (rows == null || !(rows instanceof List) || rows.isEmpty()) return ""
@@ -180,14 +245,28 @@ when('resume_mode == "auto"', {
             return (r0.get("submodule_name") ?: r0.get("SUBMODULE_NAME") ?: "").toString().trim()
         }
         def lastCase = pickName(n_auto_last_case_submodule)
-        def caseHit = pickName(n_auto_case_design_hit)
         def lastDesign = pickName(n_auto_last_design_submodule)
-        def designHit = pickName(n_auto_design_module_hit)
-        if (lastCase && caseHit == lastCase) {
-            return [mode:"from_step3", submodule_name:lastCase, reason:"auto_resume_step3"]
+        // 交叉验证：latest case 子模块在 design 表也存在 → from_step3
+        if (lastCase) {
+            def found = false
+            def designRows = n_auto_last_design_submodule  // 复用已查的数据，不在模板里做 [0]
+            if (designRows instanceof List) {
+                designRows.each { r ->
+                    if (r instanceof Map && pickName([r]) == lastCase) found = true
+                }
+            }
+            if (found) return [mode:"from_step3", submodule_name:lastCase, reason:"auto_resume_step3"]
         }
-        if (lastDesign && designHit == lastDesign) {
-            return [mode:"from_step2", submodule_name:lastDesign, reason:"auto_resume_step2"]
+        // 交叉验证：latest design 子模块在 module 表也存在 → from_step2
+        if (lastDesign) {
+            def found = false
+            def moduleRows = n_auto_last_case_submodule
+            if (moduleRows instanceof List) {
+                moduleRows.each { r ->
+                    if (r instanceof Map && pickName([r]) == lastDesign) found = true
+                }
+            }
+            if (found) return [mode:"from_step2", submodule_name:lastDesign, reason:"auto_resume_step2"]
         }
         return [mode:"full", submodule_name:"", reason:"auto_resume_full"]
     '''
@@ -345,10 +424,10 @@ when('resume_mode == "full"', {
         })
     })
 })
+})
 //# 步骤执行
-when('!fn.hasValue(pages)', {
-  // 取全部页数据
-  n_kb_data, act_kb.selectBy?sql='''select
+// [MULTI-DOC] do not expose page filtering in entry; always read the full selected document set
+n_kb_data, act_kb.selectBy?sql='''select
     *
 from
     (SELECT
@@ -366,29 +445,6 @@ WHERE
 ORDER BY
     documentId,
     CAST(page AS SIGNED) ASC) as a where a.content is not null'''
-
-},{
-    // 取指定页数据
-    n_kb_data, act_kb.selectBy?sql='''select
-    *
-from
-    (SELECT
-    documentId,
-    fileName,
-    page,
-    CASE
-        WHEN analysis_content IS NULL OR analysis_content = '' THEN content
-        ELSE analysis_content
-    END AS content
-FROM
-    kbs_doc_page_parse
-WHERE
-    documentId in ({{file_id_sql_values}}) and page in ({{pages}})
-ORDER BY
-    documentId,
-    CAST(page AS SIGNED) ASC) as a where a.content is not null'''
-
-})
 // normalize page rows for multi-doc and preserve source references
 n_kb_data_norm,act_func?script=''' 
     def rows = n_kb_data
@@ -399,26 +455,39 @@ n_kb_data_norm,act_func?script='''
         def docId = (r.get("documentId") ?: r.get("document_id") ?: "").toString().trim()
         def fileName = (r.get("fileName") ?: r.get("FILE_NAME") ?: "").toString().trim()
         def p = (r.get("page") ?: "").toString().trim()
+        def manifestRow = (document_manifest instanceof List) ? document_manifest.find { m ->
+            if (!(m instanceof Map)) return false
+            def mid = (m.get("id") ?: m.get("ID") ?: "").toString().trim()
+            return mid && mid == docId
+        } : null
         if (!fileName) {
-            def meta = (n_file_meta instanceof List) ? n_file_meta.find { m ->
-                if (!(m instanceof Map)) return false
-                def mid = (m.get("id") ?: m.get("ID") ?: "").toString().trim()
-                return mid && mid == docId
-            } : null
-            if (meta instanceof Map) fileName = (meta.get("knowledge_name") ?: meta.get("KNOWLEDGE_NAME") ?: "").toString().trim()
+            if (manifestRow instanceof Map) fileName = (manifestRow.get("knowledge_name") ?: manifestRow.get("KNOWLEDGE_NAME") ?: "").toString().trim()
         }
-        def srcRef = fileName ? (fileName + "#Page" + p) : ("Page" + p)
+        def docRole = manifestRow instanceof Map ? (manifestRow.get("doc_role") ?: "").toString().trim() : ""
+        def docAlias = manifestRow instanceof Map ? (manifestRow.get("doc_alias") ?: "").toString().trim() : ""
+        def srcPrefix = fileName ? fileName : (docAlias ? docAlias : docId)
+        def srcRef = srcPrefix ? (srcPrefix + "#Page" + p) : ("Page" + p)
         out.add([
-            platform: "DEMO-platform",
+            platform: "{{fixed_platform}}",
+            system_name: "{{system_name}}",
             documentId: docId,
             document_id: docId,
             fileName: fileName,
+            doc_role: docRole,
+            doc_alias: docAlias,
             page: p,
             source_ref: srcRef,
             content: (r.get("content") ?: "").toString()
         ])
     }
     return out
+'''
+n_kb_data_guard,act_func?script=''' 
+    def rows = n_kb_data_norm
+    if (rows == null || !(rows instanceof List) || rows.isEmpty()) {
+        throw new RuntimeException("【ROOT】未读取到任何有效页面内容：请检查多文档解析结果、文件名映射或知识库分页数据")
+    }
+    return rows.size()
 '''
 assign("kb_list_data", '{{n_kb_data_norm}}')
 
@@ -470,8 +539,15 @@ assign('background_list', '[]')
 assign('functional_list', '[]')
 assign('compliance_list', '[]')
 assign('other_list', '[]')
-// 按队列串行调用 Web/API 页摘要，返回后立即写入 source_type 并合并进 page_summary_list
-foreach('n_wx', 'n_work_queue', {
+// [PERF] NEW 模式用空队列跳过页摘要（~75次LLM, ~15min），MD 和导图由 Map JSON 脚本派生
+// 原始代码：foreach('n_wx', 'n_work_queue', {
+// 如需切回旧链：删除下面三行 + 恢复上行即可
+n_work_queue_perf,act_func?script='''
+    def q = n_work_queue
+    if ("{{gen_change_type}}" == "NEW") { println("[PERF] NEW mode, skipping " + q.size() + " page summaries"); return [] }
+    return q
+'''
+foreach('n_wx', 'n_work_queue_perf', {
     assign('page_content', '{{n_wx.item.page_content}}')
     assign('wx_segment_st', '{{n_wx.item.st}}')
     when('wx_segment_st == "api"', {
@@ -514,14 +590,19 @@ foreach('n_wx', 'n_work_queue', {
             if (item instanceof Map) {
                 item.put("source_type", st)
                 item.put("page", srcPage)
-                item.put("platform", "DEMO-platform")
+                item.put("platform", "{{fixed_platform}}")
+                item.put("system_name", "{{system_name}}")
                 if (page_content instanceof Map) {
                     def docId = (page_content.get("documentId") ?: page_content.get("document_id") ?: "").toString()
                     def fnm = (page_content.get("fileName") ?: "").toString()
+                    def docRole = (page_content.get("doc_role") ?: "").toString()
+                    def docAlias = (page_content.get("doc_alias") ?: "").toString()
                     def srcRef = (page_content.get("source_ref") ?: "").toString()
                     if (docId) item.put("documentId", docId)
                     if (docId) item.put("document_id", docId)
                     if (fnm) item.put("fileName", fnm)
+                    if (docRole) item.put("doc_role", docRole)
+                    if (docAlias) item.put("doc_alias", docAlias)
                     if (srcRef) item.put("source", srcRef)
                     if (srcRef) item.put("source_ref", srcRef)
                 }
@@ -549,8 +630,26 @@ foreach('n_page_data', 'page_summary_listpage_summary_list', {
             act_func?script='other_list.add(page_data)'
         })
     })
+n_page_summary_guard,act_func?script='''
+    // NEW 模式跳过页摘要，Map 直接从原始页面启动，不依赖摘要
+    if ("{{gen_change_type}}" == "NEW") {
+        println("[INFO] NEW mode, skipping page summary guard — Map reads raw pages directly")
+        return [pageSummaryCount: 0, functionalCount: 0]
+    }
+    def rows = page_summary_list
+    if (rows == null || !(rows instanceof List) || rows.isEmpty()) {
+        throw new RuntimeException("【摘要为空】多文档页摘要结果为空，无法继续 Step1")
+    }
+    def fl = functional_list
+    if (fl == null || !(fl instanceof List) || fl.isEmpty()) {
+        throw new RuntimeException("【功能摘要为空】未提取到可用于 Step1 的 Functional 内容，停止生成以避免错误结果")
+    }
+    return [pageSummaryCount: rows.size(), functionalCount: fl.size()]
+'''
 
-
+// [PERF] NEW 模式跳过 MD LLM 生成，等 Map 完成后由脚本从 Map JSON 派生
+assign('_perf_new_mode', '{{gen_change_type}}')
+when('_perf_new_mode != "NEW"', {
 
 // background_listbackground_list
 assign('background_listbackground_list', '{{background_list}}')
@@ -584,7 +683,7 @@ when('fn.hasValue(other_list)', {
     assign('other_result', '')
 })
 // [MULTI-DOC] merge and compress functional input before Step1 generation
-n_multi_doc_step1_merge,act_func?script='''
+n_multi_doc_step1_merge,act_func?script=''' 
     def normalize = { s ->
         def x = (s == null ? "" : s.toString()).trim().toLowerCase()
         x = x.replaceAll(/\s+/, " ")
@@ -645,7 +744,8 @@ n_multi_doc_step1_merge,act_func?script='''
             }
         }
         def cloned = new LinkedHashMap(item)
-        cloned.put("platform", "DEMO-platform")
+        cloned.put("platform", "{{fixed_platform}}")
+        cloned.put("system_name", "{{system_name}}")
         cloned.put("source_type", st)
         cloned.put("description", desc)
         cloned.put("source", src)
@@ -678,12 +778,809 @@ n_multi_doc_step1_merge,act_func?script='''
     functional_list = out
     return out.size()
 '''
+n_step1_row_enrich,act_func?script=''' 
+    def rows = functional_list
+    if (rows == null || !(rows instanceof List)) rows = []
+    int idx = 1
+    rows.each { item ->
+        if (!(item instanceof Map)) return
+        def rowId = (item.get("step1_row_id") ?: "").toString().trim()
+        if (!rowId) {
+            rowId = "R" + idx
+            item.put("step1_row_id", rowId)
+        }
+        item.put("platform", "{{fixed_platform}}")
+        item.put("system_name", "{{system_name}}")
+        idx++
+    }
+    fn.put("functional_list", rows)
+    functional_list = rows
+    return rows.size()
+'''
+n_step1_input_guard,act_func?script='''
+    // NEW 模式不走 old Step1 分批，functional_list 为空属于正常
+    if ("{{gen_change_type}}" == "NEW") {
+        println("[INFO] NEW mode, skipping Step1 input guard — Map handles modules independently")
+        return [functionalCount: 0, totalChars: 0]
+    }
+    def rows = functional_list
+    if (rows == null || !(rows instanceof List) || rows.isEmpty()) {
+        throw new RuntimeException("【STEP1输入为空】functional_list 为空，无法生成模块")
+    }
+    int totalChars = 0
+    rows.each { item ->
+        if (!(item instanceof Map)) return
+        def txt = [
+            item.get("section"),
+            item.get("title"),
+            item.get("description"),
+            item.get("source"),
+            item.get("source_ref"),
+            item.get("business_rules"),
+            item.get("acceptance_criteria"),
+            item.get("dependencies")
+        ].findAll { it != null }.collect { it.toString() }.join(" ")
+        totalChars += txt.length()
+    }
+    // Map 路径不消费 functional_list，字符量只记日志不阻断；真正拆分在后续按文档/模块局部处理
+    if (totalChars > 450000) {
+        println("[WARN][STEP1规模] functional_list totalChars=" + totalChars + "，超 450K，NEW/Map 路径不受此限制，继续执行")
+    }
+    fn.put("step1_input_total_chars", totalChars)
+    return [functionalCount: rows.size(), totalChars: totalChars]
+'''
+}) // end _perf_new_mode skip MD LLM
+// 非 NEW 模式：LLM 生成的 MD + 导图
+when('_perf_new_mode != "NEW"', {
 assign('combined_result', '# {{file_name}} \n{{background_result}}\n{{functional_result}}\n{{compliance_result}}\n{{other_result}}')
 n_combined_result,act_memory.assign?value='''{{combined_result}}'''&type=md
-// [ROOT-MAIN·mmd] 导图必须在 Combined MD 后立即展示，不能等模块/设计/用例全部结束；使用稳定静态 mmd，不阻断后续流程
 n_doc_mind_map,tpl_txt_to_mermaid,psr_mmd
+})
+// [PERF] NEW 模式：MD 和导图等 Map 完成后由脚本生成，此处不设初始值
+// n_doc_mind_map,tpl_txt_to_mermaid,psr_mmd
 // 生成测试用例流程：在 MD 和 mermaid 就绪后，再跑模块/设计/用例
 // 增量生成按页拆模块，并由父流程直接写入 parse.page，避免 page 依赖模型回传
+// 仅 full 全量模式走 Map 流程；续跑 from_step2/from_step3 直接从 DB 快照启动
+when('gen_change_type == "NEW" && resume_mode == "full"', {
+// ===== MAP ARCHITECTURE FLOW =====
+// Phase 1: 按文档分组页面，为每份文档独立构建单文件 map
+n_map_doc_groups,act_func?script='''
+    def rows = n_kb_data_norm
+    if (rows == null || !(rows instanceof List)) rows = []
+    def groups = new LinkedHashMap()
+    rows.each { r ->
+        if (!(r instanceof Map)) return
+        def docId = (r.get("documentId") ?: r.get("document_id") ?: "").toString().trim()
+        if (!docId) return
+        def list = groups.get(docId)
+        if (list == null) {
+            list = []
+            groups.put(docId, list)
+        }
+        def docName = (r.get("fileName") ?: "").toString().trim()
+        if (!docName) {
+            def mr = (document_manifest instanceof List) ? document_manifest.find { m ->
+                (m instanceof Map) && ((m.get("id") ?: "").toString().trim() == docId)
+            } : null
+            docName = mr instanceof Map ? (mr.get("knowledge_name") ?: docId).toString().trim() : docId
+        }
+        list.add([
+            page: (r.get("page") ?: "").toString().trim(),
+            content: (r.get("content") ?: "").toString(),
+            source_ref: (r.get("source_ref") ?: "").toString().trim(),
+            fileName: docName
+        ])
+    }
+    def out = []
+    groups.each { docId, pages ->
+        if (pages.isEmpty()) return
+        def name = pages[0].fileName ?: docId
+        out.add([documentId: docId, documentName: name, pages: pages, pageCount: pages.size()])
+    }
+    return out
+'''
+// [MAP·SPLIT] 大文档按 200K 字符切分为虚拟文档组，避免单次 doc_map_builder 输入过大
+n_map_doc_groups_split,act_func?script='''
+    def groups = n_map_doc_groups
+    if (groups == null || !(groups instanceof List)) groups = []
+    def out = []
+    groups.each { doc ->
+        if (!(doc instanceof Map)) return
+        def pages = doc.get("pages")
+        if (!(pages instanceof List) || pages.isEmpty()) return
+        int totalChars = 0
+        pages.each { p -> if (p instanceof Map) totalChars += (p.content ?: "").toString().length() }
+        if (totalChars <= 250000 || pages.size() <= 1) {
+            out.add(doc)
+            return
+        }
+        // 按 ~200K 切分
+        def chunks = []; def cur = []; int curChars = 0
+        pages.each { p ->
+            if (!(p instanceof Map)) return
+            int len = (p.content ?: "").toString().length()
+            if (!cur.isEmpty() && curChars + len > 200000) { chunks.add(cur); cur = []; curChars = 0 }
+            cur.add(p); curChars += len
+        }
+        if (!cur.isEmpty()) chunks.add(cur)
+        def name = (doc.get("documentName") ?: "").toString()
+        chunks.eachWithIndex { chunk, idx ->
+            // documentName 用真实文件名，LLM 产出 source_ref 自然不带 chunk 后缀，下游无需正则处理
+            out.add([documentId: doc.get("documentId"), documentName: name, pages: chunk, pageCount: chunk.size(), _chunkBase: name, _chunkIndex: idx+1, _chunkTotal: chunks.size()])
+        }
+    }
+    println("[INFO][MAP·拆分] 原始文档组=" + groups.size() + " 拆分后=" + out.size())
+    return out
+'''
+// Clear old Step1 data before Map flow generates new modules
+n_map_cleanup_module_rows,act_kb.selectBy?sql='select distinct documentId as doc_id from kb_gen_test_module where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
+foreach('n_map_cleanup_module_row', 'n_map_cleanup_module_rows', {
+    act_kb.delete?name=kb_gen_test_module&where='{"version":"{{version}}","documentId":"{{n_map_cleanup_module_row.item.doc_id}}"}'&maxSize=1000
+    on_failure({
+        act_func?script='throw new RuntimeException("Failed to delete kb_gen_test_module for version=" + "{{version}}" + ", documentId=" + "{{n_map_cleanup_module_row.item.doc_id}}")'
+    })
+})
+// Phase 1: 为每份文档（或大文档的每个分段）构建单文件 map
+assign('single_doc_maps', '[]')
+assign('_skipped_docs', '[]')
+foreach('n_map_doc', 'n_map_doc_groups_split', {
+    assign('map_doc_pages', '{{n_map_doc.item.pages}}')
+    assign('map_doc_name', '{{n_map_doc.item.documentName}}')
+    // [MAP·CHUNK] 将外层已算好的 chunk 元数据提为 assign，供 act_func 注入子 agent 返回值
+    assign('_chunk_meta_base', '{{fn.optional(n_map_doc.item._chunkBase, "")}}')
+    assign('_chunk_meta_idx', '{{fn.optional(n_map_doc.item._chunkIndex, "0")}}')
+    assign('_chunk_meta_total', '{{fn.optional(n_map_doc.item._chunkTotal, "0")}}')
+    n_single_map,agt_doc_map_builder?document_pages='{{map_doc_pages}}'&documentName='{{map_doc_name}}'&platform='{{fixed_platform}}'&outputLanguage={{outputLanguage}}&async=false
+    act_func?script='''
+        def m = n_single_map
+        if (m instanceof Map) {
+            def v = m.get("value")
+            if (v instanceof Map) m = v
+        }
+        if (m instanceof Map) {
+            // [MAP·CHUNK] 将 chunk 元数据注入结果 map，使下游 n_map_chunk_merge 能正确识别并合并
+            def cb = (_chunk_meta_base == null ? "" : _chunk_meta_base.toString()).trim()
+            if (cb) {
+                m.put("_chunkBase", cb)
+                m.put("_chunkIndex", (_chunk_meta_idx == null ? "0" : _chunk_meta_idx.toString()).trim())
+                m.put("_chunkTotal", (_chunk_meta_total == null ? "0" : _chunk_meta_total.toString()).trim())
+            }
+            def meta = m.get("_meta")
+            if (meta instanceof Map && meta.get("skipped") == true) {
+                _skipped_docs.add([document: map_doc_name.toString(), reason: (meta.get("skip_reason") ?: "unknown")])
+            }
+            single_doc_maps.add(m)
+        }
+    '''
+})
+// [MAP·MERGE] 将拆分后的 chunk map 合并回原始文档
+n_map_chunk_merge,act_func?script='''
+    def maps = single_doc_maps
+    if (maps == null || !(maps instanceof List)) maps = []
+    def chunked = [:]
+    def direct = []
+    maps.each { m ->
+        if (!(m instanceof Map)) return
+        def base = m.get("_chunkBase")
+        if (base) {
+            base = base.toString().trim()
+            def exist = chunked.get(base)
+            if (exist == null) { exist = [document_name: base, platform: m.platform, modules: []]; chunked.put(base, exist) }
+            def mods = m.get("modules")
+            if (mods instanceof List) {
+                mods.each { mod ->
+                    if (!(mod instanceof Map)) return
+                    def mn = (mod.module_name ?: "").toString().trim()
+                    def mnKey = mn.toLowerCase().replaceAll("\\s+", "")
+                    // 精确匹配或去空格后匹配
+                    def em = exist.modules.find { ex ->
+                        def en = (ex.module_name ?: "").toString().trim().toLowerCase().replaceAll("\\s+", "")
+                        en == mnKey
+                    }
+                    // 兜底：包含关系匹配（一个名包含另一个）
+                    if (em == null && mnKey.length() > 3) {
+                        em = exist.modules.find { ex ->
+                            def en = (ex.module_name ?: "").toString().trim().toLowerCase().replaceAll("\\s+", "")
+                            en.contains(mnKey) || mnKey.contains(en)
+                        }
+                    }
+                    if (em instanceof Map) {
+                        def esubs = em.get("submodules")
+                        if (!(esubs instanceof List)) esubs = []
+                        def nsubs = mod.get("submodules")
+                        if (nsubs instanceof List) { nsubs.each { s -> esubs.add(s) } }
+                        // 拼接描述，避免信息丢失
+                        def md = mod.get("module_description")
+                        if (md) {
+                            def ed = (em.get("module_description") ?: "").toString()
+                            if (!ed.contains(md.toString())) em.put("module_description", ed ? (ed + "; " + md) : md)
+                        }
+                    } else { exist.modules.add(mod) }
+                }
+            }
+        } else { direct.add(m) }
+    }
+    chunked.each { k, v -> direct.add(v) }
+    single_doc_maps = direct
+    // Persist the post-chunk-merge list immediately. Later steps may resume after
+    // nested foreach/callAgent boundaries, so relying on Groovy binding rebinding
+    // alone is not stable enough for branch selection.
+    fn.put("single_doc_maps", direct)
+    println("[INFO][MAP-SPLIT] original chunk maps=" + maps.size() + " merged maps=" + direct.size())
+'''
+n_map_single_guard,act_func?script='''
+    def maps = fn.get("single_doc_maps")
+    if (maps == null || !(maps instanceof List)) maps = single_doc_maps
+    if (maps == null || !(maps instanceof List) || maps.isEmpty()) {
+        throw new RuntimeException("【MAP】所有文档的单文件 map 均生成失败，single_doc_maps 为空")
+    }
+    // Keep the post-chunk-merge list in fn so later phases do not depend on
+    // Groovy local variable rebinding after nested foreach/callAgent resumes.
+    fn.put("single_doc_maps", maps)
+    return maps.size()
+'''
+// Phase 2: merge into a system-level map; skip merge for single-doc mode; group-merge when doc count > 5.
+n_system_map_merge_input,act_func?script='''
+    def maps = fn.get("single_doc_maps")
+    if (maps == null || !(maps instanceof List)) maps = []
+    // Single document does not need merge; use the document map directly as the system-level map.
+    if (maps.size() == 1) {
+        def m = maps[0]
+        if (m instanceof Map && !m.get("system_name")) m.put("system_name", "{{system_name}}")
+        fn.put("_single_doc_map", m)
+        return "__SINGLE_DOC__"
+    }
+    if (maps.size() <= 5) return maps  // Small batches can merge directly.
+    // Group by 4 documents first, then merge inside each group.
+    def groups = []
+    def cur = []
+    maps.each { m ->
+        cur.add(m)
+        if (cur.size() >= 4) { groups.add(new ArrayList(cur)); cur = [] }
+    }
+    if (!cur.isEmpty()) groups.add(new ArrayList(cur))
+    if (groups.size() <= 1) return maps
+    println("[INFO][MAP-GROUP] document count=" + maps.size() + " group count=" + groups.size())
+    return groups
+'''
+// Single-doc merge bypass: use the post-chunk-merge map as the system-level map.
+n_system_map_single_doc,act_func?script='''
+    def maps = fn.get("single_doc_maps")
+    def flag = "false"
+    if (maps instanceof List && maps.size() == 1) flag = "true"
+    if (n_system_map_merge_input == "__SINGLE_DOC__") flag = "true"
+    fn.put("_single_doc_mode", flag)
+    return flag
+'''
+when('fn.get("_single_doc_mode") == "true"', {
+    // Single document: accumulate modules chunk by chunk into n_system_map_modules_single to avoid passing one huge Map through AgentFlow.
+    n_system_map_modules_single,act_func?script='''
+        def maps = fn.get("single_doc_maps")
+        if (maps == null || !(maps instanceof List) || maps.isEmpty()) return []
+        def allMods = []
+        def platform = null
+        def stripChunkSuffix = { name ->
+            def t = (name ?: "").toString().trim()
+            if (!t) return t
+            return t
+        }
+        maps.each { m ->
+            if (!(m instanceof Map)) return
+            def docName = stripChunkSuffix(m.get("document_name"))
+            def mods = m.get("modules")
+            if (mods instanceof List) {
+                mods.each { mod ->
+                    if (!(mod instanceof Map)) return
+                    if (docName) {
+                        mod.put("_document_name", docName)
+                        if (!mod.get("document_name")) mod.put("document_name", docName)
+                    }
+                    def subs0 = mod.get("submodules")
+                    if (subs0 instanceof List && docName) {
+                        subs0.each { sub ->
+                            if (sub instanceof Map) {
+                                sub.put("_document_name", docName)
+                                if (!sub.get("document_name")) sub.put("document_name", docName)
+                            }
+                        }
+                    }
+                    def mn = (mod.module_name ?: "").toString().trim().toLowerCase()
+                    def exist = allMods.find { em -> (em.module_name ?: "").toString().trim().toLowerCase() == mn }
+                    if (exist instanceof Map) {
+                        def es = exist.get("submodules")
+                        if (!(es instanceof List)) es = []
+                        def ns = mod.get("submodules")
+                        if (ns instanceof List) { ns.each { s -> es.add(s) } }
+                        if (docName && !exist.get("_document_name")) {
+                            exist.put("_document_name", docName)
+                            if (!exist.get("document_name")) exist.put("document_name", docName)
+                        }
+                    } else {
+                        def subs = mod.get("submodules")
+                        if (subs instanceof List && !subs.isEmpty()) { allMods.add(mod) }
+                    }
+                }
+            }
+            if (platform == null) platform = m.get("platform")
+        }
+        if (allMods.isEmpty()) return []
+        fn.put("_single_doc_system_modules", allMods)
+        fn.put("system_map_meta", [module_count: allMods.size(), platform: platform ?: "{{fixed_platform}}", system_name: "{{system_name}}"])
+        return allMods
+    '''
+}, {
+// Decide whether grouping is required by returning "true"/"false" from act_func, so the when condition stays simple.
+n_system_map_need_group,act_func?script='''
+    def input = n_system_map_merge_input
+    if (input instanceof List && input.size() > 0 && input[0] instanceof List) return "true"
+    return "false"
+'''
+when('n_system_map_need_group == "true"', {
+    // Group mode: merge each document group first, then summarize the merged groups.
+    assign('_group_merged_maps', '[]')
+    foreach('n_merge_group', 'n_system_map_merge_input', {
+        n_group_merged,agt_system_map_merge?single_doc_maps='{{n_merge_group.item}}'&platform='{{fixed_platform}}'&systemName='{{system_name}}'&outputLanguage={{outputLanguage}}&async=false
+        act_func?script='''
+            def m = n_group_merged
+            if (m instanceof Map) { def v = m.get("value"); if (v instanceof Map) m = v }
+            if (m instanceof Map) _group_merged_maps.add(m)
+        '''
+    })
+    // Final summary uses script-side aggregation of group merge results and does not call an extra LLM merge step.
+    n_system_map_group_summary,act_func?script='''
+        def groupMaps = _group_merged_maps
+        if (groupMaps == null || !(groupMaps instanceof List) || groupMaps.isEmpty()) {
+            throw new RuntimeException("[MAP] grouped merge result is empty")
+        }
+        if (groupMaps.size() == 1) {
+            def single = groupMaps[0]
+            fn.put("_system_map_ready", single)
+            def singleMods = (single instanceof Map && single.get("modules") instanceof List) ? single.get("modules") : []
+            int singleSubCount = 0
+            singleMods.each { mod ->
+                if (!(mod instanceof Map)) return
+                def subs = mod.get("submodules")
+                if (subs instanceof List) singleSubCount += subs.size()
+            }
+            return [moduleCount: singleMods.size(), submoduleCount: singleSubCount]
+        }
+        // Merge grouped system maps by module name.
+        def merged = [platform: groupMaps[0].platform, system_name: groupMaps[0].system_name, modules: []]
+        groupMaps.each { gm ->
+            if (!(gm instanceof Map)) return
+            def gmods = gm.get("modules")
+            if (!(gmods instanceof List)) return
+            gmods.each { gm2 ->
+                if (!(gm2 instanceof Map)) return
+                def gmn = (gm2.module_name ?: "").toString().trim().toLowerCase()
+                def exist = merged.modules.find { em -> (em.module_name ?: "").toString().trim().toLowerCase() == gmn }
+                if (exist instanceof Map) {
+                    def es = exist.get("submodules")
+                    if (!(es instanceof List)) es = []
+                    def ns = gm2.get("submodules")
+                    if (ns instanceof List) { ns.each { s -> es.add(s) } }
+                } else { merged.modules.add(gm2) }
+            }
+        }
+        int totalSubmodules = 0
+        merged.modules.each { mod ->
+            if (!(mod instanceof Map)) return
+            def subs = mod.get("submodules")
+            if (subs instanceof List) totalSubmodules += subs.size()
+        }
+        fn.put("_system_map_ready", merged)
+        return [moduleCount: merged.modules.size(), submoduleCount: totalSubmodules]
+    '''
+}, {
+    // For 2-5 documents, use an inline merge prompt to avoid another agent-level large-object return and SpoolRef risk.
+    n_system_map_inline_input,act_func?script='''
+        def raw = n_system_map_merge_input
+        if (raw == null) raw = []
+        if (!(raw instanceof List)) raw = [raw]
+        def out = []
+        raw.each { mapItem ->
+            if (!(mapItem instanceof Map)) return
+            def m = mapItem.get("value") instanceof Map ? mapItem.get("value") : mapItem
+            if (m == null || !(m instanceof Map)) return
+            def modules = m.get("modules")
+            if (!(modules instanceof List) || modules.isEmpty()) return
+            out.add([
+                document_name: (m.get("document_name") ?: "").toString(),
+                platform: (m.get("platform") ?: "{{fixed_platform}}").toString(),
+                module_count: modules.size(),
+                modules: modules
+            ])
+        }
+        if (out.isEmpty()) {
+            throw new RuntimeException("[MAP] inline system merge input is empty after normalization")
+        }
+        return out
+    '''
+    n_system_map_inline, tpl_build_system_map_inline, psr_json
+    n_system_map_inline_validate,act_func?script='''
+        def raw = n_system_map_inline
+        def m = null
+        if (raw instanceof Map) {
+            def inner = raw.get("value")
+            m = (inner instanceof Map && inner.get("modules") instanceof List) ? inner : raw
+        } else if (raw instanceof List && raw.size() > 0 && raw[0] instanceof Map) {
+            m = raw[0]
+        }
+        if (m == null || !(m instanceof Map)) {
+            throw new RuntimeException("[MAP] system merge returned an invalid payload: system map was not produced by the inline prompt")
+        }
+        def modules = m.get("modules")
+        if (!(modules instanceof List) || modules.isEmpty()) {
+            throw new RuntimeException("[MAP] system merge returned empty modules")
+        }
+        int totalSubmodules = 0
+        modules.each { mod ->
+            if (!(mod instanceof Map)) return
+            def subs = mod.get("submodules")
+            if (subs instanceof List) totalSubmodules += subs.size()
+        }
+        if (totalSubmodules == 0) {
+            throw new RuntimeException("[MAP] system merge returned " + modules.size() + " modules but total submodule count is 0")
+        }
+        m.put("_meta", [
+            platform: "{{fixed_platform}}",
+            system_name: "{{system_name}}",
+            input_doc_count: n_system_map_inline_input.size(),
+            module_count: modules.size(),
+            submodule_count: totalSubmodules
+        ])
+        fn.put("_system_map_ready", m)
+        return [moduleCount: modules.size(), submoduleCount: totalSubmodules]
+    '''
+})
+}) // end n_system_map_single_doc
+// Phase 3: flatten the system map into evidence rows and import them into kb_gen_test_module.
+assign('map_evidence_rows', '[]')
+    // For single-doc mode, n_system_map_modules_single is already prepared in the when branch above and should not be re-extracted from n_system_map.
+n_system_map_skip,act_func?script='''
+    if ("{{gen_change_type}}" == "NEW" && "{{resume_mode}}" == "full" && fn.get("_single_doc_mode") == "true") return "true"
+    return "false"
+'''
+when('fn.get("_single_doc_mode") == "true"', {
+    n_skip_placeholder,act_func?script='''
+        println("[INFO] single-doc mode: skip common n_system_map_modules extraction")
+        return "skipped"
+    '''
+}, {
+    n_system_map_modules_multi,act_func?script='''
+        def cached = fn.get("_system_map_ready")
+        if (!(cached instanceof Map)) {
+            throw new RuntimeException("[MAP] system map contract broken before Phase 3: _system_map_ready is missing. Non-single-doc Phase 2 must persist the final system map into fn before evidence expansion.")
+        }
+        def mods = cached.get("modules")
+        if (!(mods instanceof List)) {
+            throw new RuntimeException("[MAP] system map contract broken before Phase 3: _system_map_ready.modules is missing or not a list.")
+        }
+        fn.put("system_map_meta", [
+            module_count: mods.size(),
+            platform: cached.get("platform"),
+            system_name: cached.get("system_name")
+        ])
+        return mods
+    '''
+}) // end n_system_map_skip when
+n_system_map_modules,act_func?script='''
+    if (fn.get("_single_doc_mode") == "true") return n_system_map_modules_single
+    return n_system_map_modules_multi
+'''
+foreach('n_map_module', 'n_system_map_modules', {
+    n_evidence_pack,agt_evidence_pack?system_module='{{n_map_module.item}}'&platform='{{fixed_platform}}'&documentId='{{effectiveDocumentId}}'&version='{{version}}'&outputLanguage={{outputLanguage}}&async=false
+    // Read the child-agent payload directly instead of relying on fn state across agent boundaries.
+    act_func?script='''
+        def result = n_evidence_pack
+        def m = null
+        if (result instanceof Map) {
+            def inner = result.get("value")
+            m = (inner instanceof Map) ? inner : result
+        }
+        if (m instanceof Map) {
+            def rows = m.get("_module_rows")
+            if (rows instanceof List) {
+                rows.each { r -> if (r instanceof Map) map_evidence_rows.add(r) }
+            }
+        }
+    '''
+})
+n_map_evidence_guard,act_func?script='''
+    def rows = map_evidence_rows
+    if (rows == null || !(rows instanceof List) || rows.isEmpty()) {
+        throw new RuntimeException("[STEP1] evidence rows are empty, cannot continue to Step2")
+    }
+    // [RESUME-GATE] submodule_name must be unique before resume is considered reliable.
+    def nameCount = new LinkedHashMap()
+    rows.each { r ->
+        if (!(r instanceof Map)) return
+        def nm = (r.get("submodule_name") ?: "").toString().trim()
+        if (!nm) return
+        nameCount.put(nm, (nameCount.get(nm) ?: 0) + 1)
+    }
+    def duplicates = []
+    nameCount.each { k, v -> if (v > 1) duplicates.add(k + "(" + v + ")") }
+    if (!duplicates.isEmpty()) {
+        throw new RuntimeException("[RESUME-GATE] duplicate submodule_name detected, resume is unsafe: " + duplicates.take(5).join(", "))
+    }
+    fn.put("map_evidence_rows", rows)
+    fn.put("test_module_flattened_data", rows)
+    return [moduleRowCount: rows.size(), duplicatesDetected: duplicates.isEmpty()]
+'''
+// [SOURCE-NORM] normalize file names inside source_ref by document_manifest so Step2 can query page evidence correctly.
+n_source_norm,act_func?script='''
+    def manifest = fn.get("document_manifest")
+    if (manifest == null || !(manifest instanceof List)) manifest = []
+    // 构建 alias/doc_role/id -> 真实 knowledge_name 的确定性映射
+    def nameMap = [:]
+    def defaultDocName = ""
+    manifest.each { entry ->
+        if (!(entry instanceof Map)) return
+        def fn2 = (entry.get("knowledge_name") ?: "").toString().trim()
+        if (!fn2) return
+        if (!defaultDocName) defaultDocName = fn2
+        // 各种可能的标识都映射到真实文件名
+        [entry.get("doc_alias"), entry.get("doc_role"), entry.get("id")].each { key ->
+            if (key) nameMap.put(key.toString().trim(), fn2)
+        }
+    }
+    def expandPages = { raw ->
+        def out = []
+        if (raw == null) return out
+        def txt = raw.toString().trim()
+        if (!txt) return out
+        def m = (txt =~ /(?i)^page\s*(\d+)(?:\s*-\s*(\d+))?$/)
+        if (!m.matches()) {
+            m = (txt =~ /^(\d+)(?:\s*-\s*(\d+))?$/)
+            if (!m.matches()) return out
+        }
+        int start = Integer.parseInt(m[0][1].toString())
+        int end = m[0][2] ? Integer.parseInt(m[0][2].toString()) : start
+        if (end < start) { int tmp = start; start = end; end = tmp }
+        for (int i = start; i <= end; i++) out.add("Page" + i)
+        return out
+    }
+    def normalizeRefs = { ref ->
+        if (ref == null) return ref
+        def txt = ref.toString().trim()
+        if (!txt) return txt
+        def out = new LinkedHashSet()
+        txt.split(/[;,]/).each { part ->
+            def t = (part == null ? "" : part.toString().trim())
+            if (!t) return
+            nameMap.each { alias, realName ->
+                if (alias) {
+                    if (t.startsWith(alias + "#")) t = realName + t.substring(alias.length())
+                    t = t.replace(alias + "#Page", realName + "#Page")
+                }
+            }
+            def idx = t.toLowerCase().lastIndexOf("#page")
+            if (idx > 0) {
+                def docName = t.substring(0, idx).trim()
+                def pagePart = t.substring(idx + 5).trim()
+                def pages = expandPages(pagePart)
+                if (!pages.isEmpty()) {
+                    pages.each { pg -> out.add(docName + "#" + pg) }
+                    return
+                }
+            }
+            def barePages = expandPages(t)
+            if (!barePages.isEmpty()) {
+                if (defaultDocName && manifest.size() == 1) {
+                    barePages.each { pg -> out.add(defaultDocName + "#" + pg) }
+                } else {
+                    barePages.each { pg -> out.add(pg) }
+                }
+                return
+            }
+            out.add(t)
+        }
+        return out.join("; ")
+    }
+    def norm = { ref ->
+        if (ref == null || !(ref instanceof String)) return ref
+        return normalizeRefs(ref)
+    }
+    def mrows = fn.get("map_evidence_rows")
+    if (mrows instanceof List) {
+        mrows.each { row ->
+            if (row instanceof Map) {
+                def ms = row.get("main_module_source")
+                def ss = row.get("submodule_source")
+                if (ms) row.put("main_module_source", norm(ms.toString()))
+                if (ss) row.put("submodule_source", norm(ss.toString()))
+            }
+        }
+        fn.put("map_evidence_rows", mrows)
+        fn.put("test_module_flattened_data", mrows)
+        // If a source file name cannot be mapped back to document_manifest, keep it unchanged and emit a warning for audit.
+        def knownFiles = new LinkedHashSet()
+        manifest.each { e -> if (e instanceof Map) { def k = e.get("knowledge_name"); if (k) knownFiles.add(k.toString().trim()) } }
+        mrows.each { row ->
+            if (!(row instanceof Map)) return
+            [row.get("main_module_source"), row.get("submodule_source")].each { src ->
+                if (src) src.toString().split(/[;,]/).each { ref ->
+                    def t = ref.trim()
+                    def idx = t.toLowerCase().lastIndexOf("#page")
+                    if (idx > 0) {
+                        def fn = t.substring(0, idx).trim()
+                        if (fn && !knownFiles.contains(fn)) {
+                            println("[WARN][SOURCE-CROSS] cross-document source detected: submodule=" + (row.get("submodule_name") ?: "?") + " file=" + fn + " not found in document_manifest")
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println("[INFO][SOURCE-NORM] file-name mappings=" + nameMap.size())
+'''
+// [MAP-MODULE-IMPORT] import flattened evidence rows into kb_gen_test_module in batches.
+n_map_import_chunks,act_func?script='''
+    def full = fn.get("map_evidence_rows")
+    if (full == null || !(full instanceof List)) full = []
+    int batchSize = 20
+    def chunks = []
+    for (int i = 0; i < full.size(); i += batchSize) {
+        int end = Math.min(i + batchSize, full.size())
+        def part = new ArrayList()
+        for (int j = i; j < end; j++) part.add(full.get(j))
+        chunks.add(part)
+    }
+    return chunks
+'''
+foreach('n_map_import_chunk', 'n_map_import_chunks', {
+    act_kb.defineAndImportData?tableName='kb_gen_test_module'&data='{{n_map_import_chunk.item}}'
+    on_failure({
+        act_func?script='throw new RuntimeException("Failed to import kb_gen_test_module chunk")'
+    })
+})
+// [MINDMAP-JSON-TO-MERMAID] derive the overview mermaid mindmap from Map JSON by script, replacing the old MD-to-mermaid path.
+n_mmd_from_map,act_func?script='''
+    def mods = n_system_map_modules
+    if (mods == null || !(mods instanceof List)) mods = []
+    def sanitize = { s ->
+        def t = (s == null ? "" : s.toString()).trim()
+        // Mermaid mindmap is sensitive to parentheses inside node text; replace them with brackets.
+        t = t.replace("(", "[").replace(")", "]")
+        // Hard cap each node label to 40 characters.
+        if (t.length() > 40) t = t.substring(0, 37) + "..."
+        return t
+    }
+    def firstPage = { pages ->
+        if (pages instanceof List && pages.size() > 0) {
+            def p = pages[0].toString().trim()
+            return p ? (" " + p) : ""
+        }
+        return ""
+    }
+    // Generate a stable overview mindmap from the structured Map so the display path no longer depends on LLM free-form output.
+    def sorted = new ArrayList(mods)
+    sorted.sort { a, b ->
+        def na = (a instanceof Map ? (a.get("module_name") ?: "").toString().trim() : "")
+        def nb = (b instanceof Map ? (b.get("module_name") ?: "").toString().trim() : "")
+        return na.compareToIgnoreCase(nb)
+    }
+    def lines = ["mindmap"]
+    def rootLabel = sanitize("{{system_name}}")
+    lines.add("  root((" + rootLabel + "))")
+    sorted.each { mod ->
+        if (!(mod instanceof Map)) return
+        def mn = sanitize(mod.get("module_name"))
+        if (!mn) return
+        lines.add("    " + mn)
+        def subs = mod.get("submodules")
+        if (subs instanceof List) {
+            // Merge submodule labels into the module branch.
+            def sortedSubs = new ArrayList(subs)
+            sortedSubs.sort { a, b ->
+                def sa = (a instanceof Map ? (a.get("submodule_name") ?: "").toString().trim() : "")
+                def sb = (b instanceof Map ? (b.get("submodule_name") ?: "").toString().trim() : "")
+                return sa.compareToIgnoreCase(sb)
+            }
+            sortedSubs.each { sub ->
+                if (!(sub instanceof Map)) return
+                def sn = sanitize(sub.get("submodule_name"))
+                if (!sn) return
+                def pageTag = firstPage(sub.get("source_pages") ?: sub.get("all_source_pages"))
+                lines.add("      " + sn + pageTag)
+            }
+        }
+    }
+    // Return a strict ```mermaid code block via tpl_txt_to_mermaid + psr_mmd.
+    return "```mermaid\n" + lines.join("\n") + "\n```"
+'''
+// The script-generated overview uses tpl_overview_mmd + psr_mmd only for formatting echo, not semantic LLM generation.
+n_doc_mind_map, tpl_overview_mmd, psr_mmd
+// 覆盖页摘要线产出的 combined_result
+assign("n_doc_mind_map_v2", "{{n_mmd_from_map}}")
+// [MINDMAP-BUNDLE] loop by document and append each psr_mmd result into n_doc_mind_map_bundle for frontend display.
+n_bundle_prep,act_func?script='''
+    def maps = fn.get("single_doc_maps")
+    if (maps == null || !(maps instanceof List)) maps = []
+    return maps
+'''
+foreach('n_bundle_doc', 'n_bundle_prep', {
+    n_doc_mind_map_bundle, tpl_bundle_one, psr_mmd
+})
+// [MD-BUNDLE] assemble per-document markdown sections and append them with act_memory.assign?type=md.
+foreach('n_md_doc', 'n_bundle_prep', {
+    n_md_one,act_func?script='''
+        def doc = n_md_doc.item
+        if (!(doc instanceof Map)) return ""
+        def lines = ["## " + (doc.get("document_name") ?: "Document"), ""]
+        def mods = doc.get("modules")
+        if (!(mods instanceof List) || mods.isEmpty()) return ""
+        mods.each { mod ->
+            if (!(mod instanceof Map)) return
+            lines.add("### " + (mod.get("module_name") ?: ""))
+            def desc = mod.get("module_description")
+            if (desc) lines.add(desc.toString().trim() + "\n")
+            def subs = mod.get("submodules")
+            if (subs instanceof List) {
+                subs.each { sub ->
+                    if (!(sub instanceof Map)) return
+                    lines.add("- **" + (sub.get("submodule_name") ?: "") + "**")
+                    def sd = sub.get("description")
+                    if (sd) lines.add("  " + sd.toString().trim())
+                    def rules = sub.get("business_rules")
+                    if (rules instanceof List && !rules.isEmpty()) {
+                        rules.each { r -> if (r) lines.add("  - Rule: " + r.toString().trim()) }
+                    }
+                }
+            }
+        }
+        return lines.join("\n")
+    '''
+    n_doc_md_bundle,act_memory.assign?value='''{{n_md_one}}'''&type=md
+})
+// [PERF] NEW mode builds markdown from Map JSON directly and skips the old page-summary-to-MD LLM path.
+n_md_from_map,act_func?script='''
+    def maps = fn.get("single_doc_maps")
+    if (maps == null || !(maps instanceof List)) maps = []
+    def lines = ["# {{system_name}} - " + (maps.size() ?: 0) + " documents\n"]
+    maps.each { doc ->
+        if (!(doc instanceof Map)) return
+        lines.add("## " + (doc.get("document_name") ?: "Document"))
+        def mods = doc.get("modules")
+        if (!(mods instanceof List) || mods.isEmpty()) return
+        mods.each { mod ->
+            if (!(mod instanceof Map)) return
+            lines.add("### " + (mod.get("module_name") ?: ""))
+            def desc = mod.get("module_description")
+            if (desc) lines.add(desc.toString().trim() + "\n")
+            def subs = mod.get("submodules")
+            if (subs instanceof List) {
+                subs.each { sub ->
+                    if (!(sub instanceof Map)) return
+                    lines.add("- **" + (sub.get("submodule_name") ?: "") + "**")
+                    def sd = sub.get("description")
+                    if (sd) lines.add("  " + sd.toString().trim())
+                    def rules = sub.get("business_rules")
+                    if (rules instanceof List && !rules.isEmpty()) {
+                        rules.each { r -> if (r) lines.add("  - Rule: " + r.toString().trim()) }
+                    }
+                    def criteria = sub.get("acceptance_criteria")
+                    if (criteria instanceof List && !criteria.isEmpty()) {
+                        criteria.each { c -> if (c) lines.add("  - AC: " + c.toString().trim()) }
+                    }
+                }
+            }
+        }
+    }
+    def md = lines.join("\n")
+    return md
+'''
+// 覆盖页摘要链产出的 combined_result
+assign("combined_result", "# {{file_name}}\n\n> Generated from Map structured index\n\n{{n_md_from_map}}")
+n_combined_result,act_memory.assign?value='''{{combined_result}}'''&type=md
+// 暴露被跳过的文档信息
+assign("n_skipped_docs", "{{_skipped_docs}}")
+// Map flow complete, skip cluster step and proceed directly to Step2
+assign('n_modules', '{"modules": {{n_system_map_modules}} }')
+})
+// Legacy Step1 path is only for non-NEW modes.
+// NEW mode has already completed Map -> evidence_pack -> n_modules above and must not fall back into old Step1 batching.
 when('gen_change_type != "NEW"', {
     n_increment_func_page_groups,act_func?script='''
         def fl = functional_list
@@ -695,7 +1592,7 @@ when('gen_change_type != "NEW"', {
             if (p.contains(",")) p = p.split(",")[0].trim()
             if (p.toLowerCase().startsWith("page")) p = p.substring(4).trim()
             if (!p) {
-                throw new RuntimeException("【STEP1页码缺失】functional item.page 为空，无法按页生成模块")
+                throw new RuntimeException("[STEP1] functional item.page is empty, cannot group pages into modules")
             }
             def g = groups.get(p)
             if (g == null) {
@@ -709,7 +1606,7 @@ when('gen_change_type != "NEW"', {
         return new ArrayList(groups.values())
     '''
     n_increment_func_modules_init,act_func?script='''
-        fn.put('increment_acc_func_mod_platform', 'DEMO-platform')
+        fn.put('increment_acc_func_mod_platform', '{{fixed_platform}}')
         fn.put('increment_acc_func_mod_modules', new ArrayList())
         return "ok"
     '''
@@ -719,12 +1616,12 @@ when('gen_change_type != "NEW"', {
         n_page_web_has,act_func?script='return (n_page_web_items instanceof List && n_page_web_items.size() > 0) ? "true" : "false"'
         n_page_api_has,act_func?script='return (n_page_api_items instanceof List && n_page_api_items.size() > 0) ? "true" : "false"'
         when('n_page_web_has == "true"', {
-            n_page_web_modules,agt_test_doc_func_modules?input_data='{{n_page_web_items}}'&outputLanguage={{outputLanguage}}
+            n_page_web_modules,agt_test_doc_func_modules?input_data='{{n_page_web_items}}'&systemName={{system_name}}&outputLanguage={{outputLanguage}}
         }, {
             n_page_web_modules,act_func?script='return [platform: "", modules: []]'
         })
         when('n_page_api_has == "true"', {
-            n_page_api_modules,agt_test_doc_func_modules_api?input_data='{{n_page_api_items}}'&outputLanguage={{outputLanguage}}
+            n_page_api_modules,agt_test_doc_func_modules_api?input_data='{{n_page_api_items}}'&systemName={{system_name}}&outputLanguage={{outputLanguage}}
         }, {
             n_page_api_modules,act_func?script='return [platform: "", modules: []]'
         })
@@ -733,10 +1630,10 @@ when('gen_change_type != "NEW"', {
             try {
                 if (n_fpg.item instanceof Map) pg = (n_fpg.item.page ?: "").toString().trim()
             } catch (Throwable ignore) { pg = "" }
-            if (!pg) throw new RuntimeException("【STEP1页码缺失】页分组 page 为空，无法写入模块 page")
+            if (!pg) throw new RuntimeException("[STEP1] page is empty while collecting module evidence, cannot continue")
             def acc = fn.get('increment_acc_func_mod_modules')
             if (acc == null || !(acc instanceof List)) acc = new ArrayList()
-            def plat = "DEMO-platform"
+            def plat = "{{fixed_platform}}"
             def addRoot = { root, st ->
                 if (!(root instanceof Map)) return
                 def ml = root.get("modules")
@@ -765,360 +1662,36 @@ when('gen_change_type != "NEW"', {
     })
     n_modules,act_func?script='''
         return [
-            platform: 'DEMO-platform',
+            platform: '{{fixed_platform}}',
             modules: (fn.get('increment_acc_func_mod_modules') ?: [])
         ]
     '''
-}, {
-// Web-only 保持原单次 + 最多 3 批合并逻辑；api/auto 按 source_type 拆分后分别调用 Web/API func_modules 再合并
-when('pipeline_mode == "web"', {
-    // [ROOT-MAIN·fm-web-only] 整体 web 时走单链；input_data 为已分类 functional_list JSON
-    n_modules_single,agt_test_doc_func_modules?input_data='{{functional_list}}'&outputLanguage={{outputLanguage}}
-    n_modules_single_ok,act_func?script='''
-        def x = n_modules_single
-        if (x == null || !(x instanceof Map)) return 'false'
-        def ml = x.get('modules')
-        if (!(ml instanceof List) || ml.isEmpty()) return 'false'
-        return 'true'
-    '''
-    when('n_modules_single_ok == "true"', {
-        n_modules,act_func?script=''' 
-            def x = n_modules_single
-            if (x instanceof Map) x.put("platform", "DEMO-platform")
-            return x
-        '''
-    }, {
-        n_func_module_input_chunks,act_func?script='''
-            def fl = functional_list
-            if (fl == null || !(fl instanceof List)) fl = []
-            fn.put('acc_func_mod_platform', 'DEMO-platform')
-            fn.put('acc_func_mod_modules', new ArrayList())
-            def chunks = new ArrayList()
-            if (fl.isEmpty()) return chunks
-            if (fl.size() <= 18) {
-                chunks.add(new ArrayList(fl))
-            } else {
-                int maxB = 3
-                int chunkSize = (int) Math.ceil((double) fl.size() / (double) maxB)
-                for (int i = 0; i < fl.size(); i += chunkSize) {
-                    int end = Math.min(i + chunkSize, fl.size())
-                    def part = new ArrayList()
-                    for (int j = i; j < end; j++) part.add(fl.get(j))
-                    chunks.add(part)
-                }
-            }
-            return chunks
-        '''
-        foreach('n_fmi', 'n_func_module_input_chunks', {
-            // [ROOT-MAIN·fm-web-chunk] Web 分批拆解；每批仍保留 Web 语义 LLM
-            n_mod_part,agt_test_doc_func_modules?input_data='{{n_fmi.item}}'&outputLanguage={{outputLanguage}}
-            act_func?script='''
-                def acc = fn.get('acc_func_mod_modules')
-                if (acc == null) acc = new ArrayList()
-                def p = n_mod_part
-                if (p != null && p instanceof Map) {
-                    def ml = p.get('modules')
-                    if (ml instanceof List) ml.each { m -> acc.add(m) }
-                }
-                fn.put('acc_func_mod_modules', acc)
-            '''
-        })
-        n_modules,act_func?script='''
-            return [
-                platform: 'DEMO-platform',
-                modules: (fn.get('acc_func_mod_modules') ?: [])
-            ]
-        '''
-    })
-}, {
-    n_fl_split,act_func?script='''
-        def fl = functional_list
-        if (fl == null || !(fl instanceof List)) fl = []
-        def lw = []
-        def la = []
-        fl.each { it ->
-            if (!(it instanceof Map)) return
-            def st = (it.get("source_type") ?: "web").toString().trim().toLowerCase()
-            if (st == "api") la.add(it)
-            else lw.add(it)
-        }
-        fn.put("functional_list_web", lw)
-        fn.put("functional_list_api", la)
-        return "ok"
-    '''
-    n_fl_w_data,act_func?script='return fn.get("functional_list_web") ?: []'
-    n_fl_a_data,act_func?script='return fn.get("functional_list_api") ?: []'
-    n_fl_web_has,act_func?script='''
-        def x = n_fl_w_data
-        return (x instanceof List && x.size() > 0) ? "true" : "false"
-    '''
-    n_fl_api_has,act_func?script='''
-        def x = n_fl_a_data
-        return (x instanceof List && x.size() > 0) ? "true" : "false"
-    '''
-    when('n_fl_web_has == "true"', {
-        // [ROOT-MAIN·fm-split-web] 仅处理 n_fl_w_data（source_type=web）；api 行已放入 n_fl_a_data
-        n_mod_web_result,agt_test_doc_func_modules?input_data='{{n_fl_w_data}}'&outputLanguage={{outputLanguage}}
-    }, {
-        n_mod_web_result,act_func?script='return [platform: "", modules: []]'
-    })
-    when('n_fl_api_has == "true"', {
-        // [ROOT-MAIN·fm-split-api] 仅处理契约型 API 输入；与 web 结果在下方 merge，并给子模块带 pipeline_source_type
-        n_mod_api_result,agt_test_doc_func_modules_api?input_data='{{n_fl_a_data}}'&outputLanguage={{outputLanguage}}
-    }, {
-        n_mod_api_result,act_func?script='return [platform: "", modules: []]'
-    })
-    n_modules,act_func?script='''
-        def normKey = { s ->
-            def x = (s == null ? "" : s.toString()).trim().toLowerCase()
-            x = x.replaceAll(/\\s+/, " ")
-            return x
-        }
-        def tag = { sub, st ->
-            if (sub instanceof Map) sub.put("pipeline_source_type", st)
-        }
-        def collect = { root, st ->
-            def out = []
-            if (!(root instanceof Map)) return out
-            def ml = root.get("modules")
-            if (!(ml instanceof List)) return out
-            ml.each { m ->
-                if (!(m instanceof Map)) return
-                def subs = m.get("submodules")
-                if (subs instanceof List) {
-                    subs.each { s ->
-                        tag(s, st)
-                    }
-                }
-                out.add(m)
-            }
-            return out
-        }
-        def w = null
-        def a = null
-        try { w = n_mod_web_result } catch (Throwable ignore) { w = null }
-        try { a = n_mod_api_result } catch (Throwable ignore) { a = null }
-        def plat = "DEMO-platform"
-        def mods = new ArrayList()
-        mods.addAll(collect(w, "web"))
-        mods.addAll(collect(a, "api"))
-        return [platform: plat, modules: mods]
-    '''
 })
-})
+n_step1_result_guard,act_func?script='''
+    // In full NEW mode, Map has already imported kb_gen_test_module into DB and populated n_modules.
+    if ("{{resume_mode}}" != "full") return 0
+    def root = n_modules
+    def mods = (root instanceof Map) ? root.get("modules") : null
+    if (!(mods instanceof List) || mods.isEmpty()) {
+        throw new RuntimeException("[STEP1] no modules were produced, cannot continue to Step2/Step3")
+    }
+    return mods.size()
+'''
 
-// 使用展平模块数据
+// Reuse test_module_flattened_data from the Map Phase 3 import path instead of rebuilding it again.
 assign('result_list', '[]')
-
-foreach('n_item', 'n_modules.modules', {
-    assign('module', '{{n_item.item}}')
-    
-    foreach('n_sub', 'module.submodules', {
-		assign('sub', '{{n_sub.item}}')
-        act_func?script='''
-            def st = "web"
-            try {
-                if (sub instanceof Map && sub.get("pipeline_source_type") != null) {
-                    def t = sub.get("pipeline_source_type").toString().trim().toLowerCase()
-                    if (t) st = t
-                }
-            } catch (Throwable ignore) { st = "web" }
-            if (!(st in ["web", "api"])) st = "web"
-            def subNameRaw = (sub != null && sub instanceof Map && sub.get("name") != null) ? sub.get("name").toString() : ""
-            def mainNameRaw = (module != null && module instanceof Map && module.get("name") != null) ? module.get("name").toString() : ""
-            if (st == "api") {
-                def mm = (subNameRaw =~ /(?i)\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\b\s+([^\s]+)/)
-                if (mm.find()) {
-                    def method = mm.group(1).toUpperCase()
-                    def path = mm.group(2)
-                    subNameRaw = method + " " + path
-                    def namePart = { raw ->
-                        def x = (raw == null ? "" : raw.toString()).trim()
-                        x = x.replaceAll(/[\\{\\}]/, "")
-                        x = x.replaceAll(/[-_]+/, " ")
-                        x = x.replaceAll(/\\s+/, " ").trim()
-                        if (!x) return ""
-                        def sb = new StringBuilder()
-                        x.split(/\\s+/).eachWithIndex { p, idx ->
-                            if (!p) return
-                            def low = p.toLowerCase()
-                            def norm = low.substring(0, 1).toUpperCase() + (low.length() > 1 ? low.substring(1) : "")
-                            if (idx > 0) sb.append(" ")
-                            sb.append(norm)
-                        }
-                        return sb.toString()
-                    }
-                    def segs = []
-                    path.split("/").each { rawSeg ->
-                        def s = rawSeg == null ? "" : rawSeg.toString().trim()
-                        if (!s) return
-                        if (s.startsWith("{") && s.endsWith("}")) return
-                        def low = s.toLowerCase()
-                        if (low == "api") return
-                        if (low ==~ /v\\d+(\\.\\d+)?/) return
-                        if (low ==~ /\\d+/) return
-                        segs.add(s)
-                    }
-                    def lastSeg = segs ? segs[segs.size() - 1].toString() : ""
-                    def prevSeg = segs.size() > 1 ? segs[segs.size() - 2].toString() : ""
-                    def lastLow = lastSeg.toLowerCase()
-                    if (["add", "create", "new"].contains(lastLow) && prevSeg) mainNameRaw = "Create " + namePart(prevSeg)
-                    else if (["update", "edit", "modify"].contains(lastLow) && prevSeg) mainNameRaw = "Update " + namePart(prevSeg)
-                    else if (["delete", "remove"].contains(lastLow) && prevSeg) mainNameRaw = "Delete " + namePart(prevSeg)
-                    else if (["list", "query", "search"].contains(lastLow) && prevSeg) mainNameRaw = namePart(lastSeg) + " " + namePart(prevSeg)
-                    else if (["detail", "details", "info", "get"].contains(lastLow) && prevSeg) mainNameRaw = "Get " + namePart(prevSeg) + (lastLow == "get" ? "" : " Detail")
-                    else if (["enable", "disable", "reset", "refresh", "submit", "cancel", "approve", "reject", "publish", "download", "upload"].contains(lastLow) && prevSeg) mainNameRaw = namePart(lastSeg) + " " + namePart(prevSeg)
-                    else if (lastSeg) mainNameRaw = namePart(lastSeg)
-                    else if (prevSeg) mainNameRaw = namePart(prevSeg)
-                    if (!mainNameRaw) mainNameRaw = "API"
-                } else {
-                    // 兜底：若不是 METHOD path 格式，仍尽量移除尾部说明，保留接口名
-                    def cutIdx = -1
-                    [" - ", " – ", " — ", " -- "].each { sep ->
-                        if (cutIdx < 0) {
-                            def idx2 = subNameRaw.indexOf(sep)
-                            if (idx2 >= 0) cutIdx = idx2
-                        }
-                    }
-                    if (cutIdx >= 0) subNameRaw = subNameRaw.substring(0, cutIdx)
-                    subNameRaw = subNameRaw.trim()
-                    if (!mainNameRaw) mainNameRaw = subNameRaw
-                }
-            }
-            def toPageList = { inputVal ->
-                def ps = new LinkedHashSet()
-                def s = (inputVal == null ? "" : inputVal.toString())
-                s.split(/\\s*,\\s*/).each { p ->
-                    def t = (p == null ? "" : p.toString()).trim()
-                    if (!t) return
-                    def lower = t.toLowerCase()
-                    if (lower.indexOf("page") >= 0) {
-                        // keep as-is if it already contains page
-                    } else if (t ==~ /\\d+/) {
-                        t = "Page" + t
-                    }
-                    if (t) ps.add(t)
-                }
-                return ps.join(", ")
-            }
-            def pageValue = sub.get("page")
-            if (pageValue == null || pageValue.toString().trim() == "") pageValue = module.get("page")
-            def pageText = (pageValue == null ? "" : pageValue.toString().trim())
-            if (pageText.contains(",")) pageText = pageText.split(",")[0].trim()
-            if (pageText.toLowerCase().startsWith("page")) pageText = pageText.substring(4).trim()
-                def row = [
-                platform: n_modules.platform,
-                main_module_name: mainNameRaw,
-                main_module_source: toPageList(module.source),
-                submodule_name: subNameRaw,
-                submodule_description: sub.description,
-                submodule_source: toPageList(sub.source),
-                documentId: "{{effectiveDocumentId}}",
-                version: "{{version}}",
-                source_type: st,
-                change_type: "{{gen_change_type}}",
-                page: pageText
-            ]
-            result_list.add(row)
-        '''
-    })
-})
-// Step1 去重（先不遗漏）：仅合并“同主模块 + 同子模块（规范化后）”的同义行，来源页码做并集
 act_func?script='''
-    def normName = { s ->
-        def x = (s == null ? "" : s.toString()).toLowerCase()
-        x = x.replaceAll(/[\\[\\]【】()]/, " ")
-        x = x.replaceAll(/\\s*-\\s*/, " ")
-        x = x.replaceAll(/\\s+/, " ").trim()
-        return x
-    }
-    def pageTextOf = { inputVal ->
-        def s = (inputVal == null ? "" : inputVal.toString()).trim()
-        if (!s) return ""
-        def token = s.split(/\\s*,\\s*/)[0].trim()
-        if (!token) return ""
-        def lower = token.toLowerCase()
-        if (lower.indexOf("page") >= 0) {
-            return token.replaceFirst(/(?i)^page\\s*/, "").trim()
-        }
-        return token
-    }
-    def mergePages = { a, b ->
-        def ps = new LinkedHashSet()
-        [a, b].each { v ->
-            def t = (v == null ? "" : v.toString()).trim()
-            if (t && !t.toLowerCase().contains("page")) t = "Page" + t
-            t.split(/\\s*,\\s*/).each { p ->
-                def pp = p == null ? "" : p.trim()
-                if (pp) ps.add(pp)
-            }
-        }
-        return ps.join(", ")
-    }
-    def merged = new LinkedHashMap()
-    result_list.each { r ->
-        if (!(r instanceof Map)) return
-        def st = (r.get("source_type") ?: "web").toString().trim().toLowerCase()
-        if (!(st in ["web", "api"])) st = "web"
-        def rp = (r.page == null ? "" : r.page.toString()).trim()
-        def k = normName(r.main_module_name) + "||" + normName(r.submodule_name) + "||" + st + "||" + rp
-        if (!merged.containsKey(k)) {
-            merged.put(k, r)
-        } else {
-            def ex = merged.get(k)
-            ex.main_module_source = mergePages(ex.main_module_source, r.main_module_source)
-            ex.submodule_source = mergePages(ex.submodule_source, r.submodule_source)
-            def d1 = (ex.submodule_description ?: "").toString().trim()
-            def d2 = (r.submodule_description ?: "").toString().trim()
-            if (d2.length() > d1.length()) ex.submodule_description = d2
-            merged.put(k, ex)
-        }
-    }
-    result_list = new ArrayList(merged.values())
+    def rows = fn.get("test_module_flattened_data")
+    if (rows == null || !(rows instanceof List)) rows = []
+    if (rows.isEmpty()) throw new RuntimeException("銆怱TEP1灞曞钩涓虹┖銆戞ā鍧楀睍骞崇粨鏋滀负绌猴紝鏃犳硶鍐欏叆 kb_gen_test_module")
+    fn.put('result_list', rows)
 '''
-// test_module_flattened_data：全流程 / from_step3 无子模块；from_step2 已在上方 fn.put
-// [主链][风险点] 大型 List<Map> 使用 assign 可能触发绑定/NPE，统一用 fn.put 写入内存
-act_func?script='''
-    def x = result_list
-    if (x == null || !(x instanceof List)) x = []
-    fn.put('test_module_flattened_data', x)
-'''
-})
 
-// 续跑 Step2：跳过删/写模块表；Step3 不经过此分支；full 仍删后导入
-when('resume_mode == "from_step2"', {
-    assign('resume_skip_kb_gen_test_module', 'true')
-}, {
-    n_step1_delete_rows,act_kb.selectBy?sql='select distinct documentId as doc_id from kb_gen_test_module where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
-    foreach('n_step1_delete_row', 'n_step1_delete_rows', {
-        act_kb.delete?name=kb_gen_test_module&where='{"version":"{{version}}","documentId":"{{n_step1_delete_row.item.doc_id}}"}'&maxSize=1000
-        on_failure({
-            act_flow.success
-        })
-    })
-    n_step1_import_chunks,act_func?script='''
-        def full = fn.get('test_module_flattened_data')
-        if (full == null || !(full instanceof List)) full = []
-        int batchSize = 20
-        def chunks = []
-        for (int i = 0; i < full.size(); i += batchSize) {
-            int end = Math.min(i + batchSize, full.size())
-            def part = new ArrayList()
-            for (int j = i; j < end; j++) part.add(full.get(j))
-            chunks.add(part)
-        }
-        return chunks
-    '''
-    foreach('n_step1_import_chunk', 'n_step1_import_chunks', {
-        act_kb.defineAndImportData?tableName='kb_gen_test_module'&data='{{n_step1_import_chunk.item}}'
-        on_failure({
-            act_flow.success
-        })
-    })
-})
+// Map Phase 3 has already written kb_gen_test_module, so mark the old direct-import path as skipped.
+assign('resume_skip_kb_gen_test_module', 'true')
 
-// 第二步：按子模块逐条生成设计、展平并单次导入（与第三步一致，不再固定 100 条切块）
-// [主链][风险点] resumeSubmoduleName 必须与 Step1 产出的 submodule_name 精确一致，否则会提前失败
+// Export kb_gen_test_module before Step2 starts so resume and artifact generation always read the persisted snapshot.
+// [MAIN][RISK] this is the only anchor used to cut Step2 by resumeSubmoduleName, so the snapshot must remain stable and ordered.
 // Export kb_gen_test_module before Step2 starts
 n_export_module_raw,act_kb.selectBy?sql='select platform, main_module_name, main_module_source, submodule_name, submodule_description, submodule_source, source_type from kb_gen_test_module where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") order by main_module_name, submodule_name'
 // Keep module xlsx column order stable
@@ -1209,8 +1782,8 @@ when('fn.hasValue(resume_step2_error)', {
     act_flow.go?plan=end
 })
 
-// 续跑 Step3：不删不写设计表；否则按子模块删设计或全删后，再逐子模块生成并导入
-// [主链][风险点] 这里是是否删第二步表”的唯一闸门，from_step3 必须走上方分支，避免误删导致无法续跑
+// Resume into Step3: do not write the design table in from_step3 mode; otherwise delete from the selected submodule onward, or delete the whole version before regenerating.
+// [MAIN][RISK] this is the only gate that decides whether Step2 design rows are deleted. from_step3 must stay on the upper branch to avoid destructive mis-delete.
 when('resume_mode == "from_step3"', {
     assign('resume_skip_kb_gen_test_module_design', 'true')
 }, {
@@ -1219,7 +1792,7 @@ when('resume_mode == "from_step3"', {
         foreach('n_step2_delete_row', 'n_step2_delete_rows', {
             act_kb.delete?name=kb_gen_test_module_design&where='{"version":"{{version}}","documentId":"{{n_step2_delete_row.item.doc_id}}","submodule_name":"{{n_step2_delete_row.item.submodule_name}}"}'&maxSize=1000
             on_failure({
-                act_flow.success
+                act_func?script='throw new RuntimeException("[STEP2] failed to delete kb_gen_test_module_design for documentId=" + "{{n_step2_delete_row.item.doc_id}}" + ", submodule_name=" + "{{n_step2_delete_row.item.submodule_name}}" + ", version=" + "{{version}}")'
             })
         })
     }, {
@@ -1227,7 +1800,7 @@ when('resume_mode == "from_step3"', {
         foreach('n_step2_delete_row', 'n_step2_delete_rows', {
             act_kb.delete?name=kb_gen_test_module_design&where='{"version":"{{version}}","documentId":"{{n_step2_delete_row.item.doc_id}}"}'&maxSize=1000
             on_failure({
-                act_flow.success
+                act_func?script='throw new RuntimeException("[STEP2] failed to delete kb_gen_test_module_design for documentId=" + "{{n_step2_delete_row.item.doc_id}}" + ", version=" + "{{version}}")'
             })
         })
     })
@@ -1250,7 +1823,7 @@ when('resume_mode == "from_step3"', {
                 if (!sid) return
                 def stc = (gv(r, "source_type", "SOURCE_TYPE") ?: "").toString().trim().toLowerCase()
                 if (!(stc in ["web", "api"])) {
-                    // 续跑按子模块定向时，source_type 异常同样按 auto 推断
+                    // Resume snapshot rows may have missing source_type from older data; infer conservatively in auto fallback mode.
                     def txt = ((gv(r, "main_module_name", "MAIN_MODULE_NAME") ?: "").toString() + " "
                         + (gv(r, "submodule_name", "SUBMODULE_NAME") ?: "").toString() + " "
                         + (gv(r, "submodule_description", "SUBMODULE_DESCRIPTION") ?: "").toString() + " "
@@ -1294,7 +1867,7 @@ when('resume_mode == "from_step3"', {
     foreach('n_step2_sub', 'active_step2_module_rows', {
         assign('test_module_content', '{{n_step2_sub.item}}')
         assign('step2_design_pipeline', '{{test_module_content.source_type}}')
-        // [ROOT-MAIN·step2-design] pipelineDesignMode 必须对齐 test_module_content.source_type，否则 api 模块会误走 UI 模板
+        // [ROOT-MAIN-step2-design] pipelineDesignMode must align with test_module_content.source_type, otherwise api modules may incorrectly use UI prompts.
         n_design,agt_test_doc_design?input_data='{{test_module_content}}'&documentId='{{effectiveDocumentId}}'&async=false&pipelineDesignMode={{step2_design_pipeline}}&outputLanguage={{outputLanguage}}
         n_flat_one_batch,act_func?script='''
             def safeDocId = "{{effectiveDocumentId}}"
@@ -1419,11 +1992,7 @@ when('resume_mode == "from_step3"', {
                         if (stRow == "api") {
                             def sm = (d.get("submodule_name") ?: "").toString()
                             def mm = (sm =~ /(?i)\\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\\b\\s+([^\\s]+)/)
-                            if (mm.find()) deNorm = (mm.group(1).toUpperCase() + " " + mm.group(2))
-                            else if (!deNorm) deNorm = "HTTP Contract"
-                            if (sid == "40") scNorm = "Positive logic"
-                            else if (sid == "41") scNorm = "Negative logic"
-                            else if (!scNorm) scNorm = "API contract check"
+                            if (mm.find() && !deNorm) deNorm = (mm.group(1).toUpperCase() + " " + mm.group(2))
                         }
                         def modPage = ""
                         def modMainSrc = ""
@@ -1441,15 +2010,23 @@ when('resume_mode == "from_step3"', {
                         def pageText = (modPage == null ? "" : modPage.toString().trim())
                         if (pageText.contains(",")) pageText = pageText.split(",")[0].trim()
                         if (pageText.toLowerCase().startsWith("page")) pageText = pageText.substring(4).trim()
+                        // Metadata comes from Step1 output. If the design agent omits it, fill it from the current test_module_content input.
+                        def fromInput = { key ->
+                            if (test_module_content instanceof Map) {
+                                def f = test_module_content.get(key)
+                                if (f != null && f.toString().trim()) return f
+                            }
+                            return ""
+                        }
                         out.add([
                             design_element: deNorm,
                             sub_category: scNorm,
                             sub_id: sid,
-                            platform: d.get("platform"),
-                            main_module_name: d.get("main_module_name"),
+                            platform: fromInput("platform"),
+                            main_module_name: fromInput("main_module_name"),
                             main_module_source: (modMainSrc == null ? "" : modMainSrc.toString()).trim(),
-                            submodule_name: d.get("submodule_name"),
-                            submodule_description: d.get("submodule_description"),
+                            submodule_name: fromInput("submodule_name"),
+                            submodule_description: fromInput("submodule_description"),
                             submodule_source: (modSubSrc == null ? "" : modSubSrc.toString()).trim(),
                             documentId: safeDocId,
                             version: ver,
@@ -1469,8 +2046,8 @@ when('resume_mode == "from_step3"', {
                 if (m == null || !(m instanceof Map)) return
                 def stK = (m.get("source_type") ?: "web").toString().trim().toLowerCase()
                 if (!(stK in ["web", "api"])) stK = "web"
-                // 第二步入库去重键统一为 (submodule_name + sub_id + source_type)
-                // 目的：同一 design_element（如 “Normal flow”“Process flow”）不再重复放大到 Step3
+                // Deduplicate by stable identity: submodule_name + sub_id + source_type + page.
+                // Purpose: do not let repeated design_element families such as Normal flow / Process flow amplify downstream Step3 volume.
                 def k = [
                     (m.get("submodule_name") ?: "").toString(),
                     (m.get("sub_id") ?: "").toString(),
@@ -1489,7 +2066,7 @@ when('resume_mode == "from_step3"', {
             fn.put('result_list_design', acc)
             return batchDedup
         '''
-        // [主链][风险点] 单个 submodule 结果可能过大，这里固定按 20 条切片导入，降低 payload 溢出风险
+        // [MAIN][RISK] split each submodule batch into chunks of 20 before import, to reduce payload size and avoid oversized step input.
         n_step2_import_chunks,act_func?script='''
             def full = n_flat_one_batch
             if (full == null || !(full instanceof List)) full = []
@@ -1506,20 +2083,27 @@ when('resume_mode == "from_step3"', {
         foreach('n_step2_import_chunk', 'n_step2_import_chunks', {
             act_kb.defineAndImportData?tableName='kb_gen_test_module_design'&data='{{n_step2_import_chunk.item}}'
             on_failure({
-                act_flow.success
+                act_func?script='throw new RuntimeException("[STEP2] failed to import kb_gen_test_module_design for version=" + "{{version}}" + ", submodule_name=" + "{{test_module_content.submodule_name}}")'
             })
         })
     })
 })
 })
+n_step2_result_guard,act_func?script=''' 
+    def rows = fn.get('design_flattened_data')
+    if (rows == null || !(rows instanceof List) || rows.isEmpty()) {
+        throw new RuntimeException("[STEP2] no design points were generated, stop before entering Step3")
+    }
+    return rows.size()
+'''
 
 assign('kb_gen_test_module', 'Download <a href="/knowledge-base/retrieval?title=knowledgeBaseList/knowledgeRetrieval/kb_gen_test_module&tableName=kb_gen_test_module&schema=llm_agent" target="_blank">kb_gen_test_module</a>')
 assign('kb_gen_test_module_design', 'Download <a href="/knowledge-base/retrieval?title=knowledgeBaseList/knowledgeRetrieval/kb_gen_test_module_design&tableName=kb_gen_test_module_design&schema=llm_agent" target="_blank">kb_gen_test_module_design</a>')
 
-// 第三步：按 submodule_name 分批；支持从指定 submodule 断点续跑
-// design_flattened_data_one 已在展平 act_func 中 fn.put，避免用 assign 模板承接 List<Map>
+// Resume uses submodule_name as the slicing anchor for design batches.
+// design_flattened_data_one has already been stored by fn.put inside act_func; avoid using assign to carry List<Map>.
 
-// 按 submodule_name 去重得到批次顺序：每批为相同 submodule_name 的设计行列表
+// If submodule_name is duplicated, the resume slice is ambiguous and must fail fast.
 // Export kb_gen_test_module_design before Step3 starts
 n_export_design_raw,act_kb.selectBy?sql='select platform, main_module_name, main_module_source, submodule_name, submodule_description, submodule_source, design_element, sub_category, source_type from kb_gen_test_module_design where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") order by main_module_name, submodule_name, sub_category'
 // Keep design xlsx column order stable
@@ -1567,16 +2151,16 @@ assign('resume_error', '')
 assign('resume_enabled_step3', 'false')
 assign('resume_start_index', '{{fn.raw(0)}}')
 assign('resume_submodule_sql_values', '')
-// 续跑：批次用 fn.put 写入 memory，后续 act_func 用 fn.get；不要用 assign 承接整段 List
-// ========== 续跑 Step3 · 校验子模块是否在 kb_gen_test_module_design ==========
-// 运行日志里可搜索步骤节点 n_resume_submodule_hit
-// SQL（双花括号为运行时参数）:
+// Resume path stores batches in fn.put memory and later act_func reads them by fn.get; do not pass whole List blocks through assign.
+// ========== Resume Step3 - verify that the target submodule exists in kb_gen_test_module_design ==========
+// Search node for runtime logs: n_resume_submodule_hit.
+// SQL below uses runtime parameters expanded from the current version/document scope:
 //   select submodule_name from kb_gen_test_module_design
 //   where version = "{{version}}"
 //     and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")
 //     and submodule_name = "{{resume_submodule_name}}"
 //   limit 1
-// 下一条 act_kb 即为上述查询；命中后再用 n_resume_check 对齐内存 design_batches
+// Query with act_kb, then let n_resume_check cut active design_batches from the matched anchor forward.
 // =======================================================================
 when('resume_mode == "from_step3" && fn.hasValue(resume_submodule_name)', {
     n_resume_submodule_hit,act_kb.selectBy?sql='select submodule_name from kb_gen_test_module_design where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") and submodule_name = "{{resume_submodule_name}}" limit 1'
@@ -1637,13 +2221,13 @@ when('resume_mode == "from_step3" && fn.hasValue(resume_submodule_name)', {
 })
 
 
-// 删除 kb_gen_test_case：填写子模块时按 n_resume_check 删除该 submodule 及后续；否则删除本版本该文档全部用例
+// Delete kb_gen_test_case rows: in resume mode delete from the target submodule onward; otherwise delete all cases of this version for this document scope.
 when('resume_enabled_step3 == "true"', {
     n_step3_delete_rows,act_kb.selectBy?sql='select distinct document_id as doc_id, submodule_name from kb_gen_test_case where version = "{{version}}" and document_id in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") and submodule_name in ({{resume_submodule_sql_values}})'
     foreach('n_step3_delete_row', 'n_step3_delete_rows', {
         act_kb.delete?name=kb_gen_test_case&where='{"version":"{{version}}","document_id":"{{n_step3_delete_row.item.doc_id}}","submodule_name":"{{n_step3_delete_row.item.submodule_name}}"}'&maxSize=1000
         on_failure({
-	        act_flow.success
+	        act_func?script='throw new RuntimeException("[STEP3] failed to delete kb_gen_test_case for document_id=" + "{{n_step3_delete_row.item.doc_id}}" + ", submodule_name=" + "{{n_step3_delete_row.item.submodule_name}}" + ", version=" + "{{version}}")'
         })
     })
 }, {
@@ -1651,7 +2235,7 @@ when('resume_enabled_step3 == "true"', {
     foreach('n_step3_delete_row', 'n_step3_delete_rows', {
         act_kb.delete?name=kb_gen_test_case&where='{"version":"{{version}}","document_id":"{{n_step3_delete_row.item.doc_id}}"}'&maxSize=1000
         on_failure({
-	        act_flow.success
+	        act_func?script='throw new RuntimeException("[STEP3] failed to delete kb_gen_test_case for document_id=" + "{{n_step3_delete_row.item.doc_id}}" + ", version=" + "{{version}}")'
         })
     })
 })
@@ -1661,7 +2245,7 @@ assign('seen_biz_global', '[]')
 assign('seen_no_global', '{}')
 assign('serial_counter', '{{fn.raw(0)}}')
 
-// 续跑时，从保留的历史 case 初始化全局去重和编号状态（避免重复与序号冲突）
+// In resume mode, initialize global dedupe sets and serial counters from preserved historical cases to avoid duplicates and test_no conflicts.
 when('resume_enabled_step3 == "true"', {
     n_existing_case_rows,act_kb.selectBy?sql='select submodule_name,sub_id,title,steps,expected_result,version,document_id,test_no,source_type from kb_gen_test_case where version = "{{version}}" and document_id in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
     act_func?script='''
@@ -1707,7 +2291,7 @@ when('resume_enabled_step3 == "true"', {
     '''
 })
 
-// 外层按 submodule_name 分批；内层逐条 design 生成 row 并汇入 batch_case_rows；批末统一过滤、去重、整理 test_no 后导入
+// For each submodule batch, generate cases into batch_case_rows and keep test_no assignment stable across flush batches.
 foreach('n_batch', 'active_design_batches', {
     assign('batch_designs', '{{n_batch.item}}')
     act_func?script='fn.put("batch_case_rows", [])'
@@ -1715,7 +2299,7 @@ foreach('n_batch', 'active_design_batches', {
         assign('test_design', '{{n_test_design.item}}')
         assign('design_case_rows', '[]')
         assign('step3_case_pipeline', '{{test_design.source_type}}')
-        // [ROOT-MAIN·step3-case] pipelineCaseMode 对齐设计 source_type；api 用例不套三语 UI 强约束
+        // [ROOT-MAIN-step3-case] pipelineCaseMode must align with design source_type, otherwise api cases may incorrectly use UI prompt constraints.
         n_gen_case,agt_test_doc_gen_case?input_data='{{test_design}}'&documentId='{{effectiveDocumentId}}'&async=false&pipelineCaseMode={{step3_case_pipeline}}&fixedThreeLanguage={{fixedThreeLanguage}}&outputLanguage={{outputLanguage}}
         assign('test_case_raw', '{{n_gen_case}}')
         assign('test_case_map', '{}')
@@ -1766,12 +2350,13 @@ foreach('n_batch', 'active_design_batches', {
                     sub_id: (v.sub_id ?: test_design.sub_id),
                     design_element: (v.design_element ?: test_design.design_element),
                     test_content: (v.test_content ?: test_design.test_content),
-                    platform: (v.platform ?: test_design.platform),
-                    main_module_name: (v.main_module_name ?: test_design.main_module_name),
-                    main_module_source: (v.main_module_source ?: test_design.main_module_source) == null ? "" : (v.main_module_source ?: test_design.main_module_source).toString().trim(),
-                    submodule_name: (v.submodule_name ?: test_design.submodule_name),
-                    submodule_description: (v.submodule_description ?: test_design.submodule_description),
-                    submodule_source: (v.submodule_source ?: test_design.submodule_source) == null ? "" : (v.submodule_source ?: test_design.submodule_source).toString().trim(),
+                    // If the case agent omits metadata fields, backfill them from the current design row to keep downstream contract complete.
+                    platform: test_design.platform,
+                    main_module_name: test_design.main_module_name,
+                    main_module_source: test_design.main_module_source == null ? "" : test_design.main_module_source.toString().trim(),
+                    submodule_name: test_design.submodule_name,
+                    submodule_description: test_design.submodule_description,
+                    submodule_source: test_design.submodule_source == null ? "" : test_design.submodule_source.toString().trim(),
                     document_id: "{{effectiveDocumentId}}",
                     version: "{{version}}",
                     source_type: (test_design.source_type ?: "web"),
@@ -1785,48 +2370,14 @@ foreach('n_batch', 'active_design_batches', {
                     def mm = (sm =~ /(?i)\\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\\b\\s+([^\\s]+)/)
                     def methodPath = ""
                     if (mm.find()) methodPath = mm.group(1).toUpperCase() + " " + mm.group(2)
-                    if (methodPath) row.design_element = methodPath
-                    else if (!norm(row.design_element)) row.design_element = "HTTP Contract"
-                    if (sid == "40") row.sub_category = "Positive logic"
-                    else if (sid == "41") row.sub_category = "Negative logic"
-                    else if (!norm(row.sub_category)) row.sub_category = "API contract check"
-                    def apiText = [row.title, row.steps, row.expected_result].collect { norm(it).toLowerCase() }.join(" ")
-                    def negHints = [
-                        "unauthorized", "forbidden", "invalid", "missing", "omit", "omitted", "without ", "wrong", "incorrect",
-                        "expired", "malformed", "non 200", "not 200", "400", "401", "403", "404", "409", "422", "429",
-                        "error response", "client error", "authentication failure", "authorization failure"
-                    ]
-                    def posHints = [
-                        "status 200", "http 200", "code=200", "code:200", "request successful", "returns 200",
-                        "successful", "successfully", "non empty", "non-empty", "valid "
-                    ]
-                    def hasAny = { txt, kws -> kws.any { k -> txt.contains(k) } }
-                    def isNeg = hasAny(apiText, negHints)
-                    def isPos = hasAny(apiText, posHints)
-                    if (isNeg && !isPos) {
-                        row.sub_category = "Negative logic"
-                        row.sub_id = "41"
-                        row.test_type = "-1"
-                    } else if (isPos && !isNeg) {
-                        row.sub_category = "Positive logic"
-                        row.sub_id = "40"
-                        row.test_type = "1"
-                    } else if (sid == "40") {
+                    if (methodPath && !norm(row.design_element)) row.design_element = methodPath
+                    if (sid == "40") {
                         row.test_type = "1"
                     } else if (sid == "41") {
                         row.test_type = "-1"
                     }
-                    if (methodPath && !norm(row.title).toLowerCase().contains(methodPath.toLowerCase())) {
-                        row.title = methodPath + " - " + norm(row.title)
-                    }
                     if (!norm(row.source_value)) row.source_value = (norm(row.submodule_source) ?: norm(row.main_module_source))
-                    if (!norm(row.application)) {
-                        row.application = (norm(row.platform) ?: (norm(row.main_module_name) ? (norm(row.main_module_name) + " API") : "API Service"))
-                    }
-                    def descTxt = norm(row.submodule_description).toLowerCase()
-                    if (descTxt.contains("traceid") && !norm(row.expected_result).toLowerCase().contains("traceid")) {
-                        row.expected_result = (norm(row.expected_result) ? (norm(row.expected_result) + "\\nResponse contains non-empty traceId.") : "Response contains non-empty traceId.")
-                    }
+                    if (!norm(row.application)) row.application = norm(row.platform)
                 }
                 rows.add(row)
             }
@@ -1865,12 +2416,13 @@ foreach('n_batch', 'active_design_batches', {
                     sub_id: (test_case_map.sub_id ?: test_design.sub_id),
                     design_element: (test_case_map.design_element ?: test_design.design_element),
                     test_content: (test_case_map.test_content ?: test_design.test_content),
-                    platform: (test_case_map.platform ?: test_design.platform),
-                    main_module_name: (test_case_map.main_module_name ?: test_design.main_module_name),
-                    main_module_source: (test_case_map.main_module_source ?: test_design.main_module_source) == null ? "" : (test_case_map.main_module_source ?: test_design.main_module_source).toString().trim(),
-                    submodule_name: (test_case_map.submodule_name ?: test_design.submodule_name),
-                    submodule_description: (test_case_map.submodule_description ?: test_design.submodule_description),
-                    submodule_source: (test_case_map.submodule_source ?: test_design.submodule_source) == null ? "" : (test_case_map.submodule_source ?: test_design.submodule_source).toString().trim(),
+                    // Metadata fallback from the design row.
+                    platform: test_design.platform,
+                    main_module_name: test_design.main_module_name,
+                    main_module_source: test_design.main_module_source == null ? "" : test_design.main_module_source.toString().trim(),
+                    submodule_name: test_design.submodule_name,
+                    submodule_description: test_design.submodule_description,
+                    submodule_source: test_design.submodule_source == null ? "" : test_design.submodule_source.toString().trim(),
                     document_id: "{{effectiveDocumentId}}",
                     version: "{{version}}",
                     source_type: (test_design.source_type ?: "web"),
@@ -1884,48 +2436,14 @@ foreach('n_batch', 'active_design_batches', {
                     def mm = (sm =~ /(?i)\\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\\b\\s+([^\\s]+)/)
                     def methodPath = ""
                     if (mm.find()) methodPath = mm.group(1).toUpperCase() + " " + mm.group(2)
-                    if (methodPath) row.design_element = methodPath
-                    else if (!norm(row.design_element)) row.design_element = "HTTP Contract"
-                    if (sid == "40") row.sub_category = "Positive logic"
-                    else if (sid == "41") row.sub_category = "Negative logic"
-                    else if (!norm(row.sub_category)) row.sub_category = "API contract check"
-                    def apiText = [row.title, row.steps, row.expected_result].collect { norm(it).toLowerCase() }.join(" ")
-                    def negHints = [
-                        "unauthorized", "forbidden", "invalid", "missing", "omit", "omitted", "without ", "wrong", "incorrect",
-                        "expired", "malformed", "non 200", "not 200", "400", "401", "403", "404", "409", "422", "429",
-                        "error response", "client error", "authentication failure", "authorization failure"
-                    ]
-                    def posHints = [
-                        "status 200", "http 200", "code=200", "code:200", "request successful", "returns 200",
-                        "successful", "successfully", "non empty", "non-empty", "valid "
-                    ]
-                    def hasAny = { txt, kws -> kws.any { k -> txt.contains(k) } }
-                    def isNeg = hasAny(apiText, negHints)
-                    def isPos = hasAny(apiText, posHints)
-                    if (isNeg && !isPos) {
-                        row.sub_category = "Negative logic"
-                        row.sub_id = "41"
-                        row.test_type = "-1"
-                    } else if (isPos && !isNeg) {
-                        row.sub_category = "Positive logic"
-                        row.sub_id = "40"
-                        row.test_type = "1"
-                    } else if (sid == "40") {
+                    if (methodPath && !norm(row.design_element)) row.design_element = methodPath
+                    if (sid == "40") {
                         row.test_type = "1"
                     } else if (sid == "41") {
                         row.test_type = "-1"
                     }
-                    if (methodPath && !norm(row.title).toLowerCase().contains(methodPath.toLowerCase())) {
-                        row.title = methodPath + " - " + norm(row.title)
-                    }
                     if (!norm(row.source_value)) row.source_value = (norm(row.submodule_source) ?: norm(row.main_module_source))
-                    if (!norm(row.application)) {
-                        row.application = (norm(row.platform) ?: (norm(row.main_module_name) ? (norm(row.main_module_name) + " API") : "API Service"))
-                    }
-                    def descTxt = norm(row.submodule_description).toLowerCase()
-                    if (descTxt.contains("traceid") && !norm(row.expected_result).toLowerCase().contains("traceid")) {
-                        row.expected_result = (norm(row.expected_result) ? (norm(row.expected_result) + "\\nResponse contains non-empty traceId.") : "Response contains non-empty traceId.")
-                    }
+                    if (!norm(row.application)) row.application = norm(row.platform)
                 }
                 design_case_rows.add(row)
             '''
@@ -1987,8 +2505,22 @@ foreach('n_batch', 'active_design_batches', {
     '''
     when('fn.hasValue(flush_data)', {
         act_kb.defineAndImportData?tableName='kb_gen_test_case'&data='{{flush_data}}'
+        on_failure({
+            act_func?script='throw new RuntimeException("[STEP3] failed to import kb_gen_test_case for version=" + "{{version}}")'
+        })
         n_case_total,act_kb.selectBy?sql='select count(1) as cnt from kb_gen_test_case where version = "{{version}}" and document_id in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
-        n_plan_summary,act_func?script='''
+        n_case_total_guard,act_func?script=''' 
+            int c = 0
+            if (n_case_total instanceof List && n_case_total.size() > 0 && n_case_total[0] instanceof Map) {
+                def v = n_case_total[0].get("cnt")
+                try { c = Integer.parseInt(v == null ? "0" : v.toString()) } catch (Throwable ignore) { c = 0 }
+            }
+            if (c <= 0) {
+                throw new RuntimeException("[STEP3] no test cases were generated after flush, stop instead of exporting an empty result")
+            }
+            return c
+        '''
+        n_plan_summary,act_func?script=''' 
             def c = 0
             if (n_case_total instanceof List && n_case_total.size() > 0 && n_case_total[0] instanceof Map) {
                 def v = n_case_total[0].get("cnt")
@@ -1998,13 +2530,13 @@ foreach('n_batch', 'active_design_batches', {
         '''
         act_memory.assign?var=n_plan_summary&value='{{n_plan_summary}}'&type=plan_summary
     }, {
-        act_flow.success
+        act_func?script='throw new RuntimeException("[STEP3] flush_data is empty, no test cases were produced for import")'
     })
 })
 
 
-// 查询该 documentId 和版本的所有 case 数据
-// 导入所有 case 数据到文件
+// Export all case rows of the current document scope to the final xlsx artifact.
+// 导出当前 document scope 的全部 case 行到最终 xlsx 产物
 // Export selected case fields to xlsx file
 n_all_case_raw,act_kb.selectBy?sql='select platform, steps, test_no, title, main_module_name, expected_result from kb_gen_test_case where version = "{{version}}" and document_id in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") order by submodule_name, test_no'
 // Keep xlsx column order stable
@@ -2137,3 +2669,161 @@ mindmap
 ```
 
 ''')
+
+define('tpl_detect_doc_roles', '''
+根据文件名判断每份文档的主要角色分类。
+
+角色说明：
+- functional：功能需求、规格说明、功能设计类文档
+- background：项目背景、概览、架构蓝图类文档
+- business：业务规则、策略、流程规范类文档
+- api：接口契约、OpenAPI/Swagger 类文档
+- compliance：审计、安全、合规监管类文档
+- other：无法明确归入以上类别
+
+待分类文件：
+{{n_file_meta}}
+
+要求：
+- 根据文件名表达的语义内涵判断，不要机械匹配关键词
+- 文件名可能是中文、英文或中英混合，整体理解其含义
+- 只返回 JSON 数组，不要附加任何解释或 markdown
+
+输出格式：
+```json
+[{"id": "文件ID", "doc_role": "functional"}, ...]
+```
+''')
+
+define('tpl_bundle_one', '''
+根据以下单份文档的结构化索引数据，生成一张 Mermaid mindmap。
+
+# 数据
+{{n_bundle_doc.item}}
+
+# 硬约束
+1. 只输出一个 ```mermaid 代码块。第一行必须是 ```mermaid，最后一行必须是 ```。不要任何解释、说明或 markdown 文字。
+2. 根节点固定为 `root((文档document_name))`，展开到 module -> submodule（2 层）。
+3. 节点文本禁止出现括号 `()`，用 `[]` 替代。禁止逗号、句号、冒号、引号、竖线、反引号。
+4. 子项统一 2 空格缩进，不要用 Tab。
+5. 不要输出 CSS 类定义、::icon、HTML 标签。
+6. 总输出控制在 2000 字符以内，超过则合并相似子模块、只保留核心条目。
+
+# 正确示例
+```mermaid
+mindmap
+  root((需求规格说明书))
+    用户管理
+      登录验证
+      权限控制
+    订单系统
+      创建订单
+      订单查询
+```
+''')
+
+define('tpl_overview_mmd', '''
+将以下 Mermaid mindmap 精简后输出。总输出控制在 3000 字符以内。只输出一个 ```mermaid 代码块。
+
+# 硬约束
+1. 第一行 ```mermaid，最后一行 ```，不要任何解释文字。
+2. 节点文本禁止括号 `()`，用 `[]` 替代；禁止逗号、句号、冒号、引号、竖线。
+3. 子项 2 空格缩进。
+4. 不要 CSS、::icon、HTML。
+5. 总输出 ≤ 3000 字符，超出则合并相似子模块、只保留核心 3 层。
+
+{{n_mmd_from_map}}
+''')
+
+
+define('tpl_build_system_map_inline', '''
+You are merging multiple single-document maps into ONE **system-level map**. Do NOT generate design points or test cases.
+
+# System: {{system_name}}
+# Platform: {{fixed_platform}}
+
+# Single-document maps to merge
+<single_doc_maps>
+{{n_system_map_inline_input}}
+</single_doc_maps>
+
+# Your task
+
+Merge these single-document maps into a unified system-level structural index.
+
+You must return valid JSON. The first character must be `{`, the last character must be `}`, and `modules` must not be empty.
+
+## Merging rules
+
+1. Same module across documents: merge into one module entry and preserve primary/supplementary source roles.
+2. Different modules: keep them separate. Do not merge adjacent but unrelated functions.
+3. Same submodule across documents: merge capabilities, business rules, acceptance criteria, dependencies, and preserve all source pages.
+4. For every submodule, keep `primary_definition`, `supplementary_rules`, `supplementary_criteria`, and `supplementary_context`.
+
+## Anti-over-merge rules
+
+5. Do not use vague bucket names such as `Stakeholder Requirements`, `Other Requirements`, `General Functions`, or `Miscellaneous`.
+6. Different functional domains must stay as different modules even if both mention validation or compliance.
+7. A module that appears in only one document and is clearly domain-specific must not be absorbed into another broad module.
+8. If the inputs obviously cover multiple domains, the output module count must not collapse below those domains.
+
+## What NOT to do
+
+- Do NOT generate design points or test cases.
+- Do NOT create a full-text summary.
+- Do NOT invent modules not present in the source maps.
+- Keep the output as a structural index.
+
+## Source reference contract
+
+- All `primary_source`, `supplementary_sources`, `all_source_pages`, and `source_roles` references must use the exact `document_name` from `<single_doc_maps>`.
+- Format: `Original document name#PageN`
+- Do not use aliases or invented abbreviations such as `DOC_A`, `FUNC`, or `BIZ`.
+
+## Output format
+
+Return one JSON object only.
+
+{
+  "platform": "{{fixed_platform}}",
+  "system_name": "{{system_name}}",
+  "modules": [
+    {
+      "module_name": "...",
+      "module_description": "...",
+      "primary_source": "Original document name",
+      "supplementary_sources": ["Original document name"],
+      "branch_summary": "...",
+      "submodules": [
+        {
+          "submodule_name": "...",
+          "description": "...",
+          "primary_source": "Original document name#PageX",
+          "source_roles": {
+            "primary_definition": "Original document name#PageX",
+            "supplementary_rules": [],
+            "supplementary_criteria": [],
+            "supplementary_context": []
+          },
+          "capabilities": [],
+          "business_rules": [],
+          "acceptance_criteria": [],
+          "dependencies": [],
+          "all_source_pages": ["Original document name#PageX", "Original document name#PageY"]
+        }
+      ]
+    }
+  ]
+}
+
+## Language
+
+All user-visible text must be in {{outputLanguage}}. Only source references may remain in their original language.
+
+## Quality requirements
+
+- Every submodule must trace back to at least one source document and page using the exact `document_name`.
+- Module names should use the system's terminology, not one document's local shortcut.
+- If two documents describe the same thing with different names, use the more authoritative one as primary and preserve the alias context in the merged content.
+''')
+

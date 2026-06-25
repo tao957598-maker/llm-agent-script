@@ -87,8 +87,18 @@ act_func?script='''
 		]
 		result.add(item)
 	}
-	fn.put('result', result)
+	import java.util.regex.Matcher
+	import java.util.regex.Pattern
+	def sortedResult = result.sort { a, b ->
+    // 从step字符串中提取数字
+    def numA = (a.step =~ /^(\d+)\./).find() ? (a.step =~ /^(\d+)\./)[0][1] as Integer : 0
+    def numB = (b.step =~ /^(\d+)\./).find() ? (b.step =~ /^(\d+)\./)[0][1] as Integer : 0
+    numA <=> numB
+}
+
+	fn.put('result', sortedResult)
 '''
+// outputpath
 assign('outputpath', 'appdata/ac_script/selenium/result/{{application}}/{{test_no}}/report_{{test_no}}.docx')
 
 //# Generate test report

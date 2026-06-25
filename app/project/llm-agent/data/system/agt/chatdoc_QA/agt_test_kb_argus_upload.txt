@@ -248,7 +248,6 @@ define('tpl_generate_answer_test', '''
    - `history_chat`（仅当用户问题明确指向上文时使用，如“刚才提到的...”）
    - `execution_log`（代码执行结果）
    - `file_records`（结构化数据库记录）
-   - `web_search_info`（联网搜索结果，使用时需要提示信息来源于网络）
 
 2. **禁止任何虚构或推测**：
    - 不得从自身知识、常识或外部信息补充内容；
@@ -281,7 +280,6 @@ define('tpl_generate_answer_test', '''
 | `file_records` | 结构化数据，可转为表格 |
 | `history_chat` | 历史对话记录 |
 | `error_report` | 错误诊断信息 |
-| `web_search_info` | 联网搜索结果 |
 
 > ⚠️ 注意：格式错误的 `knowledge_rules` 片段（如标签缺失、非自闭合、前置等）**整条忽略**。
 
@@ -330,7 +328,6 @@ D. **模型推导（最后手段）**：
 - `file_records`: {{fn.when(n_mongodb_data!, n_mongodb_data,"暂无")}}
 - `history_chat`: {{fn.when(history_data!, history_data,"无历史记录")}}
 - `error_report`: {{fn.when(execution_report!, execution_report,"暂无")}}
-- `web_search_info`: {{fn.when(n_web_search!, n_web_search,"暂无")}}
 
 请严格按上述规则生成回答，并**仅输出最终结果**.
 ''')
@@ -409,14 +406,6 @@ agent('agt_async_1',{
   assign('answer_summary', '[]')
   assign('n_tmp_answers_1', '[]')
 
-  // web search
-  n_web_search,agt_web_search?userInput={{question}}&async=true
-  n_web_search,act_func?script='''
-    def expert = n_web_search
-    async_list_1.add([n_web_search:expert])
-    return expert
-  '''
-  
   // 语言类型 入数组
   n_language_type,agt_language_type?userInput={{question}}&async=true
   n_language_type_temp,act_func?script='''
@@ -622,11 +611,6 @@ assign("history",'{{history_data}}')
 assign("history_for_async",'{{fn.when(fn.hasValue(history_data), history_data, "无历史对话")}}')
 agt_async_1?userInput={{question}}&history={{history_for_async}}
 n_tmp_answers_2,act_memory.retrieve?var=agt_async_1_answer&global=true
-n_web_search,act_func?script='''
-  def data = n_tmp_answers_2
-  def paramMap = data.collectEntries { entry -> [ (entry.key): entry.value ] }
-  return paramMap.n_web_search ?: ''
-'''
 n_language_type,act_func?script='''
   def data = n_tmp_answers_2
   def paramMap = data.collectEntries { entry -> [ (entry.key): entry.value ] }
@@ -661,8 +645,6 @@ n_question_intent,act_func?script='''
   def paramMap = data.collectEntries { entry -> [ (entry.key): entry.value ] }
   return paramMap.n_question_intent ?: [:]
 '''
-//# Web Search
-assign('n_web_search', '{{n_web_search}}')
 //# Language Type
 assign('n_language_type', '{{n_language_type}}')
 //# Question rewrite
@@ -758,7 +740,7 @@ when('n_userInput_intent == 3',{
     log('{{n_mongodb_sampling_data}}')
 
     // no agent plan
-    agt_async_2?userInput={{question}}&languageType={{n_language_type}}&milvusRules={{n_milvus_rules_refed}}&mongodbSampling={{n_mongodb_sampling_data}}&webSearch={{n_web_search}}
+    agt_async_2?userInput={{question}}&languageType={{n_language_type}}&milvusRules={{n_milvus_rules_refed}}&mongodbSampling={{n_mongodb_sampling_data}}
     n_tmp_answers_3,act_memory.retrieve?var=agt_async_2_answer&global=true
     n_plan_response,act_func?script='''
       def data = n_tmp_answers_3

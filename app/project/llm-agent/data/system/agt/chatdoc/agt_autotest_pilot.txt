@@ -1,24 +1,19 @@
 /*
 {
 	"title":"AI 全流程自动化测试",
-	"description":"从用户输入 useInput 与上传文件 uploadFile 自动提取「确认执行信息」并执行自动化测试。",
+	"description":"从用户输入 userInput 与上传文件 uploadFile 自动提取「确认执行信息」并执行自动化测试。",
 	"parameter":[
 		{
-			"name":"useInput",
+			"name":"userInput",
 			"label":"用户需求",
 			"required":true,
 			"type":"textarea",
 			"description":"自然语言描述测试意图、范围、环境等；与上传文件共同作为提取依据。"
 		},
 		{
-			"name":"kbSpaceId",
-			"label":"知识空间目录ID（支持多个）",
-			"type":"textarea"
-		},
-		{
 			"name":"kbSpaceFileId",
 			"label":"知识空间文件ID（支持多个）",
-			"type":"textarea"
+			"type":"knowledge_space"
 		},
 	],
 	"tag":"chatdoc",
@@ -29,9 +24,9 @@
 */
 
 // Set search parameters
-// assign('params','{"question": "{{userInput}}", "folderIds": "{{kbSpaceId!}}", "knowledgeIds": "{{kbSpaceFileId!}}"}')
+assign('params','{"question": "{{userInput}}", "folderIds": "{{kbSpaceId!}}", "knowledgeIds": "{{kbSpaceFileId!}}"}')
 
-assign('params','{"question": "{{userInput}}", "folderIds": "{{kbSpaceId!}}", "knowledgeIds": "273764152924340224"}')
+// assign('params','{"question": "{{userInput}}", "folderIds": "{{kbSpaceId!}}", "knowledgeIds": "273764152924340224"}')
 
 //## Searching user file content text
 n_file_context, rag_kbs.searchFileContent?paramData='{{params}}'
@@ -42,6 +37,14 @@ when('fn.hasValue(n_file_context)', {
 	'''
 })
 
+assign('n_report_path','')
+
+// 查询知识信息
+when("fn.hasValue(kbSpaceFileId)", {
+	n_knowledge_data,act_kb.selectBy?sql='select CONCAT(full_path , "/Test Report") report_path from kb_spaces_folder where id in (select kb_spaces_folder_id from kb_spaces_folder_knowledge where id in ({{kbSpaceFileId}}));'
+	assign('n_report_path','{{n_knowledge_data[0].report_path}}')
+})
+
 //## Parameters auto extraction (JSON format，For job use)
 n_tpl_params_res, tpl_autotest_param_extract, psr_json
 
@@ -49,23 +52,28 @@ n_tpl_params_res, tpl_autotest_param_extract, psr_json
 n_autotest_params, act_func?script='''
         def data_map = fn.map(n_tpl_params_res)
         data_map.put("kbSpaceFileId", params.knowledgeIds)
+		if(null != n_report_path && !"".equals(n_report_path)){
+			data_map.put("n_report_path", n_report_path)
+		}
         return data_map
 '''
 
 //# 正在打开 AUTO_TEST_VIEW 页面…
 n_auto_test_view, act_flow.page?pageCode='native.AUTO_TEST_VIEW'&params={{n_autotest_params}}&isNative=true
 
-
-
-
-
+when("fn.hasValue(n_auto_test_view.confirmed.test_type) && n_auto_test_view.confirmed.test_type == 'WEB'", {
+	// 调用WEB执行模块
+	agt_auto_test_execution_web.chatdoc.auto_test?userInput='{{n_auto_test_view.confirmed}}'&kbSpaceFileId='{{kbSpaceFileId}}'&n_plan_tasks='{{n_plan_tasks}}'
+},{
+	agt_auto_test_execution_api.chatdoc.auto_test?userInput='{{n_auto_test_view.confirmed}}'&kbSpaceFileId='{{kbSpaceFileId}}'&n_plan_tasks='{{n_plan_tasks}}'
+})
 
 define('tpl_autotest_param_extract', '''
 你是测试与需求分析专家。请**仅**根据下列「用户输入」与「上传文件内容」推断并补全「AI 全流程自动化测试 - 确认执行信息」所需字段，输出**一个 JSON 对象**，不要 Markdown、不要解释。
 
 ## 字段说明与允许取值（字符串必须与下列英文选项完全一致）
 
-1. test_name：测试名称。若有上传文件名，建议 `{文件名去扩展名}_{用户意图摘要}_{yyyyMMdd-HHmmss}` 形式；时间用当前时间 {{fn.now()}} 推导日期时间戳。
+1. test_name：测试名称。若有上传文件名，建议 `{文件名去扩展名}_{用户意图摘要}_{yyyyMMdd-HHmmss}` 形式；时间用当前时间 {{fn.now()}} 推导日期时间戳
 2. test_type：单选，`WEB` 或 `API`。默认倾向 WEB，除非文档明确为纯接口。
 3. test_scope：多选数组，项只能来自：`FULL_TEST`、`CORE_PATH_TEST`、`SMOKE_TEST`。
 4. test_environment：单选，`TEST_ENV` 或 `PRE_RELEASE_ENV`。
@@ -76,12 +84,12 @@ define('tpl_autotest_param_extract', '''
 9. execution_method：单选，`PARALLEL_EXECUTION` 或 `SEQUENTIAL_EXECUTION`。
 10. failure_strategy：单选，`IGNORE_FAILURE_CONTINUE` 或 `STOP_ON_FIRST_FAILURE`。
 11. retry_strategy：单选，`NO_RETRY`、`RETRY_ONCE`、`RETRY_TWICE`。
-12. report_granularity：单选，`FULL_REPORT` 或 `SUMMARY_REPORT`。
+12. report_granularity：单选，`FULL_REPORT` 或 `SIMPLE_REPORT`。
 13. include_failure_analysis：单选，`YES` 或 `NO`。
 
-## 用户输入（useInput）
+## 用户输入（userInput）
 
-{{useInput}}
+{{userInput}}
 
 ## 上传文件解析内容（若无上传则为空）
 
@@ -91,7 +99,7 @@ define('tpl_autotest_param_extract', '''
 
 ```json
 {
-	"test_name": "example_autotest_20260403-103201",
+	"test_name": "example_autotest_20260403103201",
 	"test_type": "WEB",
 	"test_scope": ["FULL_TEST"],
 	"test_environment": "TEST_ENV",

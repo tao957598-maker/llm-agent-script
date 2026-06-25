@@ -1,7 +1,7 @@
 /*
 {
-	"title":"Testing Workflow Agent",
-	"description":"chatdoc Testing Workflow Agent",
+	"title":"Testing Workflow Agent API",
+	"description":"chatdoc Testing Workflow Agent API",
 	"parameter":[
 		{
 			"name":"userInput",
@@ -132,43 +132,70 @@ agent('agt_internal_loop_plan_tasks_details', {
 
 // 生成测试规划
 agent('agt_internal_gen_plan_tasks', {
+    //### 生成测试规划开始
+	n_plan_virtual_open,act_memory.assign?var=n_plan_virtual&value="生成测试规划中..."&type=open_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
+
 	assign('n_plan_summary','已完成需求解析与测试任务拆解:{{n_plan_tasks.size}}个阶段 ');
 	//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 测试规划
 	act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
 	assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
+
+	//### 生成测试规划结束
+    n_plan_virtual_close,act_memory.assign?var=n_plan_virtual&value="{{fn.pluckStr(n_plan_tasks.items,'description','\n')}}"&type=close_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
+
     log('Step {{current_plan_step}} completed with result: {{fn.get("step_result_" + current_plan_step)}}')
 })
 
 // 生成测试case
 agent('agt_internal_gen_test_case', {
+    //### 生成测试用例开始
+	n_plan_virtual_open,act_memory.assign?var=n_plan_virtual&value="生成测试用例中..."&type=open_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
+
 	assign('n_plan_summary','已自动生成：0条测试用例');
 	//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test case
 	act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
 	when("n_userInput.case_execution_method == 'AUTO_GENERATE_FULL_DATA'",{
-		// 1.查询当前文件是否已经生成case
-		n_gen_case,act_kb.selectBy?sql='select * from kb_api_testcase where document_Id = ? and application = ?'&parameters='{{kbSpaceFileId}},{{n_userInput.application}}'
-		when("!fn.hasValue(n_gen_case)", {
-			agt_test_api_parse.test_api?kbSpaceFileId={{kbSpaceFileId}}&application={{n_userInput.application}}&test_no={{n_userInput.test_no}}
-			n_gen_case,act_kb.selectBy?sql='select * from kb_api_testcase where document_Id = ? and application = ?'&parameters='{{kbSpaceFileId}},{{n_userInput.application}}'
-		})
 
-		assign('n_select_case_data_size','{{n_gen_case?size}}');
-		assign('n_test_steps_userInput', '{{n_userInput}}');
-		assign('n_plan_summary','已自动生成：{{n_select_case_data_size}}条测试用例');
-		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 生成 Test case
-		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+		n_kb_ids,act_func?script='''
+			return kbSpaceFileId.split(",");
+		'''
+		foreach('n_kb_id', 'n_kb_ids', {
+			// 1.查询当前文件是否已经生成case
+			n_gen_case,act_kb.selectBy?sql='select * from kb_api_testcase where document_Id = ? and application = ?'&parameters='{{n_kb_id.item}},{{n_userInput.application}}'
+			when("!fn.hasValue(n_gen_case)", {
+				agt_test_api_parse.test_api?kbSpaceFileId={{n_kb_id.item}}&application={{n_userInput.application}}&test_no={{n_userInput.test_no}}
+				on_failure({
+					assign('n_plan_summary','生成失败：找不到切片数据，请进行切片');
+					//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 生成 Test case
+					act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+					act_flow.fail?result='找不到切片数据，请进行切片'
+				})
+			})
+			n_gen_case,act_kb.selectBy?sql='select * from kb_api_testcase where document_Id in ({{kbSpaceFileId}}) and application = ?'&parameters='{{n_userInput.application}}'
+			assign('n_plan_summary','已自动生成：{{n_gen_case?size}}条测试用例');
+			//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 生成 Test case
+			act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+			assign("n_plan_virtual_value", "{{fn.pluckStr(n_gen_case,'description','\n')}}")
+		})
 	})
 	assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
+	//### 生成测试用例结束
+	n_plan_virtual_close,act_memory.assign?var=n_plan_virtual&value="{{n_plan_virtual_value!}}"&type=close_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
+
     log('Step {{current_plan_step}} completed with result: {{fn.get("step_result_" + current_plan_step)}}')	
 })
 
 // 生成测试数据
 agent('agt_internal_gen_test_data', {
+    //### 生成测试数据开始
+	n_plan_virtual_open,act_memory.assign?var=n_plan_virtual&value="生成测试数据中..."&type=open_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
+
 	when("n_userInput.data_execution_method == 'MANUAL_SELECTION'",{
 		// 1.手动选择test_case_data数据
 		assign('n_plan_summary','已选择：{{n_drive_data?size}} 条测试数据');
 		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test Data
 		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+		assign("n_plan_virtual_value", "{{fn.pluckStr(n_drive_data,'api_name','\n')}}")
 	},{
 		when('n_userInput.data_execution_method == "AUTO_GENERATE_FULL_DATA"', {
 			assign('n_plan_summary','已自动生成：0 条测试数据');
@@ -177,17 +204,18 @@ agent('agt_internal_gen_test_data', {
 
 			// 1.查询未生成测试数据的case数据
 			n_not_gen_case_data,act_kb.selectBy?sql='''
-					select * from kb_api_testcase where document_Id = ? and application = ? and test_no not in (select test_no from kb_api_test_data where document_Id = ? and application = ?)
-				'''&parameters='{{kbSpaceFileId}},{{n_userInput.application}},{{kbSpaceFileId}},{{n_userInput.application}}'
+					select * from kb_api_testcase where document_Id in ({{kbSpaceFileId}}) and application = ? and test_no not in (select test_no from kb_api_test_data where document_Id in ({{kbSpaceFileId}}) and application = ?)
+				'''&parameters='{{n_userInput.application}},{{n_userInput.application}}'
 			when("!fn.hasValue(n_not_gen_case_data)", {
 				// 1.1.已生成测试脚本
 				log("Test script has been generated")
 				n_drive_data,act_kb.selectBy?sql='''
-						select * from kb_api_test_data where document_Id = ? and application = ?
-					'''&parameters='{{kbSpaceFileId}},{{n_userInput.application}}'
+						select * from kb_api_test_data where document_Id in ({{kbSpaceFileId}}) and application = ?
+					'''&parameters='{{n_userInput.application}}'
 				assign('n_plan_summary','已自动生成：{{n_drive_data?size}}条测试数据');
 				//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test Data
 				act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+				assign("n_plan_virtual_value", "{{fn.pluckStr(n_drive_data,'api_name','\n')}}")
 			},{
 				// 1.2.1.将未生成的case，生成对应的Data数据
 				when("fn.hasValue(n_not_gen_case_data)", {
@@ -198,31 +226,40 @@ agent('agt_internal_gen_test_data', {
 					// 1.2.2.2.统计生成的测试数据（即时推送）
 					when("fn.hasValue(n_test_scope) && n_test_scope == '1'", {
 						n_drive_data,act_kb.selectBy?sql='''
-							select * from kb_api_test_data where document_Id = ? and application = ?
-						'''&parameters='{{kbSpaceFileId}},{{n_userInput.application}}'
+							select * from kb_api_test_data where document_Id in ({{kbSpaceFileId}}) and application = ?
+						'''&parameters='{{n_userInput.application}}'
 					},{
 						n_drive_data,act_kb.selectBy?sql='''
-							select * from kb_api_test_data where document_Id = ? and application = ? and tag like ?
-						'''&parameters='{{kbSpaceFileId}},{{n_userInput.application}}, "%{{n_test_scope}}%"'
+							select * from kb_api_test_data where document_Id in ({{kbSpaceFileId}}) and application = ? and tag like ?
+						'''&parameters='{{n_userInput.application}}, "%{{n_test_scope}}%"'
 					})
 					
 					assign('n_plan_summary','已自动生成：{{n_drive_data?size}}条测试数据');
 					//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test Data
 					act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+					assign("n_plan_virtual_value", "{{fn.pluckStr(n_drive_data,'steps','\n')}}")
 				})
 			})
+			assign("n_plan_virtual_value", "{{fn.pluckStr(n_drive_data,'api_name','\n')}}")
 		},{
 			assign('n_plan_summary','未选择测试数据');
 			//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test Data
 			act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+			assign("n_plan_virtual_value", "{{n_plan_summary!}}")
 		})
 	})
 	assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
+	//### 生成测试数据完成
+    n_plan_virtual_close,act_memory.assign?var=n_plan_virtual&value="{{n_plan_virtual_value!}}"&type=close_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
+
     log('Step {{current_plan_step}} completed with result: {{fn.get("step_result_" + current_plan_step)}}')
 })
 
 // 创建test_plan，并执行plan
 agent('agt_internal_gen_plan_and_run',{
+    //### 创建并执行plan开始
+	n_plan_virtual_open,act_memory.assign?var=n_plan_virtual&value="创建并执行plan开始..."&type=open_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
+
 	// 1.调用test plan的创建并执行接口
 	when("fn.hasValue(n_drive_data)", {
 		assign('n_api_case_data', '[]')
@@ -248,6 +285,9 @@ agent('agt_internal_gen_plan_and_run',{
 				caseData.add(caseMap);
 				return caseData;
 			'''
+			//### 执行测试
+            n_plan_virtual_open,act_memory.assign?var=n_plan_virtual&value="{{fn.pluckStr(n_api_case_data,'steps','\n')}}"&type=open_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
+
 		})
 
 		n_api_params,act_func?script='''					
@@ -259,7 +299,13 @@ agent('agt_internal_gen_plan_and_run',{
 							n_tmp_map.put("testMode", "3");
 							n_tmp_map.put("description", "Automated Test Plan from chatdoc");
 							n_tmp_map.put("cases", n_api_case_data);
-
+							
+							if(null != n_userInput.n_report_path && !"".equals(n_userInput.n_report_path)){
+								n_tmp_map.put("reportPath", n_userInput.n_report_path);
+							}else{
+								n_tmp_map.put("reportPath", "");
+							}
+							
 							def executionMode = 1;
 							if(n_userInput.execution_method.equals("PARALLEL_EXECUTION")){
 								executionMode = 2;
@@ -289,7 +335,6 @@ agent('agt_internal_gen_plan_and_run',{
 						'''
 		// 2.创建并执行plan
 		n_api_result_data,act_api.doExecuteDynamic?name="fats_create_plan_and_run"&dynamicParamData='{{n_api_params}}'
-		log("aaaaaaaaaaaaaaaaaa------>>>>>>{{n_api_result_data}}")
 		when("fn.hasValue(n_api_result_data) && n_api_result_data.code == 200", {
 			// 3.更新执行情况
 			assign('n_scenario_flag', 'true')
@@ -315,32 +360,44 @@ agent('agt_internal_gen_plan_and_run',{
 				})
 				when("n_scenario_index.index == 1000",{
 					// 将planId设置为空，避免再次生成报表
-					assign('n_test_plan_id', '')
-					assign('n_scenario_flag', 'false')
 					assign('n_plan_summary','执行失败:测试plan执行失败');
 					//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
 					act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+					assign('n_test_plan_id', '')
+					assign('n_scenario_flag', 'false')
 				},{
 					assign('n_plan_summary','执行完成:通过 {{n_scenario_success_size}}/失败 {{n_scenario_fail_size}}');
 					//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
 					act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
 					act_flow.wait?second=5
 				})
+				assign("n_plan_virtual_value", "{{n_plan_summary!}}")
+			    //### 创建并执行plan
+                n_plan_virtual_open,act_memory.assign?var=n_plan_virtual&value="{{n_plan_virtual_value!}}"&type=open_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
 			})
-			//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
-			act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
-			assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
+
 		},{
 			assign('n_plan_summary','执行plan失败');
 			//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
-			act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+			act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+		    assign("n_plan_virtual_value", "{{n_plan_summary}}")
 			act_flow.fail?result='{{n_api_result_data.message}}'
 		})
+		assign('n_plan_summary','执行plan失败');
+		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
+		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+		assign("n_plan_virtual_value", "{{n_plan_summary}}")
+		act_flow.fail?result='{{n_api_result_data.message}}'
 	},{
 		assign('n_plan_summary','执行完成:创建Test Plan失败');
 		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
-		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
+		assign("n_plan_virtual_value", "{{n_plan_summary}}")
 	})
+
+	//### {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排) 完成
+    n_plan_virtual_close,act_memory.assign?var=n_plan_virtual&value="{{n_plan_virtual_value!}}"&type=close_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
+
 	assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
 })
 
@@ -360,11 +417,12 @@ agent('agt_internal_gen_test_report', {
 		assign('n_report_flag', 'true')
 		loop('n_report_index', 'n_report_flag', {
 			n_test_plan_report_data,act_kb.selectBy?sql='''
-					select store_uri from kb_spaces_folder_knowledge where id in (select report_id from kb_test_plan_report where plan_id = ?)
+					select id,store_uri,kb_spaces_folder_id from kb_spaces_folder_knowledge where id in (select report_id from kb_test_plan_report where plan_id = ?)
 				'''&parameters='{{n_test_plan_id}}'
 			when("fn.hasValue(n_test_plan_report_data)",{
 				assign('n_report_flag', 'false')
 				assign('n_report_path', '{{n_test_plan_report_data[0].store_uri}}')
+				assign('n_report_id', '{{n_test_plan_report_data[0].id}}')
 
 				n_test_plan_report_detail,act_kb.selectBy?sql='''
 					select * from kb_test_plan_report where plan_id = ?
@@ -374,19 +432,10 @@ agent('agt_internal_gen_test_report', {
 				assign('step_result_{{current_plan_step}}', '已生成报表')
 
 				assign('n_final_report', '''
-					Testing Workflow Execution Report
-					=================================
-					Requirements: {{userInput}}
-
-					Execution Results:
-					- Step 1 (Generate Test Task): {{step_result_1}}
-					- Step 2 (Generate Test Cases): {{step_result_2}}
-					- Step 3 (Generate test data for the test cases): {{step_result_3}}
-					- Step 4 (Generate test drive data): {{step_result_4}}
-					- Step 5 (Generate execution task and execute): {{step_result_5}}
-					- Step 6 (Generate test execution report): {{step_result_6}}
-
-					Workflow completed successfully!
+					已生成报告文档: 
+					<a href="/chat-knowledge-base?dic_id=0&kbf_id={{n_report_id}}" target="_blank" style="text-decoration:underline;color:#2563eb">
+						{{n_report_path}}
+					</a>
 				''')
 			})
 

@@ -201,22 +201,29 @@ when("!n_python_file.hasFilename()", {
 
 //# 在末尾将验证材料存储
 log('step_type=="VerifyExist"')
+assign('step_type', 'VerifyExist')
 //# 拼接sql：根据 test_no、version、application 查找 步骤id
-assign('query_step_id_sql', 'select id from kb_testcase_step where version = {{version}} and test_no = {{test_no}} and application = {{system}}')
+assign('query_step_id_sql', 'select id from kb_testcase_step where version = "{{version}}" and test_no = "{{test_no}}" and application = "{{system}}" and step = "{{current_step.step}}"')
 n_step_id,act_kb.selectBy?sql='{{query_step_id_sql}}'
 //# 验证逻辑移动，需要将数据给到验证Agent
 assign('tableName', 'kb_test_case_instance_intermediates')
-assign('columnValues', '''
-{
-"verification_type": "{{step_type}}",
-"dom_before": "{{fn.str(StepTestInfo.simplepageinfo)}}",
-"dom_after": "",
-"llm_final_result": "{{fn.str(n_cmp1)}}",
-"is_valid": "{{fn.bool(n_cmp1.run_success)}}",
-"python_code_used": "{{python_code}}"
-}
-''')
-assign('whereCondition', '{"test_step_id":"{{n_step_id}}"}')
+//# 列和值
+assign('columnValues', '{{fn.json("verification_type,step_type,dom_before,fn.str(StepTestInfo.simplepageinfo),dom_after,fn.str(new_collect_page),key_elements_info,fn.str(tpl_task_element_info),llm_final_result,fn.str(n_cmp1),is_valid,fn.bool(n_cmp1.run_success),python_code_used,python_code")}}')
+assign('whereCondition', '')
+when('fn.hasValue(n_step_id)', {
+	//# 由于表kb_testcase_step设计有问题，查询字段并不是唯一查询，所以这里检查查询结果并处理。已告知相关人员处理
+	n_step_id_tmp,act_func?script='''
+	def data = n_step_id
+	if (data instanceof List && data.size() > 0) {
+		return data[0].id
+	} else if (data instanceof String) {
+		return data
+	}
+	return ''
+	'''
+	//# whereCondition
+	assign('whereCondition', '{"test_step_id":"{{n_step_id_tmp}}"}')
+})
 // 将验证数据存储到数据库
 when('fn.hasValue(tableName) && fn.hasValue(columnValues) && fn.hasValue(whereCondition)', {  
 	// 3. 调用 act_kb.merge 合并数据  

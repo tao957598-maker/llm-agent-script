@@ -20,6 +20,7 @@
 	"version":3
 }
 */
+log('>>>>>>>>>>>>>>>>>agent report generator is running...reportId={{reportId}}---templateId={{templateId}}<<<<<<<<<<<<<<<<<<<<<<<<<')
 //## Generate report: Get template information
 n_remplate_info, act_kb.selectBy?sql='select id,name,file_path as filePath,file_name as fileName,kb_folder_path as kbFolderPath,kb_folder_id as kbFolderId,file_path as kbTemplateFilePath,template_variables as templateVariables from kb_file_template where id ="{{templateId}}"'
 log('----n_remplate_info:{{n_remplate_info}}')
@@ -32,6 +33,34 @@ when('!fn.hasValue(n_report_data)',{
     act_flow.go?step='exit'
 })
 assign('n_template_var',"{{n_remplate_info[0].templateVariables}}")
+n_template_var, act_func?script='''
+    def rawVars = fn.list(n_template_var)
+    def flatVars = []
+
+    for (int i = 0; i < rawVars.size(); i++) {
+        def group = rawVars[i]
+        def items = group instanceof List ? group : [group]
+
+        for (int j = 0; j < items.size(); j++) {
+            def item = items[j]
+            if (item == null) {
+                continue
+            }
+            if (item instanceof String) {
+                try {
+                    item = fn.map(item)
+                } catch(e) {
+                    continue
+                }
+            }
+            if (item instanceof Map) {
+                flatVars.add(item)
+            }
+        }
+    }
+
+    return flatVars
+'''
 assign('n_report_source',"{{n_report_data[0].reportSource}}")
 assign('n_no_data_chart_pic',"kbs/icon/chart_default_no_data.png")
 
@@ -47,8 +76,10 @@ act_func?script='''
 // Files generated variable
 assign('n_report_files_array',"[]")
 
+log('>>>>>>>>>>>n_template_var==={{n_template_var}}<<<<<<<<<<')
 //## Generate report: Handler data...
 foreach('n_var','n_template_var',{
+    log('>>>>>>>>>>>n_var.item.type==={{n_var.item.type}}<<<<<<<<<<n_var=={{n_var}}')
     assign('n_var_name',"{{n_var.item.var}}")
     when('n_var.item.type=="Chart"',{
         assign('n_chart_desc',"{{n_var.item.desc}}")

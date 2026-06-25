@@ -35,10 +35,14 @@
 	"tag":"chatdoc_QA",
 	"life":100,
 	"displayOrder":2,
-	"version":3
+	"version":1
 }
 */
-assign("CODE_GEN_PROMPT", '''
+assign("user_question", "{{userQuestion}}")
+assign("input_vars", "{{inputVars}}")
+assign("input_data", "{{inputData}}")
+assign("output_schema_description", "{{outputSchemaDescription}}")
+define("tpl_gen_code_prompt", '''
 你是一个金融安全代码生成器。请根据任务描述，生成一个**纯函数**，用于在隐私计算环境中执行。
 
 ## 安全约束（必须严格遵守！）
@@ -89,89 +93,4 @@ input_data: {{input_data}}
 {{output_schema_description}}
 ''')
 
-// 辅助函数：检查是否需要生成代码
-define('should_generate_code', '''
-when('{{input_data}}!', {
-    // 如果 input_data 不为空，总是尝试生成
-    assign('should_gen', 'true')
-}, {
-    when('{{input_vars}}!', {
-        // 如果 input_vars 不为空，尝试生成
-        assign('should_gen', 'true')
-    }, {
-        // 检查任务是否依赖外部数据
-        assign('keywords', '["金额", "利率", "交易", "客户", "列表", "数组", "价格", "数量", "日期"]')
-        assign('contains_data_keyword', 'false')
-        
-        foreach('keyword', '{{keywords}}', {
-            when('fn.contains({{user_question}}, {{keyword}})', {
-                assign('contains_data_keyword', 'true')
-            }, {})
-        })
-        
-        when('{{contains_data_keyword}} == true', {
-            // 依赖外部数据但无输入，输出空字符串
-            assign('should_gen', 'false')
-        }, {
-            // 不依赖外部数据，可以生成
-            assign('should_gen', 'true')
-        })
-    })
-})
-return '{{should_gen}}'
-''')
-
-agent("code_generator_agent", {
-    // 存储提示词
-    assign("prompt_content", "{{CODE_GEN_PROMPT}}")
-    expression('''act_memory.assign?var=code_gen_prompt&value={{prompt_content}}&global=true''')
-    
-    // 检查是否需要生成代码
-    assign("check_result", "{{should_generate_code}}")
-    
-    when('{{check_result}} == false', {
-        // 返回空字符串
-        return ""
-    }, {
-        // 准备参数 - 使用 expression 包装所有函数调用
-        assign("final_prompt", expression('''fn.replace("{{prompt_content}}", "{{user_question}}", "{{user_question}}")'''))
-        assign("final_prompt", expression('''fn.replace("{{final_prompt}}", "{{input_vars}}", "{{input_vars}}")'''))
-        assign("final_prompt", expression('''fn.replace("{{final_prompt}}", "{{input_data}}", "{{input_data}}")'''))
-        assign("final_prompt", expression('''fn.replace("{{final_prompt}}", "{{output_schema_description}}", "{{output_schema_description}}")'''))
-        
-        // 调用生成逻辑
-        assign("generated_code", expression('''act_llm.generate?prompt={{final_prompt}}&model=gpt-4&temperature=0.1'''))
-        
-        // 清理结果，确保只包含代码
-        assign("cleaned_code", expression('''fn.strip("{{generated_code}}")'''))
-        
-        // 移除可能的Markdown代码块标记
-        // 简化条件判断，使用字符串方法
-        assign("starts_with_python", expression('''fn.startsWith("{{cleaned_code}}", "```python")'''))
-        when('{{starts_with_python}} == true', {
-            assign("cleaned_code", expression('''fn.replace("{{cleaned_code}}", "```python", "")'''))
-            assign("cleaned_code", expression('''fn.replace("{{cleaned_code}}", "```", "")'''))
-        }, {})
-        
-        assign("starts_with_backticks", expression('''fn.startsWith("{{cleaned_code}}", "```")'''))
-        when('{{starts_with_backticks}} == true', {
-            assign("cleaned_code", expression('''fn.replace("{{cleaned_code}}", "```", "")'''))
-        }, {})
-        
-        return "{{cleaned_code}}"
-    })
-})
-
-// 示例：如何使用该智能体
-assign("test_question", "计算价格列表的平均值和最大值")
-assign("test_input_vars", "list of dict with keys: price (float)")
-assign("test_input_data", "[{'price': 100.0}, {'price': 150.0}, {'price': 80.0}]")
-assign("test_output_schema", "返回字典包含两个键：average_price (float) 和 max_price (float)")
-
-// 调用示例
-assign("generated_code", "{{code_generator_agent}}")
-when('{{generated_code}}!', {
-    assign("code_output", "生成的代码：{{generated_code}}")
-}, {
-    assign("code_output", "未生成代码（输入数据不足）")
-})
+n_gen_result,tpl_gen_code_prompt,psr_all

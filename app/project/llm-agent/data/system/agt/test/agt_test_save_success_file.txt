@@ -24,16 +24,16 @@ n_global_variable_page_code_info,act_memory.retrieve?var=global_variable_page_co
 n_global_variable, act_memory.retrieve?var=global_variable&global=true
 // merge page code info
 n_page_code_info,act_func.run?script='''
-def requirements =  n_global_variable_page_code_info
+def requirements = n_global_variable_page_code_info
 
-def lastByNumber = [:].withDefault { [] }
+def lastByNumber = [:]
 
 requirements.each { item ->
     def reqText = item.requirement
-    def matcher = reqText =~ /^(\\d+)\\./
+    def matcher = reqText =~ /^(\d+)\./
     if (matcher) {
-        def number = matcher[0][1]  
-        lastByNumber[number] = item  
+        def number = matcher[0][1]
+        lastByNumber[number] = item
     }
 }
 
@@ -60,6 +60,11 @@ foreach('n_data', 'n_page_code_info', {
 })
 
 // write test code script
+log("DEBUG: Starting mergeFiles")
+log("DEBUG: type={{n_global_variable.programming_language}}")
+log("DEBUG: outputFilePath={{n_global_variable.feature_subfolder_main_code}}")
+log("DEBUG: inputSubfolder={{n_global_variable.script_subfolder}}")
 act_python.mergeFiles?type='{{n_global_variable.programming_language}}'&outputFilePath='{{n_global_variable.feature_subfolder_main_code}}'&inputSubfolder='{{n_global_variable.script_subfolder}}'
+log("DEBUG: mergeFiles completed")
 // write test steps script
 act_python.writeText?outputFilePath='{{n_global_variable.feature_subfolder_main_steps}}'&content="{{steps}}"&append=false

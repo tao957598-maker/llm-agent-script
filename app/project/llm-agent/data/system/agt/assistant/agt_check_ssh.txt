@@ -75,7 +75,6 @@ when('!fn.bool(n_skip_ssh) && executor_type == "cloud"', {
  
   },{
     assign('n_log', '{{n_log}}\n✓ GitHub SSH 验证通过')
-    assign("n_check_ssh_plan_result", '{"n_log":"{{n_log}}","n_data":"","is_plan_break":"false"}')
   }) 
 }) 
 

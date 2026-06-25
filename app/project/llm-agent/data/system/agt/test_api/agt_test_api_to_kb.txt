@@ -46,10 +46,10 @@
 
 // API File Id
 when('fn.hasValue(kbAPIFileId)', {
-	//# DocumentId
+	// DocumentId
     assign("documentId", "{{kbAPIFileId}}")
 
-    //# Read file from kbs
+    // Read file from kbs
     n_api_content,act_kb.select?name='kbs_doc_page_parse'&column='fileName,content'&where='{"documentId":"{{documentId}}"}'
 
     // File name

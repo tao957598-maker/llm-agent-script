@@ -2,7 +2,43 @@
 {
 	"title":"Generate selenium script",
 	"description":"Generate seleniumn for test requirement",
-	"parameter":"test_no=测试编号&current_step=当前验证步骤&steps=完整验证步骤&system=系统名称&envinfo=environment information&taskType=任务类型",
+	"parameter":[
+		{
+			"name":"test_no",
+			"label":"测试编号",
+			"required":true
+		},
+		{
+			"name":"current_step",
+			"label":"当前验证步骤",
+			"required":true
+		},
+		{
+			"name":"steps",
+			"label":"完整验证步骤",
+			"required":true
+		},
+		{
+			"name":"system",
+			"label":"系统名称",
+			"required":true
+		},
+		{
+			"name":"envinfo",
+			"label":"environment information",
+			"required":true
+		},
+		{
+			"name":"taskType",
+			"label":"任务类型",
+			"required":true
+		},
+		{
+			"name":"version",
+			"label":"版本号",
+			"required":true
+		}
+	],
 	"resultPlan":"n_python_file",
 	"life":50,
 	"version":1
@@ -63,10 +99,15 @@ when('result.need_page_info=="true"',{
 	// Analyse page elements and call agent to save it
  	tpl_task_element_info, psr_json,\
 			vrf_flag?value='fn.when(fn.bool(sys_last_result, "hasDialog") || StepTestInfo.pageinfo_size==0, true, fn.hasValue(sys_last_result,"prefer,alternative,related"))',\
-			vrf_func?name=CheckElements,\
+			vrf_func?name=CheckElements
+
+			// 海涛说下面代码不需要
+			"""
+			,\
 			agt_save_explorer?columns='''
 				test_no, test_no, step, StepTestInfo.current_step, task_type, taskType,
 				element_info, StepTestInfo.simplepageinfo, related_element_info, tpl_task_element_info'''
+			"""	
 },
 {
 	// Set page info to None
@@ -76,7 +117,7 @@ when('result.need_page_info=="true"',{
 
 when('result.action_type!="table"',{
 	// Try to run triple code 
-	agt_test_step_to_triple?test_no={{test_no}}&step_index={{step_index}}&current_step={{current_step}}&steps={{steps}}&system={{system}}&envinfo={{envinfo}}&collect_page={{n_collect_page}}&StepTestInfo={{StepTestInfo}}
+	agt_test_step_to_triple?test_no={{test_no}}&step_index={{step_index}}&current_step={{current_step}}&steps={{steps}}&system={{system}}&envinfo={{envinfo}}&version={{version}}&collect_page={{n_collect_page}}&StepTestInfo={{StepTestInfo}}
 
 	// Run code successfully, go to end
 	act_flow.go?plan=end
@@ -132,15 +173,16 @@ when('n_result.result=="true"', {
 	assign('python_code', "{{n_python_code}}")
 })
 
-
+// current_step_name
+assign('current_step_name', '{{current_step.step}}')
 // Write temporary selenium script
-n_python_file_2, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{python_code}}
+n_python_file_2, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step_name}}&sourceCode={{python_code}}
 assign('python_file', '{{n_python_file_2.kbspath}}')
 assign('python_code', '{{n_python_file_2.sourceCode}}')
 
 //# Run selenium script through RPA client
 n_rpa_test,act_rpa.send?name={{python_file}}
-act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,sys_last_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,sys_last_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step_name')}}
 act_memory.assign?var=ACExecuteCodeResult&value={{n_rpa_test}}&global=true
 // time sleep 3 seconds
 act_flow.wait?second=3
@@ -215,23 +257,29 @@ assign('result', '{{fn.json("hasDialog, n_cmp1.hasDialog, python_file, n_python_
 
 //# 在末尾将验证材料存储
 log('step_type=="VerifyExecute"')
+assign('step_type', 'VerifyExecute')
 //# 拼接sql：根据 test_no、version、application 查找 步骤id
-assign('query_step_id_sql', 'select id from kb_testcase_step where version = {{version}} and test_no = {{test_no}} and application = {{system}}')
+assign('query_step_id_sql', 'select id from kb_testcase_step where version = "{{version}}" and test_no = "{{test_no}}" and application = "{{system}}" and step = "{{current_step.step}}"')
 n_step_id,act_kb.selectBy?sql='{{query_step_id_sql}}'
 //# 验证逻辑移动，需要将数据给到验证Agent
 assign('tableName', 'kb_test_case_instance_intermediates')
-assign('columnValues', '''
-{
-"verification_type": "{{step_type}}",
-"dom_before": "{{fn.str(StepTestInfo.simplepageinfo)}}",
-"dom_after": "{{fn.str(new_collect_page)}}",
-"key_elements_info": "{{fn.str(tpl_task_element_info)}}",
-"llm_final_result": "{{fn.str(n_cmp1)}}",
-"is_valid": "{{fn.bool(n_cmp1.run_success)}}",
-"python_code_used": "{{python_code}}"
-}
-''')
-assign('whereCondition', '{"test_step_id":"{{n_step_id}}"}')
+//# 列和值
+assign('columnValues', '{{fn.json("verification_type,step_type,dom_before,fn.str(StepTestInfo.simplepageinfo),dom_after,fn.str(new_collect_page),key_elements_info,fn.str(tpl_task_element_info),llm_final_result,fn.str(n_cmp1),is_valid,fn.bool(n_cmp1.run_success),python_code_used,python_code")}}')
+assign('whereCondition', '')
+when('fn.hasValue(n_step_id)', {
+	//# 由于表kb_testcase_step设计有问题，查询字段并不是唯一查询，所以这里检查查询结果并处理。已告知相关人员处理
+	n_step_id_tmp,act_func?script='''
+	def data = n_step_id
+	if (data instanceof List && data.size() > 0) {
+		return data[0].id
+	} else if (data instanceof String) {
+		return data
+	}
+	return ''
+	'''
+	//# whereCondition
+	assign('whereCondition', '{"test_step_id":"{{n_step_id_tmp}}"}')
+})
 // 将验证数据存储到数据库
 when('fn.hasValue(tableName) && fn.hasValue(columnValues) && fn.hasValue(whereCondition)', {  
 	// 3. 调用 act_kb.merge 合并数据  

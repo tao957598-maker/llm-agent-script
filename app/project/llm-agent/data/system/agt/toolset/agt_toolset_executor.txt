@@ -85,17 +85,19 @@ when('confirmed_tool.type == "AGENT" && confirmed_tool.name == "agt_test_steps.t
 		n_tool_api_exec,act_api.doExecuteDynamic?name='{{confirmed_tool.name}}'&dynamicParamData='{{confirmed_params}}'
 
 		when('n_tool_api_exec.code==200',{
-			assign('resultTip', '{"status":"SUCCESS","result":{{n_tool_api_exec.data}},"source":"{{confirmed_tool.name}}"}')
+            assign('resultTip', '''{{fn.json("status,'SUCCESS',result,n_tool_api_exec,source,confirmed_tool.name")}}''')
 		},{
-			assign('resultTip', '{"status":"FAIL","result":{{n_tool_api_exec.msg}},"source":"{{confirmed_tool.name}}"}')
+            assign('resultTip', '''{{fn.json("status,'FAIL',result,n_tool_api_exec,source,confirmed_tool.name")}}''')
 		})
 	},{
 		//## {{confirmed_tool.type}} tool execution
 		n_plan_run_tool_exec, act_plan.run?toolType={{confirmed_tool.type}}&code={{confirmed_tool.name}}&parameters={{confirmed_params}}
-		assign('resultTip', '{"status":"SUCCESS","result":"{{n_plan_run_tool_exec}}","source":"{{confirmed_tool.name}}"}')
+
+        assign('resultTip', '''{{fn.json("status,'SUCCESS',result,n_plan_run_tool_exec,source,confirmed_tool.name")}}''')
+
 		// 捕捉所有前序异常,将当前流程转为正常状态。（可使用act_flow.fail再次将流程转为异常状态）
         on_failure({
-		   assign('resultTip', '{"status":"FAIL","result":"{{n_plan_run_tool_exec}}","source":"{{confirmed_tool.name}}"}')
+          assign('resultTip', '''{{fn.json("status,'FAIL',result,n_plan_run_tool_exec,source,confirmed_tool.name")}}''')
           // goto语句，跳转到代码结尾
           act_flow.go?plan=end
         })

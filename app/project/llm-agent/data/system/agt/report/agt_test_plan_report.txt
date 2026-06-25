@@ -1,30 +1,120 @@
-/*{
+/*
+{
 	"title":"测试报告AI分析Agent",
 	"parameter":[
-		{"name":"planId", "label":"测试计划ID", "required":true, "description":"测试计划的唯一标识"},
-		{"name":"locale", "label":"语言", "required":true, "description":"语言"},
-		{"name":"totalCases", "label":"总用例数", "required":true, "description":"测试用例总数"},
-		{"name":"executedCases", "label":"已执行用例数", "required":true, "description":"已执行的用例数量"},
-		{"name":"passedCases", "label":"通过用例数", "required":true, "description":"通过的用例数量"},
-		{"name":"failedCases", "label":"失败用例数", "required":true, "description":"失败的用例数量"},
-		{"name":"blockedCases", "label":"阻塞用例数", "label":"阻塞用例数", "required":false, "description":"阻塞的用例数量"},
-		{"name":"skippedCases", "label":"跳选用例数", "required":false, "description":"跳过的用例数量"},
-		{"name":"coverageRate", "label":"覆盖率", "required":false, "description":"执行覆盖率百分比"},
-		{"name":"agentSuccessRate", "label":"Agent成功率", "required":false, "description":"Agent成功执行率百分比"},
-		{"name":"passRate", "label":"整体通过率", "required":false, "description":"整体通过率百分比"},
-		{"name":"failRate", "label":"失败率", "required":false, "description":"失败率百分比"},
-		{"name":"stabilityScore", "label":"稳定性评分", "required":false, "description":"执行稳定性评分"},
-		{"name":"flakyRate", "label":"不稳定用例比例", "required":false, "description":"疑似不稳定用例比例百分比"},
-		{"name":"moduleStats", "label":"模块统计", "required":false, "description":"各模块的执行统计数据JSON"},
-		{"name":"failureReasons", "label":"失败原因分布", "required":false, "description":"失败原因的分布统计JSON"},
-		{"name":"trendData", "label":"趋势数据", "required":false, "description":"历史通过率趋势数据JSON"},
-		{"name":"caseTrackingList", "label":"用例追踪列表", "required":false, "description":"用例执行明细列表JSON"}
+		{
+			"name":"planId",
+			"label":"测试计划ID",
+			"description":"测试计划的唯一标识",
+			"required":true
+		},
+		{
+			"name":"locale",
+			"label":"语言",
+			"description":"语言",
+			"required":true
+		},
+		{
+			"name":"totalCases",
+			"label":"总用例数",
+			"description":"测试用例总数",
+			"required":true
+		},
+		{
+			"name":"executedCases",
+			"label":"已执行用例数",
+			"description":"已执行的用例数量",
+			"required":true
+		},
+		{
+			"name":"passedCases",
+			"label":"通过用例数",
+			"description":"通过的用例数量",
+			"required":true
+		},
+		{
+			"name":"failedCases",
+			"label":"失败用例数",
+			"description":"失败的用例数量",
+			"required":true
+		},
+		{
+			"name":"blockedCases",
+			"label":"阻塞用例数",
+			"description":"阻塞的用例数量",
+			"required":false
+		},
+		{
+			"name":"skippedCases",
+			"label":"跳选用例数",
+			"description":"跳过的用例数量",
+			"required":false
+		},
+		{
+			"name":"coverageRate",
+			"label":"覆盖率",
+			"description":"执行覆盖率百分比",
+			"required":false
+		},
+		{
+			"name":"agentSuccessRate",
+			"label":"Agent成功率",
+			"description":"Agent成功执行率百分比",
+			"required":false
+		},
+		{
+			"name":"passRate",
+			"label":"整体通过率",
+			"description":"整体通过率百分比",
+			"required":false
+		},
+		{
+			"name":"failRate",
+			"label":"失败率",
+			"description":"失败率百分比",
+			"required":false
+		},
+		{
+			"name":"stabilityScore",
+			"label":"稳定性评分",
+			"description":"执行稳定性评分",
+			"required":false
+		},
+		{
+			"name":"flakyRate",
+			"label":"不稳定用例比例",
+			"description":"疑似不稳定用例比例百分比",
+			"required":false
+		},
+		{
+			"name":"moduleStats",
+			"label":"模块统计",
+			"description":"各模块的执行统计数据JSON",
+			"required":false
+		},
+		{
+			"name":"failureReasons",
+			"label":"失败原因分布",
+			"description":"失败原因的分布统计JSON",
+			"required":false
+		},
+		{
+			"name":"trendData",
+			"label":"趋势数据",
+			"description":"历史通过率趋势数据JSON",
+			"required":false
+		},
+		{
+			"name":"caseTrackingList",
+			"label":"用例追踪列表",
+			"description":"用例执行明细列表JSON",
+			"required":false
+		}
 	],
-	"version":1,
-	"resultPlan":"",
-	"discoverable": true
-}*/
-
+	"discoverable":true,
+	"version":13
+}
+*/
 // 定义中文模板
 define('tpl_ai_analysis_zh', '''
 # 角色设定
@@ -251,11 +341,128 @@ Please return JSON format directly, without any explanatory text:
 {{sys_hint}}
 ''')
 
+// 定义繁体中文模板（香港）
+define('tpl_ai_analysis_zh_hk', '''
+# 角色設定
+你是一位資深的軟件測試專家、質量分析師和測試經理，擅長從測試數據中提煉關鍵洞察並撰寫專業的測試報告結論。
+
+# 測試執行數據
+- 測試計劃ID: {{planId}}
+- 總用例數: {{totalCases}}
+- 已執行: {{executedCases}}
+- 通過: {{passedCases}}
+- 失敗: {{failedCases}}
+- 阻塞: {{blockedCases}}
+- 跳過: {{skippedCases}}
+- 執行覆蓋率: {{coverageRate}}%
+- Agent成功率: {{agentSuccessRate}}%
+- 整體通過率: {{passRate}}%
+- 失敗率: {{failRate}}%
+- 穩定性評分: {{stabilityScore}}
+- 不穩定用例比例: {{flakyRate}}%
+
+# 模塊統計信息
+{{moduleStats}}
+
+# 失敗原因分佈
+{{failureReasons}}
+
+# 歷史趨勢數據
+{{trendData}}
+
+# 任務要求
+請基於以上數據，進行深度分析並生成兩部分內容（全部使用繁體中文）：
+
+## 第一部分：AI執行洞察
+
+### 1. 高優先級問題 (highPriorityIssue)
+識別當前最緊急、最需要關注的質量風險點。考慮：
+- 如果失敗率高(>30%)，強調嚴重質量問題
+- 如果有特定模塊失敗集中，指出該模塊
+- 如果有明顯的失敗模式（如網絡超時、元素未找到等），指出根本原因
+- 如果存在阻塞用例，說明影響範圍
+- 如果沒有明顯問題，給予積極評價
+- 字數控制在100-200字
+
+### 2. 疑似不穩定用例 (unstableCases)
+分析可能的Flaky Test（不穩定測試）。考慮：
+- 如果某些模塊通過率波動大，指出這些模塊
+- 如果失敗原因多為"元素未找到"或"超時"，可能是環境問題導致的不穩定
+- 如果通過率在70%-90%之間，可能存在邊界條件問題
+- 如果沒有明顯不穩定跡象，給予肯定評價
+- 字數控制在100-200字
+
+### 3. 執行優化建議 (optimizationSuggestion)
+提供可操作的改進建議。考慮：
+- Agent成功率低於90%時，建議檢查環境和配置
+- 失敗率高時，建議優先修復缺陷
+- 覆蓋率低時，建議補充測試用例
+- 如果有特定失敗類型集中，建議針對性優化
+- 如果整體表現良好，給予肯定並建議保持
+- 字數控制在100-200字
+
+## 第二部分：最終結論
+
+### 1. 質量評估 (qualityAssessment)
+對整體質量狀況進行評估。考慮：
+- 通過率>=90%：質量風險可控，滿足發佈標準
+- 通過率70%-90%：存在一定質量風險，需要關注
+- 通過率<70%：質量風險較高，不建議發佈
+- 結合覆蓋率、失敗分佈、穩定性評分等因素綜合評估
+- 字數控制在80-150字
+
+### 2. 高風險模塊 (highRiskModule)
+識別並說明高風險模塊。考慮：
+- 如果有模塊失敗率特別高，明確指出
+- 如果失敗集中在某個功能域，說明影響
+- 如果沒有明顯高風險模塊，說明"未發現高風險模塊"
+- 可以引用具體的失敗原因分佈
+- 字數控制在50-100字
+
+### 3. 修復建議 (recommendation)
+提供清晰、可執行的修復建議。考慮：
+- 優先級的排序（先修什麼，後修什麼）
+- 是否需要補充測試
+- 是否需要重新測試
+- 是否可以直接發佈
+- 分條列出，條理清晰
+- 字數控制在80-150字
+
+# 輸出格式
+請直接返回JSON格式，不要添加任何解釋文字：
+
+```json
+{
+  "highPriorityIssue": "高優先級問題的詳細描述",
+  "unstableCases": "疑似不穩定用例的分析",
+  "optimizationSuggestion": "執行優化建議",
+  "qualityAssessment": "質量評估的詳細描述",
+  "highRiskModule": "高風險模塊的說明",
+  "recommendation": "修復建議的詳細描述"
+}
+```
+
+# 注意事項
+- 所有文本必須使用繁體中文
+- 內容要具體、有針對性，避免空泛
+- 基於實際數據進行分析，不要編造不存在的問題
+- 語言專業、客觀、準確
+- 建議要具體、可操作
+- 語氣既要專業又要易於理解
+- **重要：不要在輸出中使用任何Markdown格式標記（如**加粗**、*斜體*、#標題等）**
+- **直接輸出純文本內容，不要使用任何格式化符號**
+{{sys_hint}}
+''')
+
 // 根据语言环境选择使用的模板
-when('{{locale == "en"}}', {
+when('{{locale == "en-US"}}', {
     n_ai_analysis_json, tpl_ai_analysis_en
 }, {
-    n_ai_analysis_json, tpl_ai_analysis_zh
+    when('{{locale == "zh-HK"}}', {
+        n_ai_analysis_json, tpl_ai_analysis_zh_hk
+    }, {
+        n_ai_analysis_json, tpl_ai_analysis_zh
+    })
 })
 
 // 解析AI洞察结果
@@ -267,4 +474,3 @@ assign('optimizationSuggestion', '{{n_ai_analysis_json.optimizationSuggestion}}'
 assign('qualityAssessment', '{{n_ai_analysis_json.qualityAssessment}}')
 assign('highRiskModule', '{{n_ai_analysis_json.highRiskModule}}')
 assign('recommendation', '{{n_ai_analysis_json.recommendation}}')
-

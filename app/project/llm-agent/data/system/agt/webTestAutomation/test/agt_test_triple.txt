@@ -2,7 +2,38 @@
 {
 	"title":"Run existed triple file",
 	"description":"Run existed triple code",
-	"parameter":"test_no=Test Case No&current_step=当前验证步骤&steps=完整验证步骤&system=系统名称&envinfo=environment information&filename=triple file name",
+	"parameter":[
+		{
+			"name":"test_no",
+			"label":"测试编号",
+			"required":true
+		},
+		{
+			"name":"current_step",
+			"label":"当前验证步骤",
+			"required":true
+		},
+		{
+			"name":"steps",
+			"label":"完整验证步骤",
+			"required":true
+		},
+		{
+			"name":"system",
+			"label":"系统名称",
+			"required":true
+		},
+		{
+			"name":"envinfo",
+			"label":"environment information",
+			"required":true
+		},
+		{
+			"name":"filename",
+			"label":"triple file name",
+			"required":true
+		}
+	],
 	"resultPlan":"n_python_file",
 	"version":1
 }

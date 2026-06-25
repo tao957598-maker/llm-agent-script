@@ -64,7 +64,7 @@ return whereClause
 '''
 
 // Query cases
-n_case_list, act_kb.selectBy?sql='SELECT * FROM kb_gen_test_case WHERE application = ? {{n_query_where}}'&parameters='{{system_name}}'
+n_case_list, act_kb.selectBy?sql='SELECT * FROM kb_gen_test_case WHERE platform = ? {{n_query_where}}'&parameters='{{system_name}}'
 
 // Iterate cases
 foreach('n_case_item', 'n_case_list', {

@@ -86,6 +86,34 @@ foreach('n_batch', 'design_batches', {
         foreach('n_test_case_map','test_case_map.data',{
             assign('test_case', '{{n_test_case_map.item}}')
             act_func?script='''
+                // 根据 sub_id 和目标语言进行 sub_category 语言转换
+                def subId = (test_case_map.sub_id ?: "").toString().trim()
+                def lang = "{{outputLanguage ?: 'zh'}}".trim().toLowerCase()
+                def targetSubCategory = test_case_map.sub_category
+
+                def langMap = [
+                    "10": ["Navigation flow", "导航流程", "導航流程"],
+                    "11": ["Interaction", "交互功能", "交互功能"],
+                    "13": ["Static content", "静态内容", "靜態內容"],
+                    "15": ["Localization and internationalization", "本地化与国际化", "本地化與國際化"],
+                    "20": ["Function validation: field input", "功能验证-栏位输入控制", "功能驗證-欄位輸入控制"],
+                    "21": ["Function validation: field output display", "功能验证-栏位输出显示", "功能驗證-欄位輸出顯示"],
+                    "22": ["Function validation: data rules", "功能验证-数据", "功能驗證-數據"],
+                    "31": ["Process: enter feature flow", "流程-进入功能流程", "流程-進入功能流程"],
+                    "32": ["Process: normal business", "流程-正常业务流程", "流程-正常業務流程"],
+                    "33": ["Process: exception business", "流程-异常业务流程", "流程-異常業務流程"],
+                    "40": ["Logic: positive logic", "逻辑-正面逻辑", "邏輯-正面邏輯"],
+                    "41": ["Logic: negative logic", "逻辑-反面逻辑", "邏輯-反面邏輯"],
+                    "43": ["Logic: trigger conditions", "逻辑-逻辑触发条件", "邏輯-邏輯觸發條件"]
+                ]
+
+                if (subId && langMap.containsKey(subId)) {
+                    def labels = langMap[subId]
+                    targetSubCategory = lang == "zh" ? labels[1] : (lang == "tw" ? labels[2] : labels[0])
+                } else if (targetSubCategory == null) {
+                    targetSubCategory = ""
+                }
+                
                 def row = [
                     title: test_case.title,
                     application: test_case.application,
@@ -95,7 +123,7 @@ foreach('n_batch', 'design_batches', {
                     source_value: test_case.source_value,
                     test_type: test_case.test_type,
 
-                    sub_category: test_case_map.sub_category,
+                    sub_category: targetSubCategory,
                     sub_id: test_case_map.sub_id,
                     design_element: test_case_map.design_element,
                     test_content: test_case_map.test_content,

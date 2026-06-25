@@ -21,7 +21,9 @@
 	"version":1
 }
 */
-//# 文件ids转数组
+//# Start Process
+log('')
+// 文件ids转数组
 n_tmp_ids,act_func?script='''
     def input = kbSpaceFileId
     if (input instanceof List) {
@@ -37,10 +39,10 @@ n_tmp_ids,act_func?script='''
     }
 '''
 assign('kb_urls', '[]')
-//# 获得所有文件路径数组 方法
+// 获得所有文件路径数组 方法
 foreach('tmp_id', 'n_tmp_ids', {
     assign('kbSpaceFileId', '{{tmp_id.item}}')
-    //# 获得文件信息
+    // 获得文件信息
     n_data,act_kb.select?name='kb_spaces_folder_knowledge'&column='id,kb_spaces_folder_id,extension,store_uri,knowledge_name'&maxSize=1&where='{"id":{{kbSpaceFileId}}}'
     n_first_data,act_func?script='''
         def n_data_tmp = n_data
@@ -50,14 +52,15 @@ foreach('tmp_id', 'n_tmp_ids', {
     assign('kb_url',"{{n_first_data.store_uri}}")
     append('kb_urls', '{{kb_url}}')
 })
-//# 获得所有文件路径数组
+// 获得所有文件路径数组
 log('{{kb_urls}}')
 
 // 将所有文件都上传到 编辑器 指定存储目录中
 foreach('kb_url_item', 'kb_urls', {
     assign('kb_url', '{{kb_url_item.item}}')
-    //# 供给codex：下载到本地 的文件的信息
-    assign('params_tmp', '{"localPath":"D:/userFiles","kbPath":"{{kb_url}}"}')
+    assign('local_path', 'D:/userFiles')
+    // 供给codex：下载到本地 的文件的信息
+    assign('params_tmp', '{{fn.json("localPath, local_path, kbPath, kb_url")}}')
     act_rpa.send?command=DownloadFromKB&parameters={{params_tmp}}
 })
 
@@ -69,22 +72,23 @@ def fileNames = paths.findAll { it }.collect { path ->
 return fileNames
 '''
 assign('kb_url_names', '{{n_kb_url_names_tmp}}')
-//# kb_url_names 获得codex阅读的文件名数组
+// kb_url_names 获得codex阅读的文件名数组
 log('{{kb_url_names}}')
 
 assign('OS_type', 'CMD')
 
 assign('n_collect_data',"None")
 assign('n_command',"None")
-//# 调用大模型生成 codex 命令
+// 调用大模型生成 codex 命令
 n_command,tpl_gen_command,psr_json
 
-//# Plan 计划执行命令行
+// Plan 计划执行命令行
 assign('stepsArray', "{{n_command.steps}}")
 assign('n_codex_result_origin', '{}')
 
 foreach('step', 'stepsArray', {
     //# Run command
+    log(' ')
     log('{{step.item.command}}')
     when('fn.hasValue(step.item.command)', {
         // RunShell   RunTerminalCommand
@@ -93,10 +97,11 @@ foreach('step', 'stepsArray', {
         // n_collect_data, act_rpa.send?command=RunShell&parameters='{"shell_input":"{{step.item.command}}","shell":False}'
     })
 })
-//# Executed Codex Answer
+// Executed Codex Answer
 assign('n_codex_result_origin', '{{n_collect_data}}')
-
-//# Format Codex Answer -> JSON
+//# Process end
+log('')
+// Format Codex Answer -> JSON
 n_codex_result,tpl_format_json,psr_json
 
 n_cleaned_tmp,act_func?script='''
@@ -113,30 +118,49 @@ if (cleaned.startsWith("```json") && cleaned.endsWith("```")) {
 }
 return cleaned
 '''
-//# 去除格式
+// 去除格式
 assign('n_codex_result', '{{n_cleaned_tmp}}')
 
 assign('codex_files', '[]')
 when('fn.hasValue(n_codex_result.file_gened_paths)',{
-    //# 获取文件信息
+    // 获取文件信息
   assign('codex_files', '{{n_codex_result.file_gened_paths}}')
 })
 
-
-foreach('local_url_item', 'codex_files', {
-    assign('local_url', '{{local_url_item.item}}')
-    //# codex使用的文件：需要上传到知识空间 的文件的信息
-    assign('params_tmp', '{{fn.json("localPath, local_url, kbPath, /test_req_poc/")}}')
-    act_rpa.send?command=UploadToKB&parameters={{params_tmp}}
+assign('n_paths', '[]')
+when('fn.hasValue(codex_files)', {
+  foreach('local_url_item', 'codex_files', {
+      assign('local_url', '{{local_url_item.item}}')
+      // codex使用的文件：需要上传到知识空间 的文件的信息
+      assign('params_tmp', '{{fn.json("localPath, local_url, kbPath, /test_req_poc/")}}')
+      n_upload_gened_file,act_rpa.send?command=UploadToKB&parameters={{params_tmp}}
+      assign('ids_array', '[]')
+      log('{{n_upload_gened_file.data}}')
+      assign('ids_array', '{{n_upload_gened_file.data}}')
+      n_ids,act_func?script='''
+      def data = ids_array
+      return data?.collectMany { it?.values() }?.flatten() ?: []
+      '''
+      foreach('id', 'n_ids', {
+          assign('id', '{{id.item}}')
+          n_file_name, act_kb.selectBy?sql='select  knowledge_name,store_uri  from kb_spaces_folder_knowledge where id="{{id}}" '
+          assign("file_path", '{{n_file_name[0].store_uri}}')
+          append('n_paths', '{{file_path}}')
+      })
+  })
 })
 
 assign('result', '{{n_codex_result.text_answer}}')
-when('fn.hasValue(codex_files)', {  
-    assign('result', '{{n_codex_result.text_answer}}\n\n相关文件在test_req_poc知识空间下。')  
+when('fn.hasValue(n_paths)', { 
+    n_paths_tmp,act_func?script=''' 
+    def data = n_paths
+    return data.collect { path -> path.replace('\\', '/').split('/').last() }.join("、")
+    '''
+    assign('result', '{{n_codex_result.text_answer}}\n\n相关文件"{{n_paths_tmp}}"在test_req_poc知识空间中查看。')  
 })  
 
 
-//$ 最终运行结果
+//$ 执行结果
 assign('n_final_answer', '{{result}}')
 
 

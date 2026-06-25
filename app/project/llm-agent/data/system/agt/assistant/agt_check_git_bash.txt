@@ -24,7 +24,7 @@ when('n_os == "windows"', {
   assign('n_bash_find_cmd', 'for %d in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do @if exist %d: @for /f "delims=" %i in (\'dir /b /s /ad "%d:\\Git" 2^>nul\') do @if exist "%i\\/bin\\/bash.exe" echo %i\\/bin\\/bash.exe')
   n_bash_check, agt_cmd_executor.assistant?cmd={{n_bash_find_cmd}}&cmd_executor_name="查找Git Bash"&server_id={{server_id}}
   n_bash_path, act_func?script='''
-    def out = n_bash_check ?: ""
+    def out = n_cmd_executor_result ?: ""
     out = out.trim()
     return out.isEmpty() ? "" : out.replace('\\\\', '/')
   '''

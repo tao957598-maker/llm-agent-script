@@ -52,7 +52,7 @@
 //# run skills skillName
 log('{{skillName}}')
 
-//# skills_content
+// skills_content
 assign('skills_content', '{{fn.getSkillMeta(skillName, "solution")}}')
 when('fn.hasValue(skills_content.solution)',{
     assign('skills_content', '{{skills_content.solution}}')
@@ -87,5 +87,5 @@ define("tpl_skills_prompt", '''
 {{skills_content}}
 ''')
 
-//$ n_skills_response
+//$ skills执行记录
 n_skills_response,tpl_skills_prompt,psr_all

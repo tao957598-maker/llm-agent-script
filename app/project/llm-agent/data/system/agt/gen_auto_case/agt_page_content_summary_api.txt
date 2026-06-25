@@ -6,9 +6,20 @@
 		{
 			"name": "page_content",
 			"label": "页面内容（含 page 字段的 map 或 JSON）"
+		},
+		{
+			"name": "outputLanguage",
+			"label": "Output Language",
+			"type": "select",
+			"defaultValue": "en",
+			"args": [
+				{"label": "English", "value": "en"},
+				{"label": "Chinese", "value": "zh"},
+				{"label": "Traditional Chinese", "value": "tw"}
+			]
 		}
 	],
-	"version": "1"
+	"version": "2"
 }
 */
 
@@ -23,6 +34,19 @@ return ""
 '''
 // [PAGE-SUM-API] root 在 n_work_queue 项 st=api 时唯一入口；若改 JSON 字段名须同步 Web 摘要与 functional 分类 foreach
 // [PAGE-SUM-API] 输出须为英文 JSON 数组，与 Web 页摘要同一 schema，否则 requirement_type 分流与 func_modules 输入会断
+
+assign('lang_output_hint', '{{fn.optional(outputLanguage, "en")}}')
+assign('lang_output_text', '{{fn.optional(outputLanguage, "en")}}')
+when('outputLanguage == "zh"', {
+  assign('lang_output_text', '中文')
+})
+when('outputLanguage == "tw"', {
+  assign('lang_output_text', '繁体中文')
+})
+when('outputLanguage == "en"', {
+  assign('lang_output_text', '英文')
+})
+
 // tpl_page_summary_api
 n_page_content_summary,tpl_page_summary_api,psr_json
 
@@ -32,7 +56,7 @@ define('tpl_page_summary_api', '''
 Analyze the following document slice. Treat it as **API contract** material (REST/OpenAPI/Swagger style): paths, methods, parameters, headers, auth, status codes, request/response bodies, error models.
 
 ## Output format (must match downstream pipeline)
-Return a **JSON array** of objects (list of maps). Output text in **English**. Same schema as the Web page summary agent:
+Return a **JSON array** of objects (list of maps). Output text in **{{lang_output_text}}**. Same schema as the Web page summary agent:
 ```json
 [{
   "page": 1,

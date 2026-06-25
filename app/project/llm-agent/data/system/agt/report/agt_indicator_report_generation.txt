@@ -7,18 +7,14 @@
 			"name":"userInput",
 			"label":"Customer Requirement",
 			"required":true,
-			"maxLength":500,
-			"hidden":false,
-			"readOnly":false,
+			"maxLength":50,
 			"type":"textarea"
 		},
 		{
 			"name":"kbTemplateName",
 			"label":"Report Template Name (Exact Match)",
 			"required":true,
-			"maxLength":250,
-			"hidden":false,
-			"readOnly":false,
+			"maxLength":50,
 			"type":"textarea"
 		},
 		{
@@ -26,8 +22,6 @@
 			"label":"Report Name",
 			"required":false,
 			"maxLength":50,
-			"hidden":false,
-			"readOnly":false,
 			"type":"textarea"
 		}
 	],
@@ -35,21 +29,48 @@
 	"version":1
 }
 */
+
+
+//=====================================================================================Generator another report no reference====================================================
 // ===============================
-// Big Step 1: Call agt_report_collect_data
+//## Big Step 1-1: Call agt_report_collect_data no references
 // ===============================
- //# Step 1
-log('🚀 Step 1: Start collecting report data...')
+log('agent indicator report generation*****>kbTemplateName=={{kbTemplateName}}------->reportName==={{reportName}}')
+ //## Step 1-1-1 no references
+log('Step 1-1-1: Start collecting report data...')
 
 n_collect_result, agt_report_collect_data?userInput="{{userInput}}"&kbTemplateName="{{kbTemplateName}}"&reportName="{{reportName}}"
 
 // ===============================
-// Big Step 3: Call agt_report_generate
+//## Big Step 1-2: Call agt_report_generate no references
 // ===============================
 log('Step 2: Start generating report...')
 
-// Step 2 Start generating report
+//# Step 1-2 Start generating report no references
 n_generate_result, agt_report_generator?reportId="{{n_collect_result.reportId}}"&templateId="{{n_collect_result.templateId}}"
 
-//# Report generation is complete
-log('Report generation is complete!')
+
+
+
+
+//=====================================================================================Generator another report with reference======================================================================
+//## Generator another report with reference to the first report
+// ===============================
+//## Big Step 2-1: Call agt_report_collect_data with references
+// ===============================
+
+ //# Step 2-1-1 with references
+log('Step 2-1-1: Start collecting report data...')
+
+n_collect_ref_result, agt_report_collect_data_ref?userInput="{{userInput}}"&kbTemplateName="{{kbTemplateName}}"&reportName="{{reportName}}_ref"
+
+// ===============================
+// Big Step 2-2: Call agt_report_generate with references
+// ===============================
+log('Step 2-2: Start generating report with references...')
+
+//# Step 2-2 Start generating report with references
+n_generate_result, agt_report_generator?reportId="{{n_collect_ref_result.reportId}}"&templateId="{{n_collect_ref_result.templateId}}"
+
+//# All Report generation is complete
+log('Two Reports generation is complete!')

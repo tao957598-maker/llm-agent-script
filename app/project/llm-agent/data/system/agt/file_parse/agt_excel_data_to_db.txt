@@ -76,7 +76,7 @@ foreach('db_data', 'n_kb_data', {
 				'''
 		// paramsparams
 		assign('params', "{{fn.json('documents,n_table_data_map')}}")
-		// insert DB action 
+		// insert DB action
 		n_api_data,act_api.doExecuteDynamic?name='report_data_batch_save'&dynamicParamData={{params}}
 		log("The result of insert DB action:{{n_api_data}}")
     })
@@ -93,13 +93,13 @@ assign('params', "{{fn.json('documents,resultListresultList')}}")
 
 define('tpl_get_field_comment','''
 - Role: 数据分析与字段重命名专家
-- Background: 用户需要处理包含特定字段的数据集，要求先确定数据的起始行及其具体内容，然后根据这些数据解释字段的含义，并对以“column_”开头的字段进行重新命名，以使其更具描述性。
+- Background: 用户需要处理包含特定字段的数据集，要求先确定数据的起始行及其具体内容，然后根据这些数据解释字段的含义，并对以"column_"开头的字段进行重新命名，以使其更具描述性。
 - Profile: 你是一位在数据分析和数据处理领域具有丰富经验的专家，能够高效地识别数据结构，解释字段含义，并根据数据内容对字段进行合理的重命名。
 - Skills: 精通数据处理、数据分析、数据清洗以及字段重命名等技能，能够快速定位有效数据并进行准确的字段描述和重命名。
 - Goals:
   - 准确确定数据从哪一行开始，并提供该行的具体数据内容。
   - 根据数据内容对每个字段进行详细解释，并给出简洁的描述。
-  - 对以“column_”开头的字段进行重新命名，使其更具描述性。
+  - 对以"column_"开头的字段进行重新命名，使其更具描述性。
   - 将结果以Markdown格式的JSON数据结构返回。
 
 Task（任务）:
@@ -109,7 +109,7 @@ Task（任务）:
 3. *重命名 column_ 字段：对于以 column_ 开头的字段，必须根据其实际承载的数据内容（如收益率、CDS基点等）赋予具有明确业务含义的新名称（使用下划线分隔的大写英文缩写或全称），并在 fields 映射中用新名称作为键。
 
 Output（输出格式）:
-1.说明 “数据从第 N 行开始”，
+1.说明 "数据从第 N 行开始"，
 2.说明第 N 行每个字段数据类型；
 3.*重命名 column_ 字段：对于以 column_ 开头的字段
 4.每个字段数据类型,数据的实际语义和后续使用需求。准确识别字段的业务逻辑类型（日期、数值、分类文本等）比识别其原始文本格式更为重要。

@@ -9,7 +9,6 @@
 		{
 			"name":"kbSpaceFileId",
 			"label":"File",
-			"required":true,
 			"type":"knowledge_space"
 		}
 	],
@@ -18,7 +17,10 @@
   	"life": "100"
   	"uiEntrance": "chatdoc_QA"
 }*/
-
+when('!fn.hasValue(kbSpaceFileId)', {
+	assign('ducoment_query_answer', '')
+	act_flow.go?plan=end
+})
 // OKP.pdf
 // assign("kbSpaceFileId", '252801563954216960')
 when('{{fn.isArray(kbSpaceFileId)}}', {

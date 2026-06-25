@@ -2,7 +2,7 @@
 {
 	"title":"Triple Generation",
 	"description":"Convert test steps into triplet instructions",
-	"parameter":"test_no=Test Case No&current_step=当前验证步骤&steps=完整验证步骤&system=系统名称&envinfo=environment information&collect_page=page information&StepTestInfo=StepTestInfo ",
+	"parameter":"test_no=Test Case No&current_step=当前验证步骤&steps=完整验证步骤&system=系统名称&envinfo=environment information&collect_page=page information&version=version&StepTestInfo=StepTestInfo ",
 	"resultPlan":"n_python_file",
 	"life":10000,
 	"version":1
@@ -52,9 +52,9 @@ n_collect_page_again, act_rpa.send?command=CollectPageInfo
 
 //# Write selenium script to the artifact repository
 // n_python_file, act_python.write?requirement={{current_step}}&sourceCode={{python_code}}&parameters={{n_similar_file.parameter}}&application={{system}}
-
+assign('current_step_name', '{{current_step.step}}')
 // Write python script to new path
-agt_test_save_file?current_step={{current_step}}&test_no={{test_no}}&sourceCode={{python_code}}&parameters={{n_similar_file.parameter}}
+agt_test_save_file?current_step={{current_step_name}}&test_no={{test_no}}&sourceCode={{python_code}}&parameters={{n_similar_file.parameter}}
 
 // Result
 assign('result', '{{n_python_file.fullFilename}}')
@@ -66,8 +66,10 @@ agent('agt_run', {
 
   // run_python_code
   assign('run_python_code', '{{fn.readFile(python_file)}}')
-
-  n_python_file_2, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{run_python_code}}&parameters={{parameters}}
+  // current_step_name
+  assign('current_step_name', '{{current_step.step}}')
+  
+  n_python_file_2, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step_name}}&sourceCode={{run_python_code}}&parameters={{parameters}}
 
 
   // Get python code of tmp 
@@ -87,7 +89,7 @@ agent('agt_run', {
     assign('python_code', '{{n_python_modify.code}}')
   })
 
-  n_python_file_2, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step}}&sourceCode={{python_code}}
+  n_python_file_2, act_python.writeTmp?path={{n_global_variable.script_subfolder_tmp}}&requirement={{current_step_name}}&sourceCode={{python_code}}
 
   // run_python_code tmp
   assign('python_file_tmp', '{{n_python_file_2.kbspath}}')
@@ -119,22 +121,29 @@ agent('agt_run', {
 
 //# 在末尾将验证材料存储
 log('step_type=="VerifyTriple"')
+assign('step_type', 'VerifyTriple')
 //# 拼接sql：根据 test_no、version、application 查找 步骤id
-assign('query_step_id_sql', 'select id from kb_testcase_step where version = {{version}} and test_no = {{test_no}} and application = {{system}}')
+assign('query_step_id_sql', 'select id from kb_testcase_step where version = "{{version}}" and test_no = "{{test_no}}" and application = "{{system}}" and step = "{{current_step.step}}"')
 n_step_id,act_kb.selectBy?sql='{{query_step_id_sql}}'
 //# 验证逻辑移动，需要将数据给到验证Agent
 assign('tableName', 'kb_test_case_instance_intermediates')
-assign('columnValues', '''
-{
-"verification_type": "{{step_type}}",
-"dom_before": "{{fn.str(StepTestInfo.simplepageinfo)}}",
-"dom_after": "{{fn.str(new_collect_page)}}",
-"llm_final_result": "{{fn.str(n_cmp1)}}",
-"is_valid": "{{fn.bool(n_cmp1.run_success)}}",
-"python_code_used": "{{python_code}}"
-}
-''')
-assign('whereCondition', '{"test_step_id":"{{n_step_id}}"}')
+//# 列和值
+assign('columnValues', '{{fn.json("verification_type,step_type,dom_before,fn.str(StepTestInfo.simplepageinfo),dom_after,fn.str(new_collect_page),key_elements_info,fn.str(tpl_task_element_info),llm_final_result,fn.str(n_cmp1),is_valid,fn.bool(n_cmp1.run_success),python_code_used,python_code")}}')
+assign('whereCondition', '')
+when('fn.hasValue(n_step_id)', {
+	//# 由于表kb_testcase_step设计有问题，查询字段并不是唯一查询，所以这里检查查询结果并处理。已告知相关人员处理
+	n_step_id_tmp,act_func?script='''
+	def data = n_step_id
+	if (data instanceof List && data.size() > 0) {
+		return data[0].id
+	} else if (data instanceof String) {
+		return data
+	}
+	return ''
+	'''
+	//# whereCondition
+	assign('whereCondition', '{"test_step_id":"{{n_step_id_tmp}}"}')
+})
 // 将验证数据存储到数据库
 when('fn.hasValue(tableName) && fn.hasValue(columnValues) && fn.hasValue(whereCondition)', {  
 	// 3. 调用 act_kb.merge 合并数据  

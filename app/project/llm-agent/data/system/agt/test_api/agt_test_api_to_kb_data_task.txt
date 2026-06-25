@@ -55,7 +55,7 @@
 */ 
 
 
-//# Agent status
+// Agent status
 assign("status", 'Agent is running')
 
 // test_no

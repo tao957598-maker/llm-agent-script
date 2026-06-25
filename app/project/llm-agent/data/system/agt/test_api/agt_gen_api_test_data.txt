@@ -24,7 +24,38 @@
 			"required":true
 		},
 		{
-			"name":"is_need_performance",
+			"name":"document_id",
+			"label":"document_id",
+			"required":false
+		},
+		{
+			"name":"related_requirement",
+			"label":"related_requirement",
+			"required":false
+		},
+		{
+			"name":"common_fixed_parameter",
+			"label":"Common Fixed Parameter",
+			"type":"textarea",
+			"defaultValue":"{}",
+			"required":false
+		},
+		{
+			"name":"common_test_scenarios",
+			"label":"Common Test Scenarios",
+			"type":"textarea",
+			"defaultValue":"[]",
+			"required":false
+		},
+		{
+			"name":"tag",
+			"label":"Tag",
+			"type":"textarea",
+			"defaultValue":"",
+			"required":false
+		},
+		{
+			"name":"performance",
 			"label":"Generate Performance Test Data",
 			"args":[
 				{
@@ -54,7 +85,7 @@
 }
 */ 
 
-// 传入的file name
+// 1 传入的file name
 assign('n_file_name', '{{file_name}}')
 
 // 传入的api data
@@ -67,10 +98,19 @@ assign('n_version', '{{version}}')
 assign('n_application', '{{application}}')
 
 assign('n_test_no', '{{test_no}}')
-
+// document_id
+assign('n_document_id', '{{document_id}}')
+// related_requirement
+assign('n_related_requirement', '{{related_requirement}}')
+// common fixed parameter
+assign('n_common_fixed_parameter', '{{common_fixed_parameter}}')
+// common test scenarios
+assign('n_common_test_scenarios', '{{common_test_scenarios}}')
+// tag
+assign('n_tag', '{{tag}}')
 
 // 传入的是否生成performance数据开关
-assign('n_is_performance', '{{is_need_performance}}')
+assign('n_is_performance', '{{performance}}')
 assign('n_api_performance_test_data', '[]')
 n_api_identity,act_func?js='''
 (function() {
@@ -411,6 +451,22 @@ n_api_test_data_filtered,act_func?js='''
 		return JSON.parse(JSON.stringify(value));
 	}
 
+	function normalizeFixedParameter(fixedParameter) {
+		if (typeof fixedParameter === 'string') {
+			try {
+				fixedParameter = JSON.parse(fixedParameter);
+			} catch (error) {
+				fixedParameter = {};
+			}
+		}
+		if (!fixedParameter || typeof fixedParameter !== 'object' || Array.isArray(fixedParameter)) {
+			fixedParameter = {};
+		}
+		return fixedParameter;
+	}
+
+	const commonFixedParameter = normalizeFixedParameter({{n_common_fixed_parameter}});
+
 	function findMeta(api) {
 		const apiName = String(api.name || '');
 		const apiMethod = String(api.method || '').toUpperCase();
@@ -656,6 +712,22 @@ n_data_item, act_func?js='''
 		return JSON.parse(JSON.stringify(value));
 	}
 
+	function normalizeFixedParameter(fixedParameter) {
+		if (typeof fixedParameter === 'string') {
+			try {
+				fixedParameter = JSON.parse(fixedParameter);
+			} catch (error) {
+				fixedParameter = {};
+			}
+		}
+		if (!fixedParameter || typeof fixedParameter !== 'object' || Array.isArray(fixedParameter)) {
+			fixedParameter = {};
+		}
+		return fixedParameter;
+	}
+
+	const commonFixedParameter = normalizeFixedParameter({{n_common_fixed_parameter}});
+
 	function findMeta(api) {
 		return (responseMeta || []).find(item =>
 			String(item.path || '') === String(api.name || '') &&
@@ -769,13 +841,17 @@ n_data_item, act_func?js='''
 				name: api.name,
 				application: api.application,
 				test_no: api.test_no,
+				document_id: "{{n_document_id}}",
+				related_requirement: "{{n_related_requirement}}",
 				method: api.method,
 				description: api.description,
 				version: api.version,
 				performance_data: api.performance,
+				fixed_parameter: commonFixedParameter,
 				function_data: (Array.isArray(api.testdata) ? api.testdata : []).map(item =>
 					alignVerifyWithDocumentedResponseBody(item, meta)
-				)
+				),
+				tag: "{{n_tag}}"
 			};
 			return transformedApi;
 		});
@@ -784,6 +860,71 @@ n_data_item, act_func?js='''
 	return JSON.stringify(transformData(originalData));
 })();
 '''
+// Send single api test data to kb
+// Build test data json content
+n_test_data_json,act_func?js='''
+(function() {
+	let testData = {{n_data_item}};
+	if (typeof testData === 'string') {
+		try {
+			testData = JSON.parse(testData);
+		} catch (error) {
+		}
+	}
+	return JSON.stringify(testData, null, 2);
+})();
+'''
+
+// Build test data kb path (拼接接口名)
+n_test_data_file_path,act_func?js='''
+(function() {
+	const requirementUri = String("{{n_related_requirement}}" || '').replace(/\\/g, '/');
+	const fileName = String("{{n_file_name}}" || '');
+	const baseFileName = fileName.replace(/\.[^/.]+$/, '');
+	const caseDir = requirementUri.includes('/Requirement/')
+		? requirementUri.split('/Requirement/')[0] + '/Test Data/'
+		: requirementUri.replace(/\/[^\/]*$/, '/Test Data/');
+	// n_data_item是数组，取第一个元素的name字段
+	let dataItems = {{n_data_item}};
+	let apiName = '';
+	if (dataItems && dataItems.length > 0) {
+		const path = dataItems[0].name || dataItems[0][0].name;
+		const parts = path.split('/').filter(p => p);
+		apiName = parts.length > 0 ? parts[parts.length - 1] : '';
+	}
+	// 确保各部分之间都用下划线分隔
+	return caseDir + 'test_data_' + baseFileName + '_' + apiName + '.xlsx';
+})();
+'''
+
+// Convert field names and ensure Application is first
+n_export_test_data,act_func?script='''
+def rows = n_data_item
+if (rows == null || !(rows instanceof List)) rows = []
+return rows.collect { r ->
+    def out = new LinkedHashMap()
+    out["Application"] = r.application == null ? "" : r.application
+    out["File Name"] = r.file == null ? "" : r.file
+    out["Api Name"] = r.name == null ? "" : r.name
+    out["Method"] = r.method == null ? "" : r.method
+    out["Description"] = r.description == null ? "" : r.description
+    out["Test No"] = r.test_no == null ? "" : r.test_no
+    out["Version"] = r.version == null ? "" : r.version
+    out["Document Id"] = r.document_id == null ? "" : r.document_id
+    out["Related Requirement"] = r.related_requirement == null ? "" : r.related_requirement
+    out["Performance Data"] = r.performance_data == null ? "" : r.performance_data.toString()
+    out["Fixed Parameter"] = r.fixed_parameter == null ? "" : r.fixed_parameter.toString()
+    out["Function Data"] = r.function_data == null ? "" : r.function_data.toString()
+    out["Tag"] = r.tag == null ? "" : r.tag
+    return out
+}
+'''
+
+// Write test data xlsx file to kb
+n_test_data_file_msg,act_artifact.write?filepath='{{n_test_data_file_path}}'&data='{{n_export_test_data}}'
+// Trigger xlsx file sync
+n_test_data_file_sync_msg,act_artifact.triggerSync?filepath='{{n_test_data_file_path}}'&forceSync=true&ensureKrd=true
+
 // Send single api test data to kb
 act_kb.defineAndImportData?tableName='kb_api_test_data'&data='{{n_data_item}}'
 assign('result', 'n_data_item')
@@ -799,6 +940,8 @@ define('tpl_fastapi_test_data', '''
 2. 内容完整性：为每个接口生成正常流、参数异常、业务异常三类测试场景。
 3. 格式纯净性：输出的 JSON 必须可以直接被 Python 的 json.loads() 解析，不能有任何格式错误。
 4. 先说明本次接口数据的路由是什么,然后再返回完整的json数据
+5. 如果提供了文档提取的测试场景，请优先基于这些场景生成 testdata，不要重新发明场景标题和场景类型；当场景信息不完整时，再结合 OpenAPI 和响应定义补齐。
+6. 如果下方“文档提取的测试场景”不为空，必须直接以它为主生成 testdata，不要忽略它去自行重写场景。
 # 严格格式约束
 
 ## JSON 格式约束
@@ -846,12 +989,18 @@ define('tpl_fastapi_test_data', '''
 ## 字段生成规则
 1. 方法对应字段：
    - `parameter` 是相对于 `fixed_parameter` 的增量覆盖，不是完整请求参数快照
+   - `fixed_parameter` 是一个扁平 key-value 对象（如 {"Authorization": "xxx", "userName": "zhangsan"}），
+     请根据下方 OpenAPI 接口定义，将每个 key 自动归类到正确的请求位置：
+     · key 匹配 OpenAPI path 参数 → 放入 parameter.path
+     · key 匹配 OpenAPI query 参数 → 放入 parameter.params
+     · key 匹配 OpenAPI requestBody 属性 → 放入 parameter.data 或 parameter.json
+     · key 匹配 HTTP 头 → 放入 parameter.headers
    - GET/DELETE：只在确实需要覆盖时输出 `path`、`headers`、`params`
    - POST/PUT：只在确实需要覆盖时输出 `path`、`headers`、`params`、`data`、`json`
    - 如果某字段与 `fixed_parameter` 的默认值相同，则不要在 `parameter` 中重复输出
    - 空的 `headers`、`params`、`data`、`json`、`path` 不要输出
 2. 路径参数规则：
-   - `fixed_parameter` 中的 `path`、`headers` 等值已经是默认请求参数；正常场景若直接复用默认值，不要在 `parameter` 中重复输出
+   - `fixed_parameter` 中的各 key 已经是默认请求参数；正常场景若直接复用默认值，不要在 `parameter` 中重复输出
    - 只有当场景需要覆盖动态路由参数时，才显式输出 `parameter.path`
    - 对缺失必填路径参数的场景，在 JSON 中将该路径参数值写为 `null`，表示请求层的 `None`
 3. 测试数据要求：
@@ -869,7 +1018,10 @@ define('tpl_fastapi_test_data', '''
 生成每个场景前，先写出内部判断：该场景的状态码依据来自请求头鉴权、参数规则、业务规则、服务端错误说明，还是仅来自全局响应码表；仅来自全局响应码表时不得绑定到具体参数异常
 如果当前接口响应定义里存在 response_examples，优先让每个测试场景对齐到最接近的文档示例：成功场景对齐成功示例，参数异常/业务异常对齐失败示例；对齐后 verify 必须断言示例里的业务 code/message/data，而不是只断言 HTTP 状态码
 如果当前接口响应定义里存在 request_examples、request_field_examples 或 parameter_examples，优先用这些示例构造请求参数；只有文档没给值时，才允许补充合理测试值
-`fixed_parameter` 已经是默认请求参数来源。默认值不要重复写入 `parameter`；只有需要覆盖时才显式输出 `path`、`headers`、`params`、`data`、`json`
+`fixed_parameter`（扁平 key-value）已经是默认请求参数来源。默认值不要重复写入 `parameter`；
+只有需要覆盖时才显式输出 `path`、`headers`、`params`、`data`、`json`。
+归类规则：参数名匹配 OpenAPI path 参数 → path，匹配 query 参数 → params，
+匹配 requestBody 属性 → data 或 json，匹配 HTTP 头 → headers。
 对动态路由参数的异常或业务场景，必须显式输出 `parameter.path` 覆盖值；缺失必填路径参数时使用 `null` 表示请求层的 `None`
 当只修改一个字段时，其余未修改字段必须尽量继承文档请求样例中的原始值，不要擅自替换成新的占位值
 如果某个失败示例明显属于 password 字段，就不要复用到 username 场景；字段级失败示例要严格按字段归属使用
@@ -934,15 +1086,12 @@ Negative cases should be atomic. Prefer one invalid input per case, and avoid co
 # 当前接口响应定义
 {{n_kb_data}}
 
-# 系统环境信息数据
- "fixed_parameter": {
-            "path": {
-              "id": "274913576803860480"
-            },
-            "headers": {
-              "Authorization": "Bearer sk-1s2dsa31saffd2v1dwee"
-            }
-      }
+# 系统环境信息数据（固定参数，扁平 key-value 对象）
+# 请根据上方 OpenAPI 接口定义，将以下每个 key 自行归类到正确的请求位置
+{{n_common_fixed_parameter}}
+
+# 文档提取的测试场景
+{{n_common_test_scenarios}}
 
 ''')
 

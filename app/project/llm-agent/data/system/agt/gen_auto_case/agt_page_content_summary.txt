@@ -6,9 +6,20 @@
 		{
 			"name": "page_content",
 			"label": "页面内容文本"
+		},
+		{
+			"name": "outputLanguage",
+			"label": "Output Language",
+			"type": "select",
+			"defaultValue": "en",
+			"args": [
+				{"label": "English", "value": "en"},
+				{"label": "Chinese", "value": "zh"},
+				{"label": "Traditional Chinese", "value": "tw"}
+			]
 		}
 	],
-	"version": "1"
+	"version": "2"
 }
 */
 
@@ -22,7 +33,19 @@ try {
 return ""
 '''
 
-// tpl_page_summary
+// 根据 outputLanguage 动态设置输出语言
+assign('lang_output_hint', '{{fn.optional(outputLanguage, "en")}}')
+assign('lang_output_text', '{{fn.optional(outputLanguage, "en")}}')
+when('outputLanguage == "zh"', {
+  assign('lang_output_text', '中文')
+})
+when('outputLanguage == "tw"', {
+  assign('lang_output_text', '繁体中文')
+})
+when('outputLanguage == "en"', {
+  assign('lang_output_text', '英文')
+})
+
 n_page_content_summary,tpl_page_summary,psr_json
 
 
@@ -30,7 +53,7 @@ define('tpl_page_summary', '''
 # 需求文档处理流程
 请根据以下提供的需求文档内容，逐页分析并整理每一页的测试点和测试内容。对于每一页，请明确以下信息：
 ## 输出JSON格式存储整理后的需求内容：
-必须返回json数组list [map]格式,输出内容为英文
+必须返回json数组list [map]格式,输出内容为{{lang_output_text}}
 ```json
 [{
   "page": 1,

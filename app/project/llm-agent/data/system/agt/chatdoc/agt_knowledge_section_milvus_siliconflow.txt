@@ -366,4 +366,20 @@ when("operation==7", {
         })
     })
 })
+
+when("operation==9", {
+    n_summary,tpl_knowledge_section_summary
+    assign('last_result', '{{n_summary}}')
+})
+
+define('tpl_knowledge_section_summary', '''
+    请结合已知文本内容，进行总结一下当前信息中所包含的内容：
+    {{content}}
+
+    # 返回JSON格式:
+    {
+        "summary": "总结内容"
+    }
+''')
+
 assign('return', '{{last_result}}')

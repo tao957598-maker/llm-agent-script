@@ -14,11 +14,7 @@
 		{"name":"n_dynamic_toolset_guide", "label":"动态工具集说明"},
 		{"name":"n_tool_routing_guide", "label":"工具路由规则"},
 		{"name":"react_last_observation", "label":"最近一次 Observation"},
-		{"name":"react_last_thought", "label":"最近一次 Thought"},
-		{"name":"react_last_success", "label":"最近一次工具执行是否成功"},
-		{"name":"react_last_done", "label":"最近一次工具执行是否终止流程"},
-		{"name":"react_last_final_result", "label":"最近一次工具执行最终结果"},
-		{"name":"react_last_exit_reason", "label":"最近一次工具执行退出原因"}
+		{"name":"react_last_thought", "label":"最近一次 Thought"}
 	],
 	"resultPlan": "n_react_decision",
 	"discoverable": false,
@@ -98,12 +94,6 @@ define('tpl_decider_react', '''
 # 工具路由规则
 {{n_tool_routing_guide}}
 
-# 最近一次工具执行状态
-- react_last_success: {{react_last_success!}}
-- react_last_done: {{react_last_done!}}
-- react_last_final_result: {{react_last_final_result!}}
-- react_last_exit_reason: {{react_last_exit_reason!}}
-
 # 最近一次 Observation
 {{react_last_observation!}}
 
@@ -127,51 +117,62 @@ define('tpl_decider_react', '''
 {{fn.chatFlag('tpl_decider_react', 'userInput', 'n_react_decision', '', 30)}}
 ''')
 
-// 优先基于结构化工具执行状态判断是否可以直接结束，避免解析 observation 文本
+// 先检测 react_last_observation 是否包含成功标识，如果是则直接 FINISH
 assign('n_obs_done_check', 'false')
-log("---------react_last_success= {{react_last_success}}, react_last_done={{react_last_done}}, react_last_exit_reason={{react_last_exit_reason}}")
-when('react_last_success == "true" && react_last_done != "true"', {
-	assign('n_obs_answer', '{{react_last_observation!}}')
-	assign('n_react_decision', '{{fn.json("thought, 上一轮工具执行成功，已有 Observation 可直接结束, action, FINISH, toolType, , toolCode, , parameters, {}, riskLevel, LOW, answer, n_obs_answer")}}')
-	assign('n_obs_done_check', 'true')
-	log('[OPENCLAW_DECIDER] 检测到上一轮工具执行成功，直接FINISH')
-})
-when('react_last_done == "true" && fn.hasValue(react_last_final_result)', {
-	assign('n_obs_answer', '{{react_last_final_result}}')
-	assign('n_react_decision', '{{fn.json("thought, 上一轮流程已终止，直接返回最终结果, action, FINISH, toolType, , toolCode, , parameters, {}, riskLevel, LOW, answer, n_obs_answer")}}')
-	assign('n_obs_done_check', 'true')
-	log('[OPENCLAW_DECIDER] 检测到上一轮流程已终止，直接FINISH')
+log("---------react_last_observation= {{react_last_observation}}")
+when('fn.hasValue(react_last_observation)', {
+	n_obs_check, act_func?script='''
+		def obs = react_last_observation?.toString() ?: ""
+		// 如果 observation 包含成功/完成标识，标记为已完成
+		def done = obs.contains("完成") || obs.contains("SUCCESS") || obs.contains("success") ||
+		           obs.contains("BUILD SUCCESS") || obs.contains("done")
+		fn.put("n_obs_done", done ? "true" : "false")
+		// 同时输出一个简洁的答案
+		if (done) {
+			def answer = obs
+			// 如果过长，截取关键部分
+			if (answer.length() > 500) {
+				answer = answer.substring(0, 500) + "...(已截断)"
+			}
+			fn.put("n_obs_answer", answer)
+		}
+	'''
+	when('n_obs_check.n_obs_done == "true"', {
+		assign('n_react_decision', '{{fn.json("thought: observation包含成功标识任务已完成, action: FINISH, toolType: , toolCode: , parameters: {}, riskLevel: LOW, answer: {{n_obs_check.n_obs_answer}}")}}')
+		assign('n_obs_done_check', 'true')
+		log('[OPENCLAW_DECIDER] 检测到observation包含成功标识，直接FINISH')
+	})
 })
 
 when('n_obs_done_check != "true"', {
 	n_react_decision, tpl_decider_react, psr_json, vrf_func.run?script='''
-        def r = fn.get("n_react_decision")
-        if (r == null) {
-            r = fn.get("sys_last_result")
-        }
-        if (r == null) return fn.result(false, "决策结果为空，请输出 JSON")
-        def action = null
-        def toolType = null
-        def toolCode = null
-        if (r instanceof Map) {
-            action = r.get("action")
-            toolType = r.get("toolType")
-            toolCode = r.get("toolCode")
-        } else if (r instanceof CharSequence) {
-            def raw = r.toString()
-            def actionMatcher = raw =~ /"action"\s*:\s*"([^"]+)"/
-            if (actionMatcher.find()) action = actionMatcher.group(1)
-            def toolTypeMatcher = raw =~ /"toolType"\s*:\s*"([^"]*)"/
-            if (toolTypeMatcher.find()) toolType = toolTypeMatcher.group(1)
-            def toolCodeMatcher = raw =~ /"toolCode"\s*:\s*"([^"]*)"/
-            if (toolCodeMatcher.find()) toolCode = toolCodeMatcher.group(1)
-        }
-        if (action == null) return fn.result(false, "action 不能为空")
-        def allowed = ["FINISH", "RUN_TOOL", "ASK_CONFIRM"]
-        if (!allowed.contains(action.toString())) return fn.result(false, "action 仅允许 FINISH/RUN_TOOL/ASK_CONFIRM")
-        if (!action.toString().contains("FINISH")) {
-            if (toolType == null || toolCode == null) return fn.result(false, "toolType/toolCode 不能为空")
-        }
-        return fn.result(true, r)
-     '''
+def r = fn.get("n_react_decision")
+if (r == null) {
+	r = fn.get("sys_last_result")
+}
+if (r == null) return fn.result(false, "决策结果为空，请输出 JSON")
+def action = null
+def toolType = null
+def toolCode = null
+if (r instanceof Map) {
+	action = r.get("action")
+	toolType = r.get("toolType")
+	toolCode = r.get("toolCode")
+} else if (r instanceof CharSequence) {
+	def raw = r.toString()
+	def actionMatcher = raw =~ /"action"\s*:\s*"([^"]+)"/
+	if (actionMatcher.find()) action = actionMatcher.group(1)
+	def toolTypeMatcher = raw =~ /"toolType"\s*:\s*"([^"]*)"/
+	if (toolTypeMatcher.find()) toolType = toolTypeMatcher.group(1)
+	def toolCodeMatcher = raw =~ /"toolCode"\s*:\s*"([^"]*)"/
+	if (toolCodeMatcher.find()) toolCode = toolCodeMatcher.group(1)
+}
+if (action == null) return fn.result(false, "action 不能为空")
+def allowed = ["FINISH", "RUN_TOOL", "ASK_CONFIRM"]
+if (!allowed.contains(action.toString())) return fn.result(false, "action 仅允许 FINISH/RUN_TOOL/ASK_CONFIRM")
+if (!action.toString().contains("FINISH")) {
+	if (toolType == null || toolCode == null) return fn.result(false, "toolType/toolCode 不能为空")
+}
+return fn.result(true, r)
+'''
 })

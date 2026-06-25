@@ -97,7 +97,7 @@ define('tpl_choose_tool', '''
 {{userInput}}
 
 # 工具集列表：
-{{fn.toolset('toolset_multi_scenario')}}
+{{fn.tools('toolset_multi_scenario')}}
 
 ''')
 
@@ -125,7 +125,7 @@ define('tpl_parameter_extract', '''
 {{userInput}}
 
 # 工具描述：
-{{fn.tool(tpl_choose_tool.type, tpl_choose_tool.name)}}
+{{fn.toolDetail(tpl_choose_tool.type, tpl_choose_tool.name)}}
 
 ''')
 

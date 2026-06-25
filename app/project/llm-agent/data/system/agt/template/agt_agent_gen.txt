@@ -28,7 +28,7 @@ assign('docContent_data', '{{fn.optional(docContent, "None")}}')
 
 // Code Example
 // 使用基础语法（代码生成场景无需 plan 列表与 RPG 进化）
-n_txt,act_func.read?filename='system/agt/template/agent_grammar.txt'
+n_txt,act_func.read?filename='system/agt/meta/agent_grammar.txt'
 
 // 角色设定
 assign('system_message', '''
@@ -53,7 +53,7 @@ assign('system_message', '''
   4. 输出结果必须严格采用如下格式（不要增加或删除任何字符）：
      
      <AGENT_GROOVY>
-     ```groovy
+     ```agent_groovy
      // your groovy code here
      ```
      </AGENT_GROOVY_END>
@@ -94,7 +94,7 @@ when('fn.hasValue(kbSpaceFileId)', {
 n_api_list,agt_get_api_list?userInput="{{userInput}}"
 
 //# 生成Agent代码
-tpl_gen_agent_code,psr_groovy?xmlFlag=AGENT_GROOVY,vrf_plan.checkAgent?type={{sys_last_result_type}}&script={{sys_last_result}}
+tpl_gen_agent_code,psr_groovy?xmlFlag=AGENT_GROOVY,vrf_plan.check?type={{sys_last_result_type}}&script={{sys_last_result}}
 
 // Agent代码模板
 define('tpl_gen_agent_code', '''
@@ -109,8 +109,6 @@ define('tpl_gen_agent_code', '''
 
 # 用户需求
 {{userInput}}
-
-{{sys_hint}}
 
 {{fn.chatFlag('system_message', 'userInput', '', '', 20)}}
 ''')

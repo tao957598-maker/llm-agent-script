@@ -14,14 +14,17 @@
 	"resultPlan":"expert_query_answer"
 } 
 */
-
+when('!fn.hasValue(kbSpaceFileId)', {
+	assign('expert_query_answer', '')
+	act_flow.go?plan=end
+})
 // 当前问题
 assign('n_question','{{userInput}}')
 
 // 预先设置空结果
 assign("n_answer", "[]")
 
-// Search from expert knowledge base
+//# Search from expert knowledge base
 n_results,rag_kbs.searchFaq?question='{{n_question}}'&similarity='0.6'
 when('n_results?size>0',{
 	// 遍历answer

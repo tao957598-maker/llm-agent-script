@@ -126,7 +126,48 @@ when('n_result_data_map.success == "true"',{
 		)
 		return timestamp
 	'''
-	assign('report_file', 'appdata/api_report/{{n_platform}}/{{task_name}}_{{n_current_timestamp}}_{{n_suffix}}.html')
+
+	// Build report file path (test_report_原文件名_接口名_时间戳.html)
+	n_report_file_path,act_func?js='''
+	(function() {
+		const timestamp = "{{n_current_timestamp}}";
+		
+		// 从n_datas中获取相关信息
+		let datas = {{n_datas}};
+		let baseFileName = '';
+		let apiName = '';
+		let relatedRequirement = '';
+		
+		if (Array.isArray(datas) && datas.length > 0) {
+			// 获取接口名（从name字段）
+			if (datas[0].name) {
+				const path = datas[0].name;
+				const parts = path.split('/').filter(p => p);
+				apiName = parts.length > 0 ? parts[parts.length - 1] : '';
+			}
+			// 获取relatedRequirement
+			if (datas[0].related_requirement) {
+				relatedRequirement = datas[0].related_requirement;
+			}
+		}
+		
+		// 根据relatedRequirement构建目录路径并提取文件名
+		const requirementUri = String(relatedRequirement || '').replace(/\\/g, '/');
+		
+		// 提取文件名（从relatedRequirement全路径中提取）
+		const fileName = requirementUri.substring(requirementUri.lastIndexOf('/') + 1);
+		baseFileName = fileName.replace(/\.[^/.]+$/, '');
+		
+		// 构建报告目录
+		const reportDir = requirementUri.includes('/Requirement/')
+			? requirementUri.split('/Requirement/')[0] + '/Test Report/'
+			: requirementUri.replace(/\/[^\/]*$/, '/Test Report/');
+		
+		// 构建路径：{reportDir}test_report_原文件名_接口名_时间戳.html
+		return reportDir + 'test_report_' + baseFileName + '_' + apiName + '_' + timestamp + '.html';
+	})();
+	'''
+	assign('report_file', '{{n_report_file_path}}')
 	act_func.write?filename='{{report_file}}'&data='{{n_data}}'&syncKbs=true
 
 	// Time sleep
@@ -137,7 +178,15 @@ when('n_result_data_map.success == "true"',{
 	// get dic_id
 	n_dic_id,act_func?script=''' n_knowledge_data[0].kb_spaces_folder_id '''
 
-	assign('report_file_name', '{{task_name}}_{{n_current_timestamp}}_{{n_suffix}}.html')
+	// 提取报告文件名（不含路径）
+n_report_file_name,act_func?js='''
+(function() {
+	const reportFilePath = "{{report_file}}";
+	const parts = reportFilePath.split('/');
+	return parts[parts.length - 1];
+})();
+'''
+assign('report_file_name', '{{n_report_file_name}}')
     // Test Result
 	assign('report', 'API test completed, report file: <a href="/chat-knowledge-base?dic_id={{n_dic_id}}">{{report_file}}')
 },

@@ -1,43 +1,37 @@
 /*
 {
 	"title":"BankAssist AI",
-	"description":"Banking-focused AI agent streamlines compliant, accurate query resolution via curated finance knowledge.",
-	"parameter":[
-		{
-			"name":"userInput",
-			"label":"客户问题",
-			"maxLength":50,
-			"hidden":false,
-			"readOnly":false,
-			"type":"textarea"
-		},
-		{
-			"name":"kbSpaceId",
-			"label":"目录ID（支持多个）",
-			"maxLength":50,
-			"hidden":false,
-			"readOnly":false,
-			"type":"knowledge_space"
-		},
-		{
-			"name":"kbSpaceFileId",
-			"label":"File",
-			"maxLength":50,
-			"hidden":false,
-			"readOnly":false,
-			"type":"knowledge_space"
-		}
-	],
+  "description": "Banking-focused AI agent streamlines compliant, accurate query resolution via curated finance knowledge.",
+	"parameter": [
+    {
+      "name":"userInput",
+      "label":"客户问题",
+      "type":"textarea"
+    },
+    {
+      "name":"kbSpaceId",
+      "label":"目录ID（支持多个）",
+      "type":"knowledge_space"
+    },
+    {
+      "name":"kbSpaceFileId",
+      "label":"File",
+      "type":"knowledge_space"
+    }
+  ],
 	"tag":"chatdoc_QA",
 	"uiEntrance":"chatdoc_QA",
+	"resultPlan":"",
+	"life":100,
 	"displayOrder":0,
 	"version":2
 }
 */
+
 assign("question", "{{userInput}}")
 assign("n_finally_answer", "")
 
-//# Get history 
+//# Get history
 assign('history_data','{{fn.queryMessages("n_chat_log",0,10)}}')
 
 //# Query or Chat Intent Recognizer
@@ -443,7 +437,9 @@ agent("agt_common", {
 
 // ChatDoc QA
 define('tpl_chat_qa', '''
-
+/*{
+  "llmType":"alias.speed"
+}*/
 {{question}}
 
 {{fn.chatFlag('%{system_prompt}%', 'question', 'history_log', '', 10)}}

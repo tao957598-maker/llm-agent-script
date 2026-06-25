@@ -38,7 +38,6 @@
 		}
 	],
 	"llmType":"alias.highquality",
-	"resultPlan":"final_test_case_result",
 	"life":10000,
 	"version":2
 }
@@ -194,6 +193,21 @@ when('fn.hasValue(input_data)', {
     END AS content
     from kbs_doc_page_parse
     where {{n_pages_source_where.whereSql}} order by fileName, page asc'''
+  n_case_page_data_guard,act_func?script=''' 
+    def rows = n_pages_data
+    if (rows == null || !(rows instanceof List) || rows.isEmpty()) {
+      throw new RuntimeException("【STEP3证据为空】未查询到当前设计点对应的页面内容，停止生成测试用例")
+    }
+    int totalChars = 0
+    rows.each { r ->
+      if (!(r instanceof Map)) return
+      totalChars += (r.get("content") ?: "").toString().length()
+    }
+    if (totalChars > 90000) {
+      println("[WARN][STEP3] page evidence totalChars=" + totalChars + " 超 90K，继续执行但可能影响用例质量")
+    }
+    return [rowCount: rows.size(), totalChars: totalChars]
+  '''
 
   // [CASE-STEP3·tpl-switch] api 分支与 web 分支输出字段名一致，仅提示词与三语约束不同；勿混用下游解析
   when('pipeline_case_mode == "api"', {
@@ -260,9 +274,36 @@ when('fn.hasValue(input_data)', {
               }
               langSpecs.each { lang ->
                   def clone = new LinkedHashMap(base)
-                  clone["title"] = (rawTitle ? rawTitle : "Web test case") + " " + lang["suffix"]
+                  def langOutput = "{{outputLanguage}}".toString().trim().toLowerCase()
+                  def baseTitle = rawTitle
+                  if (!baseTitle) {
+                      baseTitle = (langOutput == "zh")
+                          ? "Web\\u6d4b\\u8bd5\\u7528\\u4f8b"
+                          : (langOutput == "tw" ? "Web\\u6e2c\\u8a66\\u7528\\u4f8b" : "Web test case")
+                  }
+                  clone["title"] = baseTitle + " " + lang["suffix"]
                   def expected = (clone["expected_result"] ?: "").toString().trim()
-                  def langExpectation = "UI labels, messages, and user-facing content are displayed in " + lang["name"] + " where applicable."
+                  def langExpectationMap = [:]
+                  if (langOutput == "zh") {
+                      langExpectationMap = [
+                          "EN":"\\u754c\\u9762\\u6807\\u7b7e\\u3001\\u63d0\\u793a\\u4fe1\\u606f\\u548c\\u7528\\u6237\\u53ef\\u89c1\\u5185\\u5bb9\\u5728\\u9002\\u7528\\u65f6\\u5e94\\u4ee5\\u82f1\\u6587\\u663e\\u793a\\u3002",
+                          "TC":"\\u754c\\u9762\\u6807\\u7b7e\\u3001\\u63d0\\u793a\\u4fe1\\u606f\\u548c\\u7528\\u6237\\u53ef\\u89c1\\u5185\\u5bb9\\u5728\\u9002\\u7528\\u65f6\\u5e94\\u4ee5\\u7e41\\u4f53\\u4e2d\\u6587\\u663e\\u793a\\u3002",
+                          "SC":"\\u754c\\u9762\\u6807\\u7b7e\\u3001\\u63d0\\u793a\\u4fe1\\u606f\\u548c\\u7528\\u6237\\u53ef\\u89c1\\u5185\\u5bb9\\u5728\\u9002\\u7528\\u65f6\\u5e94\\u4ee5\\u7b80\\u4f53\\u4e2d\\u6587\\u663e\\u793a\\u3002"
+                      ]
+                  } else if (langOutput == "tw") {
+                      langExpectationMap = [
+                          "EN":"\\u4ecb\\u9762\\u6a19\\u7c64\\u3001\\u63d0\\u793a\\u8a0a\\u606f\\u548c\\u4f7f\\u7528\\u8005\\u53ef\\u898b\\u5167\\u5bb9\\u5728\\u9069\\u7528\\u6642\\u61c9\\u4ee5\\u82f1\\u6587\\u986f\\u793a\\u3002",
+                          "TC":"\\u4ecb\\u9762\\u6a19\\u7c64\\u3001\\u63d0\\u793a\\u8a0a\\u606f\\u548c\\u4f7f\\u7528\\u8005\\u53ef\\u898b\\u5167\\u5bb9\\u5728\\u9069\\u7528\\u6642\\u61c9\\u4ee5\\u7e41\\u9ad4\\u4e2d\\u6587\\u986f\\u793a\\u3002",
+                          "SC":"\\u4ecb\\u9762\\u6a19\\u7c64\\u3001\\u63d0\\u793a\\u8a0a\\u606f\\u548c\\u4f7f\\u7528\\u8005\\u53ef\\u898b\\u5167\\u5bb9\\u5728\\u9069\\u7528\\u6642\\u61c9\\u4ee5\\u7c21\\u9ad4\\u4e2d\\u6587\\u986f\\u793a\\u3002"
+                      ]
+                  } else {
+                      langExpectationMap = [
+                          "EN":"UI labels, messages, and user-facing content are displayed in English where applicable.",
+                          "TC":"UI labels, messages, and user-facing content are displayed in Traditional Chinese where applicable.",
+                          "SC":"UI labels, messages, and user-facing content are displayed in Simplified Chinese where applicable."
+                      ]
+                  }
+                  def langExpectation = langExpectationMap.get((lang["code"] ?: "").toString()) ?: ""
                   if (expected) {
                       def expectedLower = expected.toLowerCase()
                       if (!expectedLower.contains(lang["name"].toString().toLowerCase()) && !expected.contains(lang["suffix"].toString())) {
@@ -283,6 +324,71 @@ when('fn.hasValue(input_data)', {
           if (deduped.size() > maxKeep) deduped = new ArrayList(deduped.subList(0, maxKeep))
       }
       test_case_input_data.put('data', deduped)
+  '''
+  act_func?script=''' 
+      def data = test_case_input_data.get('data')
+      if (!(data instanceof List) || data.isEmpty()) {
+          println("[WARN][STEP3] 当前设计点 LLM 返回空用例，跳过")
+          test_case_input_data.put('data', [])
+      }
+      def lang = "{{outputLanguage}}".toString().trim().toLowerCase()
+      def hasCjk = { s ->
+          def v = (s == null ? "" : s.toString())
+          return (v =~ /.*\p{script=Han}.*/).matches()
+      }
+      def isTriLangTitle = { s ->
+          def v = (s == null ? "" : s.toString())
+          return (v =~ /(?i).*[\[\(](EN|TC|SC)[\]\)].*/).matches()
+      }
+      def firstNonBlank = { vals ->
+          for (def v : vals) {
+              def t = (v == null ? "" : v.toString().trim())
+              if (t) return t
+          }
+          return ""
+      }
+      def extractPage = { vals ->
+          def raw = firstNonBlank(vals)
+          if (!raw) return ""
+          def m = (raw =~ /(?i)page\s*([0-9]+)/)
+          if (m.find()) return "Page" + m.group(1)
+          def n = (raw =~ /([0-9]+)/)
+          if (n.find()) return "Page" + n.group(1)
+          return raw
+      }
+      def problems = []
+      data.each { tc ->
+          if (!(tc instanceof Map)) return
+          if (!((tc["application"] ?: "").toString().trim())) {
+              tc["application"] = firstNonBlank([
+                  input_data instanceof Map ? input_data.get("platform") : "",
+                  input_data instanceof Map ? input_data.get("main_module_name") : "",
+                  input_data instanceof Map ? input_data.get("submodule_name") : ""
+              ])
+          }
+          if (!((tc["source_value"] ?: "").toString().trim())) {
+              tc["source_value"] = extractPage([
+                  input_data instanceof Map ? input_data.get("source_value") : "",
+                  input_data instanceof Map ? input_data.get("submodule_source") : "",
+                  input_data instanceof Map ? input_data.get("main_module_source") : "",
+                  input_data instanceof Map ? input_data.get("page") : ""
+              ])
+          }
+          ["title","application","steps","expected_result","source_value"].each { key ->
+              if (!((tc[key] ?: "").toString().trim())) {
+                  problems.add("missing " + key)
+              }
+          }
+          if (lang in ["zh","tw"] && !isTriLangTitle(tc["title"])) {
+              def titleText = (tc["title"] ?: "").toString()
+              if (!hasCjk(titleText)) {
+                  println("[WARN][STEP3] language drift: " + titleText)
+              }
+          }
+      }
+      if (!problems.isEmpty()) {
+          throw new RuntimeException("【STEP3结果校验失败·关键字段缺失】" + problems.take(5).join(" | "))
+      }
   '''
  })
 // final_test_case_result
@@ -313,10 +419,12 @@ design_element: {{input_data.sub_category}}
 - Do not split cases only by wording variants, display labels, input value categories, or context labels when the flow, validation, and expected behaviour are the same.
 - If the current submodule is context-specific, keep steps and expected results within that same context unless the submodule explicitly covers multiple contexts.
 - For read-only/display/result modules without explicit user input, prefer representative assertion cases and do not restate the same business outcome as multiple near-identical flow or logic cases.
+- All user-visible fields in the output JSON must follow `{{lang_output_text}}`. Only source literals such as API names, field names, route paths, codes, and `PageN` traces may remain in their original form.
 
 ## 全量要求（本批次）
 - 你必须**仅针对当前这一条设计点**（上述 design_element / sub_category 与 input_data 中的 sub_id、子模块）生成用例。
-- **优先保证不遗漏关键测试意图**；在此前提下，data 数组**尽量控制在 1～2 条**，复杂场景可放宽到 3～4 条，但不可返回空数组。
+- **data 数组不可为空**。至少包含 1 条正向用例（正常流程/正确输入）和 1 条负向用例（异常/边界/错误输入）。
+- 简单场景：1 正 + 1 负；复杂场景：1 正 + 2-3 负或 2 正 + 1-2 负。总共控制在 2～4 条。
 - 「严禁重复」仅指**本批次 JSON 内**不要重复同一测试意图；不同子模块/不同设计点之间允许标题或步骤相似。
 
 {{web_three_language_note}}
@@ -338,7 +446,7 @@ design_element: {{input_data.sub_category}}
 
 ## 测试用例生成规则和要求
 	###测试策略
-      "TestCoverage": "Ensure the test cases cover all functional requirements, boundary conditions, edge cases, and error scenarios. Use Equivalence Partitioning (EP), Boundary Value Analysis (BVA), and Cause-Effect Graphing methods where applicable.",
+      "TestCoverage": "Ensure the test cases cover all functional requirements, boundary conditions, edge cases, and error scenarios. Use Equivalence Partitioning (EP), Boundary Value Analysis (BVA), and Cause-Effect Graphing methods where applicable. IMPORTANT: If the input data contains constraint information (time windows, amount thresholds, retention periods, SLA promises, compliance requirements), you MUST generate at least ONE test case that targets each constraint's boundary value. For example, a 'before 4:55 PM' cutoff constraint must produce a test case verifying behavior exactly at the cutoff time.",
       "TestObjectives": "Each test case should verify a specific behavior or feature as described in the requirements. Ensure that you are testing both positive and negative scenarios to validate system functionality.",
       "RiskBasedTesting": "Focus on high-risk areas such as business-critical workflows, third-party integrations, and security-sensitive functionalities.",
       "AutomationFeasibility": "Identify test cases that can be automated for regression testing, considering tools like Selenium, JUnit, or Postman for API testing."
@@ -374,7 +482,7 @@ design_element: {{input_data.sub_category}}
 	2. 根据测试范围和重点，上述提到的测试策略，测试设计技术，测试用例结构，最佳实践和测试数据考虑点，为需要生成测试用例的功能点，生成符合要求的测试用例。
 	3. 如果测试点很多,需要划分为同一组,目的是同组测试点流程可以连通,减少相同的前提操作.同组流程可以放在一个list中
 	4. 若页面输入输出要素同时存在一个流程中,需要划分为同一组
-	5. 输出格式： markdown 文本,以json 格式列表的形式输出详细测试点的名称,例如```json{"data":[{其它测试点1},{其它测试点2}]}```
+	5. 输出格式：只输出 JSON 对象。不要 markdown、不要解释、不要 ```json 代码块包裹。例如 {"data":[{...},{...}]}
   6. 输出语言格式保持和需求文档的内容一致,输出内容为{{lang_output_text}}
   7. 同一批次 data 内：相同测试意图不得换句重复；不同批次之间不要求互斥去重
   8. 数量策略：先完整覆盖当前设计点，再做轻量化表达；若一条不足以覆盖关键风险，可增加到 3～4 条，不要机械限制为固定条数。
@@ -446,12 +554,12 @@ English JSON only, same structure as Web template examples below.
 
 ## 测试用例生成规则和要求
 	###测试策略
-      "TestCoverage": "Cover success and error responses, validation, auth, and contract boundaries for the API surface.",
+      "TestCoverage": "Cover success and error responses, validation, auth, and contract boundaries for the API surface. IMPORTANT: If the input data contains constraint information (time windows, amount thresholds, retention periods, SLA promises, compliance requirements), you MUST generate at least ONE test case that targets each constraint's boundary value.",
       "AutomationFeasibility": "Prefer assertions expressible in Postman/curl style (status, JSON body fields, headers)."
 
 	## 任务流程:
 	1. 从 requirement 抽取可验证的 API 行为。
-	2. 输出 markdown 包装的 json：```json{"data":[...]}```
+	2. 只输出 JSON 对象：{"data":[...]}，不要 markdown，不要代码块包裹。
   3. 同一批次内不重复同一测试意图。
 
 	- Examples:
@@ -498,12 +606,13 @@ sub_id: {{input_data.sub_id}}
 5. Use relative endpoint paths in steps. Do not invent `{host}`, `{port}`, gateway addresses, or environment placeholders unless the source document explicitly gives them.
 6. If authentication is required but token acquisition is not fully specified, use a stable prerequisite such as `Use a valid Bearer token from test fixture` instead of inventing system details.
 7. Do not use vague wording such as `e.g.`, `maybe`, `likely`, `appropriate`, `not 200`.
+8. All user-visible fields in the output JSON must follow `{{lang_output_text}}`. Only endpoint literals, parameter names, field names, protocol names, status codes, and `PageN` traces may remain in their original form.
 
 ## Polarity rule
-- If `sub_id` is `40` or `sub_category` is `Positive logic`, generate success-only cases.
+- If `sub_id` is `40`, generate success-only cases.
   - Allowed intent: valid request, valid auth, valid required fields, successful response contract assertions.
   - Forbidden intent: missing field, invalid token, malformed payload, unauthorized, forbidden, validation failure.
-- If `sub_id` is `41` or `sub_category` is `Negative logic`, generate error-only cases.
+- If `sub_id` is `41`, generate error-only cases.
   - Prefer the highest-confidence risks supported by the evidence: missing auth, invalid auth format, missing required field, invalid enum/type, wrong content-type, invalid path/query/body.
   - Do not generate success cases in this batch.
 
@@ -524,7 +633,7 @@ sub_id: {{input_data.sub_id}}
 - `test_type`: positive=`1`, negative=`-1`.
 
 ## Output
-Return English JSON only:
+Return JSON only. Keep the structure fixed, and make all user-visible text follow `{{lang_output_text}}`:
 ```json
 {"data":[
   {
@@ -570,7 +679,7 @@ design_element: {{test_content_1}}
 
 ## 测试用例生成规则和要求
 	###测试策略
-      "TestCoverage": "Ensure the test cases cover all functional requirements, boundary conditions, edge cases, and error scenarios. Use Equivalence Partitioning (EP), Boundary Value Analysis (BVA), and Cause-Effect Graphing methods where applicable.",
+      "TestCoverage": "Ensure the test cases cover all functional requirements, boundary conditions, edge cases, and error scenarios. Use Equivalence Partitioning (EP), Boundary Value Analysis (BVA), and Cause-Effect Graphing methods where applicable. IMPORTANT: If the input data contains constraint information (time windows, amount thresholds, retention periods, SLA promises, compliance requirements), you MUST generate at least ONE test case that targets each constraint's boundary value. For example, a 'before 4:55 PM' cutoff constraint must produce a test case verifying behavior exactly at the cutoff time.",
       "TestObjectives": "Each test case should verify a specific behavior or feature as described in the requirements. Ensure that you are testing both positive and negative scenarios to validate system functionality.",
       "RiskBasedTesting": "Focus on high-risk areas such as business-critical workflows, third-party integrations, and security-sensitive functionalities.",
       "AutomationFeasibility": "Identify test cases that can be automated for regression testing, considering tools like Selenium, JUnit, or Postman for API testing."

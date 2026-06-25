@@ -25,18 +25,24 @@
 	"life":1000
 }
 */
-//# Agent status
+// Agent status
 assign("status", 'Agent is running')
 // fileId
 when('fn.hasValue(kbSpaceFileId)', {
-	//# DocumentId
+	// DocumentId
     assign("documentId", "{{kbSpaceFileId}}")
 
-    //# Read file from kbs
+    // Read file from kbs
     n_api_content,act_kb.select?name='kbs_doc_page_parse'&column='fileName,content'&where='{"documentId":"{{kbSpaceFileId}}"}'
 
     // file name
     n_file_name,act_func?script='''return n_api_content[0].fileName'''
+
+    // related requirement path
+    n_requirement_data,act_kb.selectBy?sql="select store_uri from kb_spaces_folder_knowledge where id='{{kbSpaceFileId}}'"
+
+    // requirement uri
+    n_related_requirement,act_func?script='''return n_requirement_data[0].store_uri'''
 
     // 判断文件是否为JSON内容：以内容本身为准，避免Markdown被当成JSON脚本执行，同时允许非.json文件名的JSON/OpenAPI内容
     n_is_json,act_func?script='''
@@ -52,7 +58,7 @@ when('fn.hasValue(kbSpaceFileId)', {
         n_file_content,agt_gen_openapi?kbSpaceFileId={{documentId}}&version={{test_no}}
     })
 
-    //# Check if it is a JSON document for FastAPI
+    // Check if it is a JSON document for FastAPI
     n_check_result,tpl_check_is_openapi,psr_json
 
     when('n_check_result.is_openapi == true',{
@@ -122,6 +128,9 @@ when('fn.hasValue(kbSpaceFileId)', {
         })();
         '''         
 
+        // 初始化收集数组
+        assign("n_case_json_list", "[]")
+        
         // 重组api数据
         foreach('n_api','n_api_list', {
             // 单个api接口数据
@@ -152,6 +161,8 @@ when('fn.hasValue(kbSpaceFileId)', {
                             method: method.toUpperCase(),
                             api_name: path,
                             file_name: fileName,
+                            document_id: "{{kbSpaceFileId}}",
+                            related_requirement: "{{n_related_requirement}}",
                             application: application,
                             test_no: test_no,
                             content: openApiJson
@@ -162,10 +173,62 @@ when('fn.hasValue(kbSpaceFileId)', {
             })();
             '''
 
+            // Build test case json content
+            n_case_json,act_func?js='''
+            (function() {
+                let caseData = {{n_data}};
+                return JSON.stringify(caseData, null, 2);
+            })();
+            '''
+
+            // 收集单个api的测试用例数据到数组
+            act_func?script='''
+                def currentList = fn.list(n_case_json_list) ?: []
+                def caseData = fn.list(n_case_json) ?: []
+                currentList.addAll(caseData)
+                fn.put('n_case_json_list', currentList)
+            '''
+
             // Send single api test data to kb
 	        act_kb.defineAndImportData?tableName='kb_api_testcase'&data='{{n_data}}'
 
         })
+
+        // Build test case kb path
+        n_case_file_path,act_func?js='''
+        (function() {
+            const requirementUri = String("{{n_related_requirement}}" || '').replace(/\\/g, '/');
+            const fileName = String("{{n_file_name}}" || '');
+            const baseFileName = fileName.replace(/\.[^/.]+$/, '');
+            const caseDir = requirementUri.includes('/Requirement/')
+                ? requirementUri.split('/Requirement/')[0] + '/Test Case/'
+                : requirementUri.replace(/\/[^\/]*$/, '/Test Case/');
+            return caseDir + 'test_case_' + baseFileName + '.xlsx';
+        })();
+        '''
+
+        // 将所有收集的测试用例数据合并后一次性写入xlsx文件（移到循环外）
+        // Convert field names and ensure File Name is first
+        n_export_case_data,act_func?script='''
+            def rows = n_case_json_list
+            if (rows == null || !(rows instanceof List)) rows = []
+            return rows.collect { r ->
+                def out = new LinkedHashMap()
+                out["File Name"] = r.file_name == null ? "" : r.file_name
+                out["Api Name"] = r.api_name == null ? "" : r.api_name
+                out["Method"] = r.method == null ? "" : r.method
+                out["Description"] = r.description == null ? "" : r.description
+                out["Application"] = r.application == null ? "" : r.application
+                out["Test No"] = r.test_no == null ? "" : r.test_no
+                out["Document Id"] = r.document_id == null ? "" : r.document_id
+                out["Related Requirement"] = r.related_requirement == null ? "" : r.related_requirement
+                out["Content"] = r.content == null ? "" : r.content.toString()
+                return out
+            }
+        '''
+        n_case_file_msg,act_artifact.write?filepath='{{n_case_file_path}}'&data='{{n_export_case_data}}'
+        // Trigger xlsx file sync
+        n_case_file_sync_msg,act_artifact.triggerSync?filepath='{{n_case_file_path}}'&forceSync=true&ensureKrd=true
     },
     {
         // The document format of the API is error
@@ -175,7 +238,7 @@ when('fn.hasValue(kbSpaceFileId)', {
 
 },
 {
-    //# Error
+    // Error
     assign("result", "Need to provide documents")
 })
 

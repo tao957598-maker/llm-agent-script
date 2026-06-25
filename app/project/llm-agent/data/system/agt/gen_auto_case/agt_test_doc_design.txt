@@ -14,12 +14,23 @@
 		{
 			"name":"pipelineDesignMode",
 			"label":"web|api，默认 web"
+		},
+		{
+			"name":"outputLanguage",
+			"label":"Output Language",
+			"type":"select",
+			"defaultValue":"en",
+			"args":[
+				{"label":"English","value":"en"},
+				{"label":"Chinese","value":"zh"},
+				{"label":"Traditional Chinese","value":"tw"}
+			]
 		}
 	],
 	"llmType":"alias.highquality",
 	"resultPlan":"final_design_result",
 	"life":10000,
-	"version":1
+	"version":2
 }
 */
 
@@ -34,6 +45,37 @@ n_pipeline_design_mode_val,act_func?script='''
     return v
 '''
 assign('pipeline_design_mode', '{{n_pipeline_design_mode_val}}')
+
+assign('lang_output_hint', '{{fn.optional(outputLanguage, "en")}}')
+assign('lang_output_text', '{{fn.optional(outputLanguage, "en")}}')
+
+// 测试小项多语言映射表
+n_sub_cat_lang_map,act_func?script='''
+    return [
+        "10": ["Navigation flow", "导航流程", "導航流程"],
+        "11": ["Interaction", "交互功能", "交互功能"],
+        "13": ["Static content", "静态内容", "靜態內容"],
+        "15": ["Localization and internationalization", "本地化与国际化", "本地化與國際化"],
+        "20": ["Function validation: field input", "功能验证-栏位输入控制", "功能驗證-欄位輸入控制"],
+        "22": ["Function validation: data rules", "功能验证-数据", "功能驗證-數據"],
+        "31": ["Process: enter feature flow", "流程-进入功能流程", "流程-進入功能流程"],
+        "32": ["Process: normal business", "流程-正常业务流程", "流程-正常業務流程"],
+        "33": ["Process: exception business", "流程-异常业务流程", "流程-異常業務流程"],
+        "40": ["Logic: positive logic", "逻辑-正面逻辑", "邏輯-正面邏輯"],
+        "41": ["Logic: negative logic", "逻辑-反面逻辑", "邏輯-反面邏輯"],
+        "43": ["Logic: trigger conditions", "逻辑-逻辑触发条件", "邏輯-邏輯觸發條件"]
+    ]
+'''
+when('outputLanguage == "zh"', {
+  assign('lang_output_text', '中文')
+})
+when('outputLanguage == "tw"', {
+  assign('lang_output_text', '繁体中文')
+})
+when('outputLanguage == "en"', {
+  assign('lang_output_text', '英文')
+})
+
 when('fn.hasValue(input_data)', {
     // [DESIGN-STEP2·page] page 必须由 Step1 从 parse.page 直接传入，Step2 不再从 source 推断
     n_design_input_page_guard,act_func?script='''
@@ -59,16 +101,47 @@ when('fn.hasValue(input_data)', {
     assign('design_pages', '{{n_design_pages_union}}')
     // [DESIGN-STEP2·pages] agt_get_page_data：design_pages 为 main+submodule 页并集字符串；documentId 必须与 root 传入的 effectiveDocumentId 一致否则 KB 查空
     n_pages,agt_get_page_data?page={{design_pages}}&documentId="{{documentId}}"
+    // [MULTI-DOC] build source-aware page query; prefer fileName#PageN refs, fallback to legacy documentId+page
+    n_pages_source_where,act_func?script=''' 
+        def src = (design_pages ?: "").toString()
+        def byFile = new LinkedHashMap()
+        src.split(/[;,]/).each { raw ->
+            def t = (raw == null ? "" : raw.toString().trim())
+            if (!t) return
+            def idx = t.toLowerCase().lastIndexOf("#page")
+            if (idx <= 0) return
+            def fn = t.substring(0, idx).trim()
+            def pg = t.substring(idx + 5).replaceAll(/[^0-9]/, "").trim()
+            if (!fn || !pg) return
+            def list = byFile.get(fn)
+            if (list == null) {
+                list = new LinkedHashSet()
+                byFile.put(fn, list)
+            }
+            list.add(pg)
+        }
+        if (!byFile.isEmpty()) {
+            def clauses = []
+            byFile.each { fn, pages ->
+                def safeFn = fn.replace("'", "''")
+                clauses.add("(fileName='" + safeFn + "' and page in (" + pages.join(",") + "))")
+            }
+            return [whereSql: "(" + clauses.join(" or ") + ")"]
+        }
+        return [whereSql: 'documentId="{{documentId}}" and page in {{n_pages.pages}}']
+    '''
     // 查询kb_okp_page_data表，按page字段升序排序，筛选system_name='OKP'且page等于提取的数字的数据
     n_pages_data, act_kb.selectBy?sql='''
     select 
+    documentId,
+    fileName,
     page,
     CASE
         WHEN analysis_content IS NULL OR analysis_content = '' THEN content
         ELSE analysis_content
     END AS content
     from kbs_doc_page_parse 
-    where documentId="{{documentId}}" and page in {{n_pages.pages}} order by page asc'''
+    where {{n_pages_source_where.whereSql}} order by fileName, page asc'''
 
     // [DESIGN-STEP2·tpl] api 用 tpl_get_design_api（HTTP 契约）；web 用 tpl_get_design2；二者共用 tpl_design_rm 后处理
     when('pipeline_design_mode == "api"', {
@@ -95,6 +168,11 @@ when('fn.hasValue(input_data)', {
                             "sub_id": itemList[1]?.toString() ?: ''
                         ])
                     }
+                } else if(item instanceof Map) {
+                    result.add([
+                        "sub_category": item.sub_category?.toString() ?: item.Sub_category?.toString() ?: '',
+                        "sub_id": item.sub_id?.toString() ?: item.Sub_id?.toString() ?: ''
+                    ])
                 }
             }
         }
@@ -129,6 +207,13 @@ when('fn.hasValue(input_data)', {
 
         def isApiPipeline = false
         try { isApiPipeline = "api".equalsIgnoreCase((pipeline_design_mode ?: "").toString()) } catch (Throwable ignoreApi) { isApiPipeline = false }
+        def lang = (lang_output_text ?: "en").toString()
+        def getSubCat = { subId ->
+            def map = n_sub_cat_lang_map
+            def arr = map?.get(subId)
+            if (!arr) return "Category " + subId
+            return lang == "涓枃" ? arr[1] : (lang == "绻佷綋涓枃" ? arr[2] : arr[0])
+        }
 
         // Step2 收口但不漏：按模式严格分流（Web/API 规则独立，避免互相污染）
         // - api：只允许接口契约/鉴权/流程/逻辑相关 id，严格屏蔽 UI 类 id（10/11/13/15/16/17/18）
@@ -180,6 +265,14 @@ when('fn.hasValue(input_data)', {
 
         processed_data_list.each { row ->
             def tc = row.test_content instanceof List ? (row.test_content as List) : []
+            tc.each { m ->
+                if (!(m instanceof Map)) return
+                def sid = (m["sub_id"] ?: "").toString().trim()
+                def sc = (m["sub_category"] ?: "").toString().trim()
+                if (sid && !sc) {
+                    m["sub_category"] = getSubCat(sid)
+                }
+            }
             def filtered = tc.findAll { m ->
                 def id = (m["sub_id"] ?: "").toString()
                 allow.contains(id)
@@ -261,19 +354,19 @@ when('fn.hasValue(input_data)', {
             def tc = target.test_content instanceof List ? (target.test_content as List) : []
             if (!isApiPipeline) {
                 if (needNavInteract && !allIds.contains("10") && !allIds.contains("11")) {
-                    tc.add(["sub_category": "Navigation flow: menu hierarchy, sub-page navigation", "sub_id": "10"])
+                    tc.add(["sub_category": getSubCat("10"), "sub_id": "10"])
                     allIds.add("10")
                 }
                 if (isButtonMod && !allIds.contains("11")) {
-                    tc.add(["sub_category": "Interaction: buttons, links, download, navigation", "sub_id": "11"])
+                    tc.add(["sub_category": getSubCat("11"), "sub_id": "11"])
                     allIds.add("11")
                 }
                 if (isButtonMod && !allIds.contains("31") && !allIds.contains("32")) {
-                    tc.add(["sub_category": "Process: enter feature flow", "sub_id": "31"])
+                    tc.add(["sub_category": getSubCat("31"), "sub_id": "31"])
                     allIds.add("31")
                 }
                 if (hasLanguageEvidence && !allIds.contains("15")) {
-                    tc.add(["sub_category": "Localization and internationalization: EN TC SC UI text", "sub_id": "15"])
+                    tc.add(["sub_category": getSubCat("15"), "sub_id": "15"])
                     allIds.add("15")
                 }
             }
@@ -294,20 +387,6 @@ when('fn.hasValue(input_data)', {
                 fallbackIds.add("15")
             }
 
-            def idNameMap = [
-                "10":"Navigation flow: menu hierarchy, sub-page navigation",
-                "11":"Interaction: buttons, links, download, navigation",
-                "13":"Static content: labels, help text, button text",
-                "15":"Localization and internationalization: EN TC SC UI text",
-                "20":"Function validation: field input controls",
-                "22":"Function validation: data rules and validation",
-                "32":"Process: normal business process",
-                "33":"Process: exception business process",
-                "40":"Logic: positive logic",
-                "41":"Logic: negative logic",
-                "43":"Logic: trigger conditions"
-            ]
-
             def row = processed_data_list ? processed_data_list[0] : null
             if (row == null) {
                 row = ["design_element": (isNonInterface ? "Process" : "UI Page"), "test_content": []]
@@ -318,7 +397,7 @@ when('fn.hasValue(input_data)', {
             def localSeen = new LinkedHashSet(tc.collect { (it["sub_id"] ?: "").toString() })
             fallbackIds.each { fid ->
                 if (!localSeen.contains(fid)) {
-                    tc.add(["sub_category": (idNameMap[fid] ?: ("Category " + fid)), "sub_id": fid])
+                    tc.add(["sub_category": getSubCat(fid), "sub_id": fid])
                     localSeen.add(fid)
                 }
             }
@@ -452,6 +531,18 @@ Answer only if you are confident
 其中"test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id']...],list中的元素必须是list
 
 # 模块内容
+## Highest-priority evidence rules
+- 只输出被当前子模块文本或当前引用页码证据直接支持的 `sub_id`，不要为了“看起来覆盖完整”而补点。
+- 不得借用同页其他兄弟子模块的证据。
+- 不要仅凭 EN、TC、SC 这类缩写、双语示例或通用产品假设推断出多语言/i18n；只有需求明确要求多语言展示、本地化、翻译后的标签/提示、区域格式、时区或语言切换时，才能包含 `15`。
+- 除非当前子模块明确出现这些动作，否则不要推断出导航、上传、下载、按钮流程类测试点。
+- 权限/访问控制子模块应只承载允许、拒绝、鉴权、访问受限相关证据；不要把通用校验、结果展示或数据异常场景挂到这里。
+- 如果需求明确列出了业务规则、错误码、组合逻辑、来源规则或输出规则，应优先选择能映射这些显式规则的 id，而不是宽泛的 UI/内容类别。
+- 当证据不足时，应返回更少的测试点，而不是为了凑数量补齐目标条数。
+- 如果当前子模块被标记为“【非界面模块】”，不要输出以页面展示、页面静态内容、页面导航为主的测试点；应优先选择逻辑、规则、流程、数据或权限相关测试点。
+- 如果当前子模块是“权限校验”，不要把普通查询成功、AND 组合查询、结果展示格式这类场景挂到该子模块下。
+- 如果当前子模块是“后端查询处理”，优先覆盖参数规则、匹配逻辑、来源正确性、错误码分支和返回值规则；不要默认补页面类测试点。
+
 {{input_data}}
 
 # 具体页面内容,存在章节内容跨页面内容.
@@ -489,19 +580,50 @@ Answer only if you are confident
 |              | 逻辑-各条件逻辑组合                          | 业务处理描述、业务规则说明            | 44         |
 
 # 根据这个模块内容和页面内容,符合哪些设计要素,按照设计要素输出测试内容.
-# 保持原有的语言类型,并输出具有层级关系的json.输出内容必须为英文,design_element内容必须为英文
+# 保持原有的语言类型,并输出具有层级关系的json.输出内容必须为{{lang_output_text}},design_element内容必须为{{lang_output_text}}
+
+# 测试小项多语言映射表（必须严格按照此表输出对应语言）
+# ID | 英文 | 中文 | 繁体中文
+# 10 | Navigation flow | 导航流程 | 導航流程
+# 11 | Interaction | 交互功能 | 交互功能
+# 12 | State transition | 状态转换 | 狀態轉換
+# 13 | Static content | 静态内容 | 靜態內容
+# 14 | Dynamic content | 动态内容 | 動態內容
+# 15 | Localization and internationalization | 本地化与国际化 | 本地化與國際化
+# 16 | Device rendering | 设备渲染 | 設備渲染
+# 17 | Visual consistency | 视觉一致性 | 視覺一致性
+# 18 | Responsive layout | 响应式布局 | 響應式佈局
+# 20 | Function validation: field input | 功能验证-栏位输入控制 | 功能驗證-欄位輸入控制
+# 21 | Function validation: field output | 功能验证-栏位输出显示 | 功能驗證-欄位輸出顯示
+# 22 | Function validation: data rules | 功能验证-数据 | 功能驗證-數據
+# 30 | Process: login flow | 流程-登录流程 | 流程-登入流程
+# 31 | Process: enter feature flow | 流程-进入功能流程 | 流程-進入功能流程
+# 32 | Process: normal business | 流程-正常业务流程 | 流程-正常業務流程
+# 33 | Process: exception business | 流程-异常业务流程 | 流程-異常業務流程
+# 34 | Process: query result | 流程-业务完成后查询结果流程 | 流程-業務完成後查詢結果流程
+# 40 | Logic: positive logic | 逻辑-正面逻辑 | 邏輯-正面邏輯
+# 41 | Logic: negative logic | 逻辑-反面逻辑 | 邏輯-反面邏輯
+# 42 | Logic: system messages | 逻辑-各逻辑触发系统提示信息 | 邏輯-各邏輯觸發系統提示資訊
+# 43 | Logic: trigger conditions | 逻辑-逻辑触发条件 | 邏輯-邏輯觸發條件
+# 44 | Logic: condition combinations | 逻辑-各条件逻辑组合 | 邏輯-各條件邏輯組合
+
 ```json
 {"data":[{"design_element":"测试项名称","test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id'],...]},{...},...]}
 
 ```
 其中"test_content":[['测试小项简称1','测试小项1的id'],['测试小项简称2','测试小项2的id']...],list中的元素必须是list
 必须遵守以下选择规则：
-1) 仅输出输入文本有明确证据支撑的测试小项，不可为了“覆盖完整”而补充无证据项。
+1) 仅输出输入文本有明确证据支撑的测试小项，不可为了"覆盖完整"而补充无证据项。
 2) 优先输出与当前模块直接相关的测试小项；同一模块建议 2-6 个小项，先保证覆盖关键风险，再做轻量表达，避免冗余泛化。
 3) 若模块描述出现按钮/跳转/上传/下载，必须包含 10 或 11 以及至少一个流程项（31/32/33）。
 4) 同一 design_element 内，如果多个小项只是措辞不同但流程/断言本质相近，只保留最能代表风险的一条，不要平行扩写。
 5) 若模块描述出现多语言/EN/TC/SC/localization，必须包含 15。
-5) 16/17/18（设备渲染/视觉一致性/响应式）仅在输入文本明确提及相关要求时才可输出。
+6) 16/17/18（设备渲染/视觉一致性/响应式）仅在输入文本明确提及相关要求时才可输出。
+7) **语言强制约束**：测试小项简称（sub_category）必须严格使用上表中 {{lang_output_text}} 对应的语言列：
+   - 英文时严格按照"英文"列输出，如：Navigation flow, Interaction, Static content
+   - 中文时严格按照"中文"列输出，如：导航流程，交互功能，静态内容
+   - 繁体中文时严格按照"繁体中文"列输出，如：導航流程，交互功能，靜態內容
+   - 严禁混用不同语言，严禁自定义描述，必须从上方映射表中选择对应语言的精确文本
 
 # 模块内容
 {{input_data}}
@@ -541,7 +663,7 @@ Important:
 
 (Full id legend is identical to the Web template when you need numeric ids.)
 
-# Output JSON (English, same shape as Web):
+# Output JSON ({{lang_output_text}}, same shape as Web):
 ```json
 {"data":[{"design_element":"METHOD path or contract area","test_content":[["Positive logic","40"],["Negative logic","41"]]},...]}
 ```

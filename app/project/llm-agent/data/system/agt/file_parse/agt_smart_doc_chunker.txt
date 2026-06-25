@@ -144,8 +144,42 @@ assign('chunks_config', '{{fn.json("chunks_num,chunkSize,chunks_type,chunkMethod
 log('========================================================================================================================================================')
 log('{{chunks_config}}')
 log('========================================================================================================================================================')
-// 切片处理
-n_result_data, act_api.doExecuteDynamic?name="file_parse_chunks"&dynamicParamData='{"content_list":{{content_list}},"chunks_config":{{chunks_config}}}'
+// 切片处理，避免单次请求超过multipart大小限制
+n_content_batches, act_func?script='''
+def sourceList = n_result
+if (!sourceList) {
+    return []
+}
+def maxBytes = 800 * 1024
+def batches = []
+def currentBatch = []
+def currentBytes = 0
+sourceList.each { item ->
+    def itemBytes = fn.str(item).getBytes("UTF-8").length + 256
+    if (currentBatch && currentBytes + itemBytes > maxBytes) {
+        batches << currentBatch
+        currentBatch = []
+        currentBytes = 0
+    }
+    currentBatch << item
+    currentBytes += itemBytes
+}
+if (currentBatch) {
+    batches << currentBatch
+}
+return batches
+'''
+n_result_data, act_func?script='''return []'''
+log('content batch count={{n_content_batches?size}}')
+foreach('n_content_batch', 'n_content_batches', {
+    n_batch_result, act_api.doExecuteDynamic?name="file_parse_chunks"&dynamicParamData='{"content_list":{{n_content_batch.item}},"chunks_config":{{chunks_config}}}'
+    act_func?script='''
+    if (n_batch_result) {
+        n_result_data.addAll(n_batch_result)
+    }
+    return n_result_data
+    '''
+})
 
 
 // 获取API返回的meta_data数据

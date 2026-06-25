@@ -2,30 +2,61 @@
 {
 	"title":"test demo tmp",
 	"description":"test demo tmp",
-	"parameter":"{\"name\":\"userInput\",\"label\":\"客户问题\",\"type\":\"textarea\"}",
+	"resultPlan":"s",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求"
+		},
+		{
+			"name":"kbSpaceId",
+			"label":"目录ID",
+			"type":"knowledge_fold"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID",
+			"type":"knowledge_space"
+		}
+	],
 	"uiEntrance":"chatdoc_QA",
-	"resultPlan":"chatdoc_answer,n_combined_result",
-	"life":100,
 	"displayOrder":0,
-	"version":2
+	"version":1
 }
 */
-// test demo tmp
-assign('system_prompt',"/kbs/check_recognition/image_marked_20251229170149.jpg")
+// workspace 例如知识空间 /claude_code workspace=claude_code
 
+// 根据文件ID查询知识空间目录名称。
+n_result, act_kb.selectBy?sql='''SELECT folder_name      FROM llm_agent.kb_spaces_folder t    WHERE id= {{kbSpaceId}}'''
 
+assign('workspace', '{{n_result[0].folder_name}}')
+// 任务 根据这个PPT md文档内容 生成PPT文件
+assign('message', '{{userInput}}')
+// 知识空间目录 不要`/`开头
+assign('cwd', '{{workspace}}')
+assign('wait', '{"bool":false}')
+assign('codex_param', '{{fn.json("message, message, wait, wait.bool,cwd,cwd")}}')
 
-//## Generate report: Display indicator {{varName}} chart.
-act_memory.assign?var='n_chart_absolute_path'&value='{{system_prompt}}'&type='image'
-//## Generate report: Display indicator {{varName}} chart.
-assign('chatdoc_answer1','''
-# 公网图片
-![图像描述](http://172.18.2.14:5171/assets/aiBtn-Drv4kxTw.png)
-# 知识空间图片路径
+// 执行任务 remote RunShell api res
+n_api_result, act_api.doExecuteDynamic?name='send_codex_msg'&dynamicParamData='{{codex_param}}'
 
-![图像描述]({{n_chart_absolute_path}})
-''') 
-n_combined_result,act_memory.assign?value='''{{chatdoc_answer1}}'''&type=md
-
-assign('chatdoc_answer1','''{{n_combined_result}}''') 
-
+assign('thread_id', '{{n_api_result.thread_id}}')
+assign('turn_id', '{{n_api_result.turn_id}}')
+// 远端入参
+assign('codex_param', '{{fn.json("thread_id, thread_id, turn_id, turn_id")}}')
+//# Cloud Shell Res
+n_codex_result_origin, act_api.doExecuteDynamic?name='get_codex_msg'&dynamicParamData='{{codex_param}}'
+when('n_codex_result_origin.output.is_complete == false', {
+    // 
+	act_flow.wait?second=5
+    act_flow.go?plan=n_codex_result_origin
+})
+// 文件扫描到知识空间接口文档
+act_kbs.fileWalkToKbs?fullPath={{workspace}}
+assign("need_define_last_result", "true")
+// diff格式数据
+assign("define_last_result", "{{n_codex_result_origin.output.diff}}")
+assign("need_chat_last_result", "true")
+// 最后总结
+assign("chat_last_result", "{{n_codex_result_origin.output.text}}")
+assign("final_result", "{{fn.json('need_define_last_result,need_define_last_result,define_last_result,define_last_result')}}")

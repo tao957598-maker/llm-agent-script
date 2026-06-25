@@ -47,7 +47,7 @@ when('!fn.hasValue(n_mongo_metadatas_data)', {
     foreach('mongo_metadata', 'n_mongo_metadatas_data', {
         assign('mongo_metadata_data', '{{mongo_metadata.item}}')
         // params - query by titles
-        assign("queryByTitles", '{"fileNamePrefix": "{{mongo_metadata_data.fileName}}", "titles": "{{mongo_metadata_data.title}}", "dataLimit": 10}')
+        assign("queryByTitles", '{"fileNamePrefix": "{{mongo_metadata_data.fileName}}", "titles": "{{mongo_metadata_data.title}}", "dataLimit": 5}')
 
         // Query metadata by title
         n_titleMetaData, act_api.doExecuteDynamic?name=ReportMetaData&dynamicParamData='{{queryByTitles}}'

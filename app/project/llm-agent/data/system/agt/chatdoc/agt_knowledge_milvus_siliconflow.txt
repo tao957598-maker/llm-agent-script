@@ -39,10 +39,34 @@ when("n_data_apiPostfix!=null && n_data_apiPostfix !=''", {
                     '''
 
     // 6.调用ocr的接口，将知识进行解析
-    n_api_data,act_api.doExecute?name={{n_api_code}}&fileNames='{{n_first_data.store_uri}}'
-    when("n_api_data.success==false", {
+    n_api_data,act_api.doExecute?name={{n_api_code}}&fileNames='{{n_first_data.store_uri}}'&params='{"run_async":false}'
+    when("fn.hasValue(n_api_data.file_name)", {
+        // 3.文档解析成功,解析zip包
+        n_parse_data,act_kbs.parseFile?relativePath='file_parse/{{n_api_data.file_name}}.zip'&kbData='{{n_first_data}}'
+
+        when("n_parse_data.success", {
+            // 4.验证是否需要进行分析
+            when("fn.hasValue(analysis_agent) && analysis_agent == 'agt_parse_main.file_parse'",{
+                // 5.调用分析agent
+                agt_parse_main.file_parse?kbSpaceFileId={{knowledgeId}}
+            })
+
+            // 6.解析完成，更新状态
+            act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"2","msg":""}'&where='{"id":{{knowledgeId}}}'
+            assign('sys_last_result', '{"status":2,"nodeName":"parse","msg":""}')
+        },{
+            // 4.解析失败，更新消息
+            act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"{{n_parse_data.msg}}"}'&where='{"id":{{knowledgeId}}}'
+            assign('sys_last_result', '{"status":0,"nodeName":"parse","msg":"{{n_parse_data.msg}}"}')
+        })
+    },{
         // 7.更新知识状态->fail
         act_kb.merge?name='kb_spaces_folder_knowledge'&columnValues='{"status":"0","msg":"Failed to access OCR service, please contact the system administrator"}'&where='{"id":{{knowledgeId}}}'
+        assign('sys_last_result', '{"status":0,"nodeName":"parse","msg":"Failed to access OCR service, please contact the system administrator"}')
+    })
+
+    on_failure({
+        assign('sys_last_result', '{"status":0,"nodeName":"parse","msg":"Failed to access OCR service, please contact the system administrator"}')
     })
 },{
      // 8.更新知识状态->fail

@@ -65,7 +65,7 @@ when('action == "FINISH"', {
 	when('action == "ASK_CONFIRM" || riskLevel == "HIGH"', {
 	   // Automatically determine whether manual confirmation is required based on risk level
 		when('allow_high_risk_action_safe == "true"', {
-			// Allow high risk action and Exec tool {{toolCode}}
+			//## Allow high risk action and Exec tool {{toolCode}}
 			n_tool_exec, act_plan.run?toolType={{toolType}}&code={{toolCode}}&parameters={{parameters}}
 			assign("n_tool_exec_map","{{fn.map(n_tool_exec)}}")
 			when('n_tool_exec_map.status == "SUCCESS"', {
@@ -86,7 +86,7 @@ when('action == "FINISH"', {
 			n_action_confirm, act_flow.pageConfirm?confirmTool=true&toolType={{toolType}}&toolCode={{toolCode}}&params={{toolParameters}}
 			// Exec confirm tool
 			when('fn.hasValue(n_action_confirm.confirmed)', {
-				// Confirmed exec tool {{toolCode}}
+				//## Confirmed exec tool {{toolCode}}
 				n_tool_exec, act_plan.run?toolType={{toolType}}&code={{toolCode}}&parameters={{n_action_confirm.confirmed}}
 				assign("n_tool_exec_map","{{fn.map(n_tool_exec)}}")
 				when('n_tool_exec_map.status == "SUCCESS"', {

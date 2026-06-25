@@ -32,7 +32,7 @@ n_if_need_confirm, act_func?script='''
 	import com.alibaba.fastjson2.JSON
 	import com.alibaba.fastjson2.JSONObject
 
-	def paramJson = fn.tool(tpl_choose_tool.type, tpl_choose_tool.name)
+	def paramJson = fn.toolDetail(tpl_choose_tool.type, tpl_choose_tool.name)
 
 	// 使用 Fastjson 解析 JSON
 	try {
@@ -74,7 +74,7 @@ when('tpl_choose_tool.type == "AGENT" && n_if_need_confirm', {
 		}
 
 		# 工具描述：
-		{{fn.tool(tpl_choose_tool.type, tpl_choose_tool.name)}}
+		{{fn.toolDetail(tpl_choose_tool.type, tpl_choose_tool.name)}}
 	''')
 	
 	//# 正在提取参数
@@ -133,7 +133,7 @@ define('tpl_choose_tool', '''
 {{kbSpaceFileId}}
 
 # 工具集列表：
-{{fn.toolset('API_Tool')}}
+{{fn.tools('API_Tool')}}
 
 ''')
 
@@ -163,6 +163,6 @@ define('tpl_parameter_extract', '''
 {{kbSpaceFileId}}
 
 # 工具描述：
-{{fn.tool(tpl_choose_tool.type, tpl_choose_tool.name)}}
+{{fn.toolDetail(tpl_choose_tool.type, tpl_choose_tool.name)}}
 {{fn.chatFlag('sys_prompt_parameter_extract', 'userInput', 'resultTip', '', 6)}}
 ''')

@@ -52,6 +52,8 @@ assign('system', '{{n_global_variable.system}}')
 n_get_page_path_info, act_rpa.send?command=GetPageInfo
 // 从页面信息中提取 path 并赋值到 page_url
 assign('page_url', '{{n_get_page_path_info[0].path}}')
+// 初始化 n_action_metadata 为空数组，确保它始终有值
+assign('n_action_metadata', '[]')
 // 基于 application/system/page_url 查询当前页面可执行动作及最小前置条件
 n_action_metadata,act_kb.select?name='kb_page_action_min_preconditions'&schema='auto_test'&column='action_id,action_name,action_type,preconditions'&where='{{fn.json("application,system,page_url,page_url")}}'
 // 当知识库未返回动作元数据（空值或空列表）时，调用表单构建 Agent 兜底生成动作数据
@@ -61,7 +63,10 @@ n_action_metadata_fallback,agt_form_data_build.test_form?application={{system}}&
 // 将兜底生成结果回写到 n_action_metadata，供后续链路统一使用
 assign('n_action_metadata', '{{n_action_metadata_fallback}}')
 })
-
+// 如果 n_action_metadata 仍为空，设置为空数组
+when('{{!fn.hasValue(n_action_metadata)}}', {
+    assign('n_action_metadata', '[]')
+})
 // 这里增加LLM 判断PAMP信息是否可用 可用的`n_action_metadata`下标是什么   根据下表取数据 重新赋值给n_action_metadata
 // 让 LLM 从候选 PAMP 信息中判断是否有匹配，并返回可用下标列表
 n_pamp_pick_index,tpl_pick_pamp_index,psr_json
@@ -69,15 +74,64 @@ n_pamp_pick_index,tpl_pick_pamp_index,psr_json
 when('fn.bool(n_pamp_pick_index.matched) && fn.hasValue(n_pamp_pick_index.index_list[0])', {
 // 根据 index_list 从候选 metadata 中提取多条可用项
 n_action_metadata_selected,act_func?script='''
-def metadata = {{n_action_metadata}}
-def indexList = {{n_pamp_pick_index.index_list}}
+def metadataStr = '{{n_action_metadata}}'
+def indexListStr = '{{n_pamp_pick_index.index_list}}'
+
 def picked = []
-indexList.each { idx ->
-    if (idx != null && idx >= 0 && idx < metadata.size()) {
-        picked << metadata[idx]
+def indexMatcher = (indexListStr =~ /(\d+)/)
+while (indexMatcher.find()) {
+    def idx = indexMatcher.group(1).toInteger()
+    def pattern = /\{\s*"action_id"\s*:\s*"[^"]+"/
+    def allMatches = (metadataStr =~ pattern)
+    def matchCount = 0
+    def targetMatch = null
+    allMatches.each { match ->
+        if (matchCount == idx) {
+            targetMatch = match
+        }
+        matchCount++
+    }
+    if (targetMatch != null) {
+        def startIdx = metadataStr.indexOf(targetMatch)
+        def endIdx = startIdx
+        def braceCount = 0
+        def inString = false
+        def escapeNext = false
+        for (int i = startIdx; i < metadataStr.length(); i++) {
+            def c = metadataStr.charAt(i)
+            if (escapeNext) {
+                escapeNext = false
+                continue
+            }
+            if (c == '\\\\') {
+                escapeNext = true
+                continue
+            }
+            if (c == '"') {
+                inString = !inString
+                continue
+            }
+            if (!inString) {
+                if (c == '{') braceCount++
+                if (c == '}') {
+                    braceCount--
+                    if (braceCount == 0) {
+                        endIdx = i
+                        break
+                    }
+                }
+            }
+        }
+        if (endIdx > startIdx) {
+            picked << metadataStr.substring(startIdx, endIdx + 1)
+        }
     }
 }
-return picked
+if (picked.isEmpty()) {
+    return '[]'
+} else {
+    return '[' + picked.join(',') + ']'
+}
 '''
 // 将筛选后的结果重新赋值给 n_action_metadata
 assign('n_action_metadata', '{{n_action_metadata_selected}}')
@@ -218,8 +272,8 @@ define('tpl_gen_selenium_py', '''
     5. 根据JSON格式结果和`局部测试步骤`目的,决定是否生成符合局部测试步骤要求的Python代码。
 - Constrains: 
   1.优先使用`autotest`库中封装的方法:
-	- clickElementByItem(browser, item, waitSecond, disableLog), 用于元素点击. 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False.
-  - sendKeysToElementByItem(browser, item, keys),用于文字输入. 基于item查询对应的xpath,并基于xpath定位元素,输入keys所代表的字符.成功返回True,否则返回False.
+	- clickElementByItem(browser, item, waitSecond, disableLog), 用于元素点击. 基于item查询对应的xpath,并基于xpath定位元素,进行点击.waitSecond为可选参数,默认等待1秒,对于搜索按钮建议等待5秒.disableLog为可选参数,默认为False,不禁止输出日志.点击成功返回True,否则返回False. **对于按钮点击，item参数必须使用action_id或element_id（如"id_1580495499"），不能使用action_name或name。**
+  - sendKeysToElementByItem(browser, item, keys),用于文字输入. 基于item查询对应的xpath,并基于xpath定位元素,输入keys所代表的字符.成功返回True,否则返回False. **对于输入框，item参数必须使用action_id或element_id（如"id_2581586144"）。**
   - selectByItem(browser, item, condition), 可以直接作用于要选择的选项元素,item 参数应该直接指向可选择的选项元素,condition是选项名称; 
     
 	
@@ -311,7 +365,7 @@ define('tpl_pick_pamp_index', '''
 - 当前步骤：
 {{current_step}}
 
-- PAMP候选信息（数组）：
+- PAMP候选信息（数组，可能为空）：
 {{n_action_metadata}}
 ''')
 

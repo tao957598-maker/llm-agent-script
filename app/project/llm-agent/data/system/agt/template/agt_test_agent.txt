@@ -1,9 +1,17 @@
 /*
 {
 	"title":"123123agt_bug_refresh_newagent_2508270001",
-	"parameter":[],
+	"parameter":[{
+			"name":"userInput",
+			"label":"需求",
+			"required":true,
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}],
 	"tag":"lj",
 	"version":1
 }
 */
-assign('abccccc','')
+// userInputuserInput
+assign('abccccc','{{userInput}}')

@@ -2,7 +2,7 @@
 {
 	"title":"Gen testcase by KB",
 	"description":"Read requirement document to generate test cases",
-	"parameter":"{\"name\":\"input_data\",\"label\":\"Knowledge space path\"},{\"name\":\"outputLanguage\",\"label\":\"Output Language\",\"type\":\"select\",\"defaultValue\":\"en\",\"args\":[{\"label\":\"English\",\"value\":\"en\"},{\"label\":\"Chinese\",\"value\":\"zh\"},{\"label\":\"Traditional Chinese\",\"value\":\"tw\"}]}",
+	"parameter":"{\"name\":\"input_data\",\"label\":\"Knowledge space path\"},{\"name\":\"systemName\",\"label\":\"System Name\"},{\"name\":\"outputLanguage\",\"label\":\"Output Language\",\"type\":\"select\",\"defaultValue\":\"en\",\"args\":[{\"label\":\"English\",\"value\":\"en\"},{\"label\":\"Chinese\",\"value\":\"zh\"},{\"label\":\"Traditional Chinese\",\"value\":\"tw\"}]}",
 	"llmType":"alias.highquality",
 	"resultPlan":"result_functional",
 	"life":10000,
@@ -10,10 +10,23 @@
 }
 */
 when('!fn.hasValue(input_data)', {
-  n_empty_result,act_func?script='return [platform:"DEMO-platform", modules:[]]'
+  n_empty_result,act_func?script='return [platform:("{{fn.optional(systemName, \"\")}}".toString().trim()), modules:[]]'
   assign("result_functional", '{{n_empty_result}}')
 },{
 n_dbg_fm_web_in,act_func?script='println("[agt_test_doc_func_modules] input_data_present=true"); return ""'
+
+n_resolved_system_name,act_func?script='''
+    def s = "{{fn.optional(systemName, "")}}".toString().trim()
+    if (s) return s
+    def rows = input_data
+    if (!(rows instanceof List)) rows = rows == null ? [] : [rows]
+    for (def item : rows) {
+        if (!(item instanceof Map)) continue
+        def x = (item.get("system_name") ?: item.get("platform") ?: "").toString().trim()
+        if (x) return x
+    }
+    return ""
+'''
 
 assign('lang_output_text', '{{fn.optional(outputLanguage, "en")}}')
 when('outputLanguage == "zh"', {
@@ -26,22 +39,20 @@ when('outputLanguage == "en"', {
   assign('lang_output_text', 'English')
 })
 
-// 压缩输入，避免将原始长文本直接送入 LLM 导致超 token
-n_func_modules_compact_input,act_func?script='''
-    def clip = { v, maxLen ->
-        def s = v == null ? "" : v.toString().trim()
-        if (!s) return ""
-        return s.length() <= maxLen ? s : s.substring(0, maxLen)
+// 正常批次优先保留原始语义；仅在高风险超限场景下再走语义压缩，尽量不改 Step1 原始生成逻辑
+n_func_modules_raw_input,act_func?script='''
+    def cleanText = { v ->
+        return v == null ? "" : v.toString().trim()
     }
-    def takeList = { v, maxItems, itemLen ->
+    def cleanList = { v ->
         def out = []
         if (v instanceof List) {
-            for (int i = 0; i < v.size() && i < maxItems; i++) {
-                def t = clip(v.get(i), itemLen)
+            v.each { item ->
+                def t = cleanText(item)
                 if (t) out.add(t)
             }
         } else {
-            def t = clip(v, itemLen)
+            def t = cleanText(v)
             if (t) out.add(t)
         }
         return out
@@ -53,25 +64,133 @@ n_func_modules_compact_input,act_func?script='''
     rows.each { item ->
         if (!(item instanceof Map)) return
         out.add([
-            platform: clip(item.get("platform"), 60),
-            source_type: clip(item.get("source_type"), 20),
-            section: clip(item.get("section"), 120),
-            title: clip(item.get("title"), 160),
-            description: clip(item.get("description"), 320),
-            business_rules: takeList(item.get("business_rules"), 4, 120),
-            acceptance_criteria: takeList(item.get("acceptance_criteria"), 4, 120),
-            dependencies: takeList(item.get("dependencies"), 4, 80),
-            page: clip(item.get("page"), 40),
-            source: clip(item.get("source") ?: item.get("source_ref"), 120)
+            platform: cleanText(item.get("platform")),
+            source_type: cleanText(item.get("source_type")),
+            section: cleanText(item.get("section")),
+            title: cleanText(item.get("title")),
+            description: cleanText(item.get("description")),
+            business_rules: cleanList(item.get("business_rules")),
+            acceptance_criteria: cleanList(item.get("acceptance_criteria")),
+            dependencies: cleanList(item.get("dependencies")),
+            doc_role: cleanText(item.get("doc_role")),
+            doc_alias: cleanText(item.get("doc_alias")),
+            module_cluster: cleanText(item.get("module_cluster")),
+            branch_summary: cleanText(item.get("branch_summary")),
+            cluster_titles: cleanText(item.get("cluster_titles")),
+            page: cleanText(item.get("page")),
+            source: cleanText(item.get("source") ?: item.get("source_ref"))
         ])
     }
     return out
 '''
-n_dbg_fm_web_compact,act_func?script='println("[agt_test_doc_func_modules] compact_input_size=" + (n_func_modules_compact_input instanceof List ? n_func_modules_compact_input.size() : 0)); return ""'
+n_func_modules_input_profile,act_func?script='''
+    def rows = n_func_modules_raw_input
+    if (!(rows instanceof List)) rows = []
+    int totalChars = 0
+    int maxRowChars = 0
+    rows.each { item ->
+        if (!(item instanceof Map)) return
+        def txt = [
+            item.get("section"),
+            item.get("title"),
+            item.get("description"),
+            item.get("source"),
+            item.get("page"),
+            item.get("business_rules"),
+            item.get("acceptance_criteria"),
+            item.get("dependencies")
+        ].findAll { it != null }.collect { v ->
+            if (v instanceof List) return v.collect { it == null ? "" : it.toString() }.join(" ")
+            return v.toString()
+        }.join(" ")
+        int len = txt.length()
+        totalChars += len
+        if (len > maxRowChars) maxRowChars = len
+    }
+    def mode = (rows.size() > 10 || totalChars > 12000 || maxRowChars > 2200) ? "semantic_compact" : "raw"
+    return [mode: mode, rowCount: rows.size(), totalChars: totalChars, maxRowChars: maxRowChars]
+'''
+n_dbg_fm_web_mode,act_func?script='println("[agt_test_doc_func_modules] mode=" + n_func_modules_input_profile.mode + " rows=" + n_func_modules_input_profile.rowCount + " totalChars=" + n_func_modules_input_profile.totalChars + " maxRowChars=" + n_func_modules_input_profile.maxRowChars); return ""'
+when('n_func_modules_input_profile.mode == "semantic_compact"', {
+  n_func_modules_semantic_compact, tpl_func_modules_semantic_compact, psr_json
+  act_func?script='''
+      def rows = []
+      if (n_func_modules_semantic_compact instanceof Map && n_func_modules_semantic_compact.get("rows") instanceof List) {
+          rows = n_func_modules_semantic_compact.get("rows")
+      }
+      if (rows.isEmpty()) {
+          throw new RuntimeException("【STEP1语义压缩失败】高风险批次未生成有效压缩结果，停止模块生成")
+      }
+      fn.put("func_modules_prepared_input", rows)
+  '''
+}, {
+  act_func?script='fn.put("func_modules_prepared_input", n_func_modules_raw_input)'
+})
+n_func_modules_prepared_input,act_func?script='''
+    def rows = fn.get("func_modules_prepared_input")
+    if (!(rows instanceof List)) rows = []
+    return rows
+'''
+n_dbg_fm_web_prepared,act_func?script='println("[agt_test_doc_func_modules] prepared_input_size=" + (n_func_modules_prepared_input instanceof List ? n_func_modules_prepared_input.size() : 0)); return ""'
 
 n_get_functional, tpl_get_functional, psr_json
 assign("result_functional", '{{n_get_functional}}')
 })
+
+define('tpl_func_modules_semantic_compact', '''
+You are preparing a semantic compact input for functional module generation because the current batch is at risk of exceeding model context.
+
+Task:
+- Rewrite each input row into a shorter but still traceable evidence row.
+- Preserve row order.
+- Do not merge rows.
+- Do not invent any new business capability, page, source, rule, or acceptance condition.
+
+Hard rules:
+1. Output JSON only.
+2. Return one object with key `rows`.
+3. Keep the same number of rows as the input whenever possible.
+4. Preserve `title`, `page`, `source`, `doc_role`, `doc_alias`, `module_cluster`, `branch_summary`, and `cluster_titles` exactly when they are present.
+5. `description` must become one short sentence focused on executable user intent.
+6. `business_rules` keep at most 3 short bullets.
+7. `acceptance_criteria` keep at most 3 short bullets.
+8. `dependencies` keep at most 2 short bullets.
+9. Keep `platform`, `source_type`, and `section`.
+10. If a field has no supported evidence, return empty string or empty list instead of inventing content.
+
+Output format:
+```json
+{
+  "rows": [
+    {
+      "platform": "",
+      "source_type": "",
+      "section": "",
+      "title": "",
+      "description": "",
+      "business_rules": [],
+      "acceptance_criteria": [],
+      "dependencies": [],
+      "doc_role": "",
+      "doc_alias": "",
+      "module_cluster": "",
+      "branch_summary": "",
+      "cluster_titles": "",
+      "page": "",
+      "source": ""
+    }
+  ]
+}
+```
+
+Batch profile:
+- row_count: {{n_func_modules_input_profile.rowCount}}
+- total_chars: {{n_func_modules_input_profile.totalChars}}
+- max_row_chars: {{n_func_modules_input_profile.maxRowChars}}
+
+Input rows:
+{{n_func_modules_raw_input}}
+''')
 
 define('tpl_get_functional', '''
 You are generating a compact functional module tree for test-case generation.
@@ -79,23 +198,28 @@ You are generating a compact functional module tree for test-case generation.
 Goal:
 - Convert the input functional summary list into a stable JSON module tree.
 - Keep output bounded and evidence-based.
+- Prefer direct structured output over implicit post-processing assumptions.
 
 Hard rules:
 1. Output JSON only.
 2. Output language: {{lang_output_text}}.
-3. `platform` must be exactly `DEMO-platform`.
+3. `platform` must be exactly `{{n_resolved_system_name}}`.
 4. Do not invent modules or submodules not supported by the input.
 5. Do not split by wording variants, examples, labels, or channel notes alone.
 6. Prefer merge over split when two items represent the same executable test intent.
 7. Keep descriptions short, usually one sentence.
 8. Keep total output size close to the number of distinct functional intents in the input.
-9. Preserve `page` and `source`. If `source` contains `fileName#PageN`, keep that format.
+9. Preserve `page` and `source`. If `source` contains `DOC#PageN` or `fileName#PageN`, keep that format.
 10. Each submodule must be directly traceable to the input.
+11. Prefer grouping by stable business capability, not by document title wording.
+12. Background or compliance fragments may enrich an existing module, but should not create a new module unless they clearly describe an independent, testable capability.
+13. Return one valid JSON object only. No markdown, no explanation, no trailing text.
+14. If `module_cluster` or `branch_summary` is present, keep the generated modules inside that cluster scope; do not merge unrelated capabilities from different clusters.
 
 Output format:
 ```json
 {
-  "platform": "DEMO-platform",
+  "platform": "{{n_resolved_system_name}}",
   "modules": [
     {
       "name": "Main module name",
@@ -114,6 +238,25 @@ Output format:
 }
 ```
 
+Input fields may include:
+- `section`
+- `title`
+- `description`
+- `business_rules`
+- `acceptance_criteria`
+- `doc_role`
+- `doc_alias`
+- `module_cluster`
+- `branch_summary`
+- `cluster_titles`
+- `source`
+
+Module merge guidance:
+- Merge rows that represent the same business capability even if titles differ slightly.
+- Prefer one stable module with richer description over many near-duplicate modules.
+- Use `doc_role` and `source` only as evidence, not as the primary reason to split modules.
+- If cluster metadata is present, treat it as branch guidance for this batch, not as a user-visible output field.
+
 Input data:
-{{n_func_modules_compact_input}}
+{{n_func_modules_prepared_input}}
 ''')

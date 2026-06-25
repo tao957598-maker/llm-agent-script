@@ -2,11 +2,11 @@
 {
 	"title":"Gen testcase by KB",
 	"description":"Read requirement document to generate test cases",
-	"parameter":"{\"name\":\"input_data\",\"label\":\"Knowledge space path\"}",
+	"parameter":"{\"name\":\"input_data\",\"label\":\"Knowledge space path\"},{\"name\":\"outputLanguage\",\"label\":\"Output Language\",\"type\":\"select\",\"defaultValue\":\"en\",\"args\":[{\"label\":\"English\",\"value\":\"en\"},{\"label\":\"Chinese\",\"value\":\"zh\"},{\"label\":\"Traditional Chinese\",\"value\":\"tw\"}]}",
 	"llmType":"alias.highquality",
 	"resultPlan":"result_functional",
 	"life":10000,
-	"version":1
+	"version":2
 }
 */
 when('!fn.hasValue(input_data)', {
@@ -14,6 +14,19 @@ when('!fn.hasValue(input_data)', {
   assign("result", '')
 },{
 n_dbg_fm_web_in,act_func?script='println("[agt_test_doc_func_modules] input_data_present=true"); return ""'
+
+assign('lang_output_hint', '{{fn.optional(outputLanguage, "en")}}')
+assign('lang_output_text', '{{fn.optional(outputLanguage, "en")}}')
+when('outputLanguage == "zh"', {
+  assign('lang_output_text', '中文')
+})
+when('outputLanguage == "tw"', {
+  assign('lang_output_text', '繁体中文')
+})
+when('outputLanguage == "en"', {
+  assign('lang_output_text', '英文')
+})
+
 // 调用 LLM
 n_get_functional, tpl_get_functional, psr_json
 //# functional result
@@ -38,7 +51,6 @@ define('tpl_get_functional', '''
 4. **使用连字符“-”连接上下文与具体页面**，体现模块所在路径或导航关系，保留模块层级语义。
 5. **功能颗粒度需细到“界面/操作流程最小单元”**：
 
-   * 一个独立操作页面 = 一个一级模块
    * 弹窗、侧边栏、表单提交等重要交互单元也可单独视作模块
 6. **明确区分界面模块与非界面模块**：
 
@@ -51,7 +63,6 @@ define('tpl_get_functional', '''
 8. 标记来源哪些页码例如: Pagexx,Pagexxx；同时输出 `page` 字段，保留原始页码数字，不要把页码只写进 `source`。
 语言风格: 遵从文档原始术语（如标题中是英文的）保持一致更好
 9. 若原文出现“权限/注册检查/feature registration/access control”等规则，必须在模块描述中保留该校验语义，不可丢失。
-10. 若原文出现“多语言/EN/TC/SC/localization/i18n”等规则，必须在模块或子模块中显式体现该语义（可在页面模块描述中体现，或拆出非界面模块）。
 11. 不得生成与原文无证据的模块；每个子模块必须可追溯到输入文本中的明确语句。
 12. 若仅为同一页面的同义称呼/渠道前缀差异（如不同渠道或终端对同一操作步骤且规则一致），优先合并为一个子模块，并在 description 中注明适用渠道；仅当流程、输入或规则确实不同才拆分多个子模块。
 13. 控制粒度：优先覆盖关键流程与规则，避免“仅改写措辞”的平行子模块重复输出。
@@ -64,7 +75,7 @@ define('tpl_get_functional', '''
 * 典型业务流程描述（如账户创建、主流程与异常分支等）
 
 ---
-# 输出格式,文字必须为英文:
+# 输出格式,文字必须为{{lang_output_text}}:
 ```json
 {
   "platform": "system name",
@@ -87,6 +98,10 @@ define('tpl_get_functional', '''
 ```
 # 系统或产品数据
 {{input_data}}
+Field semantics refinement:
+- For a single-function requirement document, prefer the business function name / Chinese feature name / feature title as the top-level module name. Do not default the top-level module name to a generic page name unless the source text clearly defines a page module.
+- `platform` should represent the system, channel, product container, or runtime platform. Do not mix the feature/function name into `platform`.
+- If both a feature name and a system/channel name appear in the document, keep them semantically separated: feature name for module naming, system/channel name for `platform`.
 Additional Web decomposition guardrail:
 - Do not split modules only by wording variants, display labels, input value categories, or channel/context labels when they describe the same executable test intent.
 - Keep one submodule and describe supported variants/contexts in `description` only when the page state, primary user action, validation rules, actor responsibility, and business outcome are still the same.
@@ -94,5 +109,4 @@ Additional Web decomposition guardrail:
 - Do split when the document shows a different UI/page state, different required fields, different validation rules, different actor/system responsibility, different business stage, or materially different downstream outcome.
 - Do not merge page entry/access check logic with subsequent in-page action controls when they are separately testable.
 - Do not merge static display/content areas with actionable controls when the controls trigger their own flow or system behavior.
-- Coverage comes first: if unsure whether two items are the same executable test intent, keep them as separate submodules with concise names.
 ''')

@@ -3,7 +3,20 @@
 	"title":"API Test Data Run",
 	"description":"API Test Data Run",
 	"resultPlan":"status,n_kb_list,result,n_test_title,report",
-	"parameter":"{\"name\":\"kbList\",\"label\":\"数据参数\",\"required\":false,\"maxLength\":50,\"hidden\":false,\"readOnly\":false}",
+	"parameter":[
+		{
+			"name":"argMapping",
+			"label":"参数映射"
+		},
+		{
+			"name":"kbList",
+			"label":"数据参数" 
+		},
+		{
+			"name":"envinfo",
+			"label":"环境变量"
+		}
+	],
 	"tag":"API Data run",
 	"displayOrder":72,
 	"version":3
@@ -12,6 +25,8 @@
 assign("argMapping", '{{argMapping}}')
 
 assign("kbList", '{{kbList}}')
+
+assign("envinfo", '{{envinfo}}')
 
 n_kb_list, act_func.run?script='''
 	def raw = fn.list(kbList)
@@ -36,47 +51,143 @@ n_kb_list, act_func.run?script='''
 	return normalized
 '''
 
-assign('n_system_name', '{{n_kb_list[0]["application"]}}')
-
-assign('n_task_name', '{{n_kb_list[0]["test_no"]}}')
-
-
 // 获取系统表kb_testcase_biz的base_url
-n_envinfo,act_kb.select?name=kb_testcase_biz&where='{"name":"api_base_url"}'
+n_envinfo_res,tpl_parse_env_info,psr_json
 
-n_base_url, act_func.run?script='''
-	def result = n_envinfo[0].envinfo
-	return result
-'''
+// base_url
+assign('base_url', '{{n_envinfo_res.base_url}}')
 
-assign("base_url", 'base_url')
+// 循环处理每条数据
+foreach('n_kb_data', 'n_kb_list', {
+    // 从当前循环项动态获取参数（修复：原来固定取第一个元素）
+    assign('n_system_name', '{{n_kb_data.item["application"]}}')
+    assign('n_task_name', '{{n_kb_data.item["test_no"]}}')
+		// n_task_fixed_parameter
+    assign('n_task_fixed_parameter', '{{n_kb_data.item["fixed_parameter"]}}')
 
-// api_data组装成单条任务
-n_api_plan_data, agt_test_api_data_to_plan_single_task?argMapping={{argMapping}}&kbList={{n_kb_list}}&task_name={{n_task_name}}&base_url={{n_base_url}}
+		// 合并环境参数和固定参数
+		n_fixed_parameter,tpl_merge_env_params,psr_json
 
+		// 合并固定参数和环境参数
+		n_data_item,act_func.run?script='''
+				def rows = n_kb_data.item
+				rows.fixed_parameter = n_fixed_parameter
+				return rows
+		'''
+		
+// api_data build single task with current kb item
+n_api_plan_data, agt_test_api_data_to_plan_single_task?argMapping={{argMapping}}&kbList={{n_data_item}}&task_name={{n_task_name}}&base_url={{base_url}}
 
 // 数据格式转换
 n_api_plan_data_list, act_func?script='''
-def raw = fn.list(n_api_plan_data.data)
-def normalized = []
-if (raw == null) {
-	return normalized
-}
-def flattenInto
-flattenInto = { value ->
-	if (value == null) {
-		return
+	def raw = fn.list(n_api_plan_data.data)
+	def normalized = []
+	if (raw == null) {
+		return normalized
 	}
-	if (value instanceof Collection) {
-		value.each { item ->
-			flattenInto(item)
+	def flattenInto
+	flattenInto = { value ->
+		if (value == null) {
+			return
 		}
-	} else {
-		normalized.add(value)
+		if (value instanceof Collection) {
+			value.each { item ->
+				flattenInto(item)
+			}
+		} else {
+			normalized.add(value)
+		}
 	}
-}
-flattenInto(raw)
-return normalized
+	flattenInto(raw)
+	return normalized
 '''
 
-agt_test_api_plan?system={{n_system_name}}&task_name={{n_task_name}}&base_url={{n_base_url}}&data={{n_api_plan_data_list}}
+agt_test_api_plan?system={{n_system_name}}&task_name={{n_task_name}}&base_url={{base_url}}&data={{n_api_plan_data_list}}
+})
+
+
+define('tpl_parse_env_info', '''
+	请解析以下环境配置信息，提取并规范化 base_url、username、password 字段。
+
+	## base_url 处理规则：
+	1. **识别并提取**：从文本中识别网址、域名、IP地址、服务器地址等
+	2. **规范化处理**：
+		- 如果缺少协议前缀（http:// 或 https://），默认添加 http://
+		- 去除末尾多余的斜杠（/）
+		- 保留端口号（如 :8888）
+		- 保留基础路径（如 /api），但去除具体资源路径
+	3. **常见格式示例**：
+		- "http://189.1.224.215:8888/index" → "http://189.1.224.215:8888"
+		- "189.1.224.215:8888" → "http://189.1.224.215:8888"
+		- "https://api.example.com/v2" → "https://api.example.com"
+		- "localhost:8080" → "http://localhost:8080"
+	4. **特殊情况**：
+		- 如果包含多个地址，优先提取第一个或最完整的地址
+		- 如果无法识别，返回空字符串 ""
+
+	## username 和 password 处理规则：
+	1. **识别并提取**：从文本中识别用户名、账号、登录名、密码、口令等
+	2. **常见格式示例**：
+		- "用户名：peter.li" → username: "peter.li"
+		- "账号：admin" → username: "admin"
+		- "密码：gientech@123" → password: "gientech@123"
+		- "口令：123456" → password: "123456"
+	3. **缺失处理**：如果某个字段无法提取，返回空字符串 ""
+
+	## 输出格式要求：
+	返回严格的JSON格式，不要包含任何额外说明文字：
+	{
+			"base_url": "规范化后的基础URL",
+			"username": "提取的用户名",
+			"password": "提取的密码"
+	}
+
+	## 环境配置信息：
+	{{envinfo}}
+''')
+
+define('tpl_merge_env_params', '''
+	请根据环境参数（envinfo）智能覆盖 fixed_parameter 中的对应字段。
+
+	## 输入数据
+
+	### 环境参数（envinfo）：
+	{{n_envinfo_res}}
+
+	### 原始配置（fixed_parameter）：
+	{{n_task_fixed_parameter}}
+
+	## 覆盖规则
+
+	### 1. base_url 覆盖（path 字段）
+	- fixed_parameter.path 是固定存在的，但其中的字段名不确定
+	- 请智能识别 path 中已有的 URL 相关字段，可能的字段名包括：
+		- base_url、baseUrl、baseurl
+		- url、host、server、api_url
+		- 其他表示基础地址的字段
+	- **只覆盖已有字段，不创建新字段**
+	- 如果 envinfo.base_url 有值，覆盖 path 中识别到的 URL 字段
+	- 如果 path 中没有 URL 相关字段，则不做修改
+
+	### 2. 账号密码放置（智能分析字段位置）
+	- 如果 envinfo.username 和 envinfo.password 都有值：
+		- **分析 fixed_parameter 的结构，判断账号密码应该放在哪个字段**
+		- 可能的放置位置：
+			- `headers.Authorization`：用于 Basic Auth（格式：`Basic {username}:{password}`）
+			- `data.username` 和 `data.password`：用于表单登录
+			- `json.username` 和 `json.password`：用于 JSON 请求体
+			- `params.username` 和 `params.password`：用于 URL 参数
+		- **根据 fixed_parameter 的现有结构和接口类型，智能选择最合适的位置**
+		- **只修改已有字段，不创建新字段**
+		- 如果 headers、data、json、params 中已有相关字段，则覆盖；如果没有，则不做修改
+
+	### 3. 智能判断依据
+	- 如果 headers 中已有 Authorization 字段，说明需要认证，优先考虑覆盖
+	- 如果 data 或 json 中已有 username/password 字段，说明是表单或 JSON 登录
+	- 如果 params 中已有相关字段，说明是 URL 参数传递
+	- 如果都没有，不做修改
+
+	### 4. 输出格式
+	返回完整的 fixed_parameter JSON 对象，不要包含任何额外说明文字：
+	{...}
+''')

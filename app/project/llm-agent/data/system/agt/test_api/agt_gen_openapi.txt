@@ -27,19 +27,18 @@
 			"readOnly":false
 		}
 	],
-	"resultPlan":"n_result",
 	"life":100,
 	"version":1
 }
 */
-//# Agent status
+// Agent status
 assign("status", 'Agent is running')
 // file name
 n_file_name, act_kb.selectBy?sql='select  knowledge_name  from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}" '
 assign("file_name", '{{n_file_name[0].knowledge_name}}')
-//# 步骤执行
+// 步骤执行
 // 使用知识库的分页读取功能，读取文档的每一页内容
-//## 步骤1：读取文档内容
+// 步骤1：读取文档内容
 // 查询kb_okp_page_data表，按page字段升序排序，筛选system_name='OKP'的数据
 // assign('knowledgeNameItems', '["{{knowledgeNameItems}}"]')
 // n_data,act_kbs.searchFolderKnowledges?folder='{{folderName}}'&knowledgeNameItems='{{knowledgeNameItems}}'

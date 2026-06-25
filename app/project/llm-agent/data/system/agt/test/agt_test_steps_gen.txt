@@ -69,14 +69,44 @@
 */
 // Set default url_data
 assign('url_data', 'Nan')
-
+log("step_supplement:{{step_supplement}}")
 
 // 流程： 保存testcase ==> 更新test steps OR 生成test steps (注： 每次必然更新或重新生成，如需考虑保持原有数据的场景，在agt_test_steps中提前判断)
 // Load business information from KB
 n_envinfo,act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'
 
 // Prepare requirement
-assign('language', '{{fn.str(n_envinfo, "language")}}')
+// Prepare requirement
+// assign('language', '{{fn.str(n_envinfo, "language")}}')
+// Prepare requirement: prefer KB language; fall back to detecting from input steps
+n_language,act_func.run?script='''
+    def resolveLanguage = { lang ->
+        if (lang == null) return null
+        def trimmed = lang.toString().trim()
+        if (trimmed.isEmpty() || trimmed.equalsIgnoreCase("null") || trimmed.equalsIgnoreCase("none")) return null
+        return trimmed
+    }
+    def kbLang = null
+    if (n_envinfo instanceof List && !n_envinfo.isEmpty()) {
+        kbLang = resolveLanguage(n_envinfo[0]?.language)
+    }
+    if (kbLang) {
+        return kbLang
+    }
+    def inputText = (steps ?: "") + (expected_result ?: "")
+    int chineseCount = 0
+    int englishCount = 0
+    inputText.each { c ->
+        if (c >= '\u4e00' && c <= '\u9fff') {
+            chineseCount++
+        } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+            englishCount++
+        }
+    }
+    return chineseCount > englishCount ? "中文" : "English"
+'''
+assign('language', '{{n_language}}')
+log("resolved language: {{language}}")
 assign("n_test_requirement", "{{steps!}}{{fn.when(expected_result '\nExpect Result：\n%{expected_result}%')}}")
 
 //# Load existed test case
@@ -128,7 +158,7 @@ when('{{(n_old_testcase![])?size > 0 && (n_old_steps![])?size > 0}}', {
 	assign('old_testcase', '''
 		{{fn.when(n_old_testcase[0].expected_result, n_old_testcase[0].steps + "\nExpect Result：\n" + n_old_testcase[0].expected_result, n_old_testcase[0].steps)}}
 	''')
-	when('step_supplement==true',{
+	when('{{step_supplement}}',{
 	n_url_data,agt_gen_steps_main.test_gen_steps?system_name={{system}}&userInput={{steps}}
 	// Set default url_data
 	assign('url_data', '{{n_url_data}}')
@@ -148,13 +178,20 @@ when('{{(n_old_testcase![])?size > 0 && (n_old_steps![])?size > 0}}', {
 		return force_update.toBoolean() || n_old_steps.size() == 0
 	'
 	// Check if force_update is true
+	log("n_force_update:{{n_force_update}}, step_supplement:{{step_supplement}}, n_old_steps.size:{{n_old_steps?size}}")
 	when('{{n_force_update}}', {
-		when('step_supplement==true',{
+		when('{{step_supplement=="true" || step_supplement==true}}',{
+		log("Calling agt_gen_steps_main.test_gen_steps: system={{system}}, steps={{steps}}")
 		n_url_data,agt_gen_steps_main.test_gen_steps?system_name={{system}}&userInput={{steps}}
-		// Set default url_data
+		log("agt_gen_steps_main.test_gen_steps returned: {{n_url_data}}")
+		// Set url_data from agent response
 		assign('url_data', '{{n_url_data}}')
+		}, {
+		// step_supplement is false, set default empty url_data
+		assign('url_data', '[]')
 		})
 		//# Generate new test steps
+		log("Before tpl_format_requirement: url_data={{url_data}}, step_supplement={{step_supplement}}")
 		n_format_requirement, tpl_format_requirement
 		// insert data to  kb_testcase
 		act_kb.importData?name=kb_testcase&data='{{fn.json("application,system,version,version,test_no,test_no,steps,steps,expected_result,expected_result!")}}'&uniqueKey=test_no
@@ -179,7 +216,7 @@ define('tpl_format_requirement', '''
 - Goals:
   1. 精准识别并拆分可能引发页面变动的操作（如点击按钮、菜单等），使其成为独立步骤
   2. 确保同一操作步骤中不包含两个及以上点击动作，避免子菜单显隐冲突
-  3. 识别`补充解释`中标记的PAMP操作类型，将多个连续、紧密关联且不引发页面变动的操作合并为单一连贯步骤
+  3. **禁止任何操作合并**：所有操作必须保持独立步骤，不进行任何形式的PAMP合并。
   4. 保持原有逻辑不变，确保步骤描述准确、清晰、可操作
   5. 以指定语言输出最终步骤列表，并以JSON格式封装
 - Constrains:
@@ -197,6 +234,7 @@ define('tpl_format_requirement', '''
   3. Explicit business slots in the original task must be preserved in the final steps, including target page, source account, target account or recipient, amount, and submit action when present.
   4. If `url_data` conflicts with the original task, follow the original task and use `url_data` only to help reach the main execution page.
   5. For direct business-operation tasks, after reaching the main execution page, continue generating business actions instead of stopping at navigation.
+  6. When extracting element names from `url_data`, use the exact text as displayed on the page, including prefixes like "Go to", "Add", "Edit", "Delete" etc. Do not truncate or simplify button/menu names.
 - OutputFormat:
   1. 首先简要说明输出语言和`补充解释`内容中标记的PAMP合并操作数量,操作序列中当 "PAMP":False 时，不进行合并操作
   2. 以有序步骤列表形式呈现，每个步骤包含：序号. 步骤描述 (可选注释) [target_id]
@@ -205,7 +243,7 @@ define('tpl_format_requirement', '''
   1. 通读并解析用户提供的测试任务步骤、`补充解释`内容及全部规则要求，建立整体认知框架
   2. 逐条分析每个步骤，判定其性质：前置条件（保持原样）、需拆分（引发页面变动）、可合并（PAMP类型）或维持现状
   3. 对点击按钮、菜单等可能引发页面变动的操作，拆分为独立步骤，明确描述用户操作与系统响应，并检查同一步骤中是否存在多个click动作，若有则进一步拆分
-  4. 识别`补充解释`中以`{'PAMP':'XXX...'}`格式标记的操作类型，将符合条件的多个连续、紧密关联且不引发页面变动的操作整合为单一连贯步骤
+  4. **禁止合并操作**：不进行任何PAMP合并操作，所有操作保持独立步骤。
   5. 将`补充解释`中的关键信息融入关联步骤，确保信息完整且不包含猜测内容
   6. 对处理后的全部步骤进行逻辑排序与连续编号，确保序号唯一性体现步骤独立性
   7. 全面核查最终步骤列表：规则符合性、逻辑清晰性、语言一致性、格式规范性
@@ -221,7 +259,7 @@ define('tpl_format_requirement', '''
 | 输入文本  | 输入 / Input / 入力 / Saisir / Escribir …               | 输入 `密码` 在密码输入框 [id_1526379877]              |
 | 点击元素  | 点击 / Click / クリック / Cliquer / Hacer clic …          | 点击 `登录` (跳转至 /userFront 页面) [id_1580495499] |
 | 选择选项  | 选择 / Select / 選択 / Sélectionner / Seleccionar …     | 选择 `已完成` 在状态筛选框 [id_3001]                   |
-| 多选/复选 | 选择 / Select / 選択 / Sélectionner / Seleccionar …     | 选择 `选项A` 和 `选项B` 在多选框 [id_334455]           |
+| 多选/复选 | 点击 / Click / クリック / Cliquer / Hacer clic …          | 点击 `选项A` 和 `选项B` 的复选框 [id_334455]           |
 | 清除内容  | 清空 / Clear / クリア / Effacer / Borrar …               | 清空 `搜索框` [id_778899]                        |
 | 验证文本  | 验证 / Verify / 検証 / Vérifier / Verificar …           | 验证 `转账成功` 消息                                |
 | 等待    | 等待 / Wait / 待つ / Attendre / Esperar …               | 等待 `按钮可点击` [id_123456]                      |

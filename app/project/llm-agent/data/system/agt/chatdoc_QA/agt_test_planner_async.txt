@@ -1,35 +1,27 @@
 /*
 {
-	"title":"Fin Planner Async",
+	"title":"planner_async",
 	"description":"分析金融问题并生成可执行计划，支持贷款、逾期、罚息、风险分类等业务场景。根据已知条件分解任务，动态生成查询、计算和直接响应步骤。",
 	"parameter":[
-		{
-			"name":"userQuestion",
-			"label":"用户问题",
-			"maxLength":50,
-			"hidden":false,
-			"readOnly":false,
-			"type":"textarea"
-		},
-		{
-			"name":"kbSpaceId",
-			"label":"目录ID（支持多个）",
-			"maxLength":50,
-			"hidden":false,
-			"readOnly":false,
-			"type":"knowledge_space"
-		},
-		{
-			"name":"kbSpaceFileId",
-			"label":"File",
-			"maxLength":50,
-			"hidden":false,
-			"readOnly":false,
-			"type":"knowledge_space"
-		}
-	],
+    {
+      "name":"userQuestion",
+      "label":"用户问题",
+      "type":"textarea"
+    },
+    {
+      "name":"kbSpaceId",
+      "label":"目录ID（支持多个）",
+      "type":"knowledge_space"
+    },
+    {
+      "name":"kbSpaceFileId",
+      "label":"File",
+      "type":"knowledge_space"
+    }
+  ],
 	"tag":"chatdoc_QA",
-	"displayOrder":2,
+	"life":100,
+	"displayOrder":1,
 	"version":1
 }
 */

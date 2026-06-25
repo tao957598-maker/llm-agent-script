@@ -107,8 +107,31 @@ foreach('n_item', 'async_list', {
     // page_content_summary
     assign('page_content_summary', '{{async_summary.value}}')
     act_func?script='''
-                page_content_summary.each { item ->
-                    page_summary_list.add(item)
+                def data = page_content_summary
+                // 如果是单个Map对象，直接添加
+                if (data instanceof Map) {
+                    page_summary_list.add(data)
+                } 
+                // 如果是List数组
+                else if (data instanceof List) {
+                    data.each { item ->
+                        // 如果子元素也是List（二维数组），遍历内层数组
+                        if (item instanceof List) {
+                            item.each { innerItem ->
+                                if (innerItem instanceof Map) {
+                                    page_summary_list.add(innerItem)
+                                }
+                            }
+                        }
+                        // 如果子元素是Map（一维数组），直接添加
+                        else if (item instanceof Map) {
+                            page_summary_list.add(item)
+                        }
+                    }
+                }
+                // 其他情况记录日志
+                else {
+                    println("[WARN] Unexpected data type: " + (data != null ? data.getClass().getName() : "null"))
                 }
             '''
 })

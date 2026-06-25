@@ -16,8 +16,13 @@
         {
 			"name":"application",
 			"label":"System Name",
-            "required":true
+            "required":false
 		},
+        {
+            "name": "commonParamKbFileId",
+            "label": "Fixed Parameter",
+            "type": "knowledge_space"
+        },
         {
 			"name":"is_need_performance",
 			"label":"Generate Performance Test Data",
@@ -48,12 +53,12 @@
 	"life":1000
 }
 */ 
-//# Agent status
+// Agent status
 assign("status", 'Agent is running')
-log('n_kb_list：{{kbList}}')
-// 传入的agr_mapping参数映射
+log('n_kb_list: {{kbList}}')
+// 传入的 argMapping 参数映射
 assign('n_agr_mapping', '{{argMapping}}')
-// 传入的kbList数据参数
+// 传入的 kbList 数据参数
 assign('n_kb_list', '{{kbList}}')
 n_kb_list, act_func.run?script='''
 	def raw = fn.list(n_kb_list)
@@ -78,35 +83,68 @@ n_kb_list, act_func.run?script='''
 	return normalized
 '''
 
-// test_no
-assign('n_test_no', '{{n_kb_list[0]["test_no"]}}')
+// Note: These parameters will be assigned inside the foreach loop based on current iteration item
 
-// application
-assign('n_application', '{{n_kb_list[0]["application"]}}')
-log('n_agr_mapping：{{n_agr_mapping}}')
+// commonParamKbFileId
+assign("commonParamId", "{{commonParamKbFileId}}")
+
+// Read file from kbs
+n_api_content,act_kb.select?name='kbs_doc_page_parse'&column='content'&where='{"documentId":"{{commonParamId}}"}'
+
+// file content
+n_file_content,act_func?script='''
+    if (n_api_content == null || n_api_content.isEmpty()) {
+        return ""
+    }
+    return n_api_content.findAll { it != null && it != "" }.join("\n\n")
+'''
+
+// Extract common fixed_parameter from OCR markdown
+n_common_fixed_parameter_tmp,tpl_extract_common_fixed_parameter,psr_json
+// Directly keep the extracted fixed_parameter payload
+assign('n_common_fixed_parameter', '{{n_common_fixed_parameter_tmp.fixed_parameter}}')
+// Keep the extracted test scenarios payload
+assign('n_common_test_scenarios', '{{n_common_fixed_parameter_tmp.test_scenarios}}')
+
+// Note: application will be assigned inside the foreach loop
+log('n_agr_mapping: {{n_agr_mapping}}')
 // is_need_performance
-log('is_need_performance：{{is_need_performance}}')
+log('is_need_performance: {{is_need_performance}}')
 
 n_is_need_performance, act_func.run?js='''
 	let arr = {{n_agr_mapping}};
 	let is_need_performance = arr.find(i => i.agentCol === "is_need_performance")?.value;
 	is_need_performance;
 '''
-// version
+// version - 优先从 n_agr_mapping 获取，否则使用传入的默认参数
 n_version, act_func.run?js='''
-	let arr = {{n_agr_mapping}};
-	let version = arr.find(i => i.agentCol === "version")?.value;
-	version;
+	(function() {
+		let arr = {{n_agr_mapping}};
+		let defaultVersion = "{{version}}";
+		let version = arr.find(i => i.agentCol === "version")?.value || defaultVersion;
+		return version;
+	})()
 '''
 
 // 循环处理
 foreach('n_kb_data','n_kb_list', {
-    // 单个api接口数据
+    // 从当前循环项获取参数（修复：原来固定取第一个元素，现在根据当前项动态获取）
+    assign('n_test_no', '{{n_kb_data.item["test_no"]}}')
+    assign('n_document_id', '{{n_kb_data.item["document_id"]}}')
+    assign('n_related_requirement', '{{n_kb_data.item["related_requirement"]}}')
+    assign('n_application', '{{n_kb_data.item["application"]}}')
+    // content
+    assign('n_content', '{{n_kb_data.item["content"]}}')
+    // Extract tag value from content using LLM
+    n_common_tag,tpl_extract_tag,psr_json
+    // tag
+    assign('n_tag', '{{n_common_tag.tag}}')
+    // 单个 api 接口数据
     assign('api_json_data', '{{n_kb_data.item["content"]}}')
-    // 拆分API接口文档
+    // 拆分 API 接口文档
     n_api_list, act_func?js='''
     (function() {
-        // 原始OpenAPI文档
+        // 原始 OpenAPI 文档
         let openApiDoc = {{api_json_data}};
         if (typeof openApiDoc === 'string' && openApiDoc.trim()) {
             openApiDoc = JSON.parse(openApiDoc);
@@ -136,7 +174,7 @@ foreach('n_kb_data','n_kb_list', {
                         }
                     };
                     
-                    // 添加相关的schema
+                    // 添加相关 schema
                     const refs = findSchemaRefs(operation);
                     for (const ref of refs) {
                         const schemaName = ref.split('/').pop();
@@ -150,7 +188,7 @@ foreach('n_kb_data','n_kb_list', {
             return JSON.stringify(result);
         }
 
-        // 辅助函数：查找schema引用
+        // 辅助函数：查找 schema 引用
         function findSchemaRefs(obj, refs = new Set()) {
             if (typeof obj !== 'object' || obj === null) return refs;
             
@@ -177,10 +215,10 @@ foreach('n_kb_data','n_kb_list', {
 
     // Generate the data for api test
     foreach('n_api','n_api_list', {
-        // 单个api接口数据
+        // 单个 api 接口数据
         assign('api_json_data', '{{n_api.item}}')
-        // 返回gen_task
-    	n_gen_task,agt_gen_api_test_data?application={{n_application}}&test_no={{n_test_no}}&file_name={{n_file_name}}&openapi_data={{api_json_data}}&performance={{n_is_need_performance}}&version={{n_version}}&async=true
+        // 返回 gen_task
+    	n_gen_task,agt_gen_api_test_data?application={{n_application}}&test_no={{n_test_no}}&document_id={{n_document_id}}&related_requirement={{n_related_requirement}}&file_name={{n_file_name}}&openapi_data={{api_json_data}}&performance={{n_is_need_performance}}&version={{n_version}}&common_fixed_parameter={{n_common_fixed_parameter}}&common_test_scenarios={{n_common_test_scenarios}}&tag={{n_tag}}&async=true
     	n_gen_task_tmp,act_func?script='''
 			def var_tmp = n_gen_task
 			async_list.add(var_tmp)
@@ -201,7 +239,7 @@ foreach('n_kb_data','n_kb_list', {
                 // 格式化并转为字符串
                 const formattedJson = JSON.stringify(api_test_data, null, 4);
 
-                // 拼接Python代码字符串
+                // 拼接 Python 代码字符串
                 const pythonCode = `# -*- coding: utf-8 -*-
 json_data = ${formattedJson}
 from apit_test_sdk import *
@@ -214,12 +252,47 @@ def run(json_data):
             })();
             '''
        
-        assign('api_application', '{{api_test_data[0]["application"]}}')
-        assign('api_name', '{{api_test_data[0]["name"]}}')
-        // Write file name
-        assign('write_file_name', '{{api_application}}/api{{api_name}}/api_test.py')
-      
-        n_file_msg, act_python.write?path='{{api_application}}/api{{api_name}}'&requirement='api_test.py'&sourceCode={{n_python_code}}
+        // Build test script kb dir
+        n_script_dir,act_func?js='''
+        (function() {
+            const requirementUri = String("{{n_related_requirement}}" || '').replace(/\\/g, '/');
+            const scriptDir = requirementUri.includes('/Requirement/')
+                ? requirementUri.split('/Requirement/')[0] + '/Test Script/'
+                : requirementUri.replace(/\/[^\/]*$/, '/Test Script/');
+            return scriptDir;
+        })();
+        '''
+
+        // Build test script file name (拼接接口名)
+        n_script_file_name,act_func?js='''
+        (function() {
+            const fileName = String("{{n_file_name}}" || '');
+            const baseFileName = fileName.replace(/\.[^/.]+$/, '');
+            // 从 api_test_data 中提取接口名
+            let apiTestData = {{api_test_data}};
+            let apiName = '';
+            if (apiTestData && apiTestData.length > 0) {
+                // 提取路径中的最后一部分作为接口名
+                const path = apiTestData[0].name || apiTestData[0][0].name;
+                const parts = path.split('/').filter(p => p);
+                apiName = parts.length > 0 ? parts[parts.length - 1] : '';
+            }
+            // 确保各部分之间都用下划线分隔
+            return 'test_script_' + baseFileName + '_' + apiName + '.py';
+        })();
+        '''
+
+        // Write test_script to kb
+        n_write_result,act_func.write?filename='{{n_script_dir}}{{n_script_file_name}}'&data='{{n_python_code}}'&syncKbs=true
+
+        // Rebuild file msg for downstream kb path lookup
+        n_file_msg,act_func?js='''
+        (function() {
+            return JSON.stringify({
+                kbspath: "{{n_script_dir}}{{n_script_file_name}}"
+            });
+        })();
+        '''
 
         // Time sleep
         act_flow.wait?seconds=3
@@ -230,9 +303,101 @@ def run(json_data):
         // get dic_id
         n_dic_id,act_func?script=''' n_knowledge_data[0].kb_spaces_folder_id '''
 
-        assign('test_script', 'Python file: <a href="/chat-knowledge-base?dic_id={{n_dic_id}}">{{n_file_msg.kbspath}}')
+assign('test_script', 'Python file: <a href="/chat-knowledge-base?dic_id={{n_dic_id}}">{{n_file_msg.kbspath}}')
 
 
         
     })
 })
+
+define('tpl_extract_tag', '''
+你是一个 API 测试策略分析专家。
+请分析以下 JSON 文档内容，为其生成最合适的测试场景标签。
+
+【tag 枚举值】（必须严格遵守，不可自定义）
+- SMOKE_TEST：冒烟测试标签，用于验证接口基本功能的测试场景
+- CORE_PATH_TEST：核心路径测试标签，用于验证核心业务逻辑的测试场景
+
+【输出格式要求】
+- tag 不能为空
+- 可多选，逗号分割
+- 只输出标签字符串，不要输出任何解释、注释或其他内容
+- 直接返回标签组合，例如：SMOKE_TEST 或 SMOKE_TEST,CORE_PATH_TEST
+
+JSON 文档内容如下：
+{{n_content}}
+
+【输出】
+严格固定的JSON字符串，例如：
+{
+  "tag": "SMOKE_TEST,CORE_PATH_TEST"
+}
+''')
+
+define('tpl_extract_common_fixed_parameter', '''
+你是一个 API 文档结构化提取器。请读取下面的 Markdown 内容，只输出合法 JSON，不要输出解释、注释或 Markdown 代码块。
+
+═══════════════════════════════════════
+第一部分：固定参数提取 (fixed_parameter)
+═══════════════════════════════════════
+
+从文档中提取所有明确出现的固定参数，输出为一个**扁平 key-value 对象**（不要嵌套子对象）。
+
+提取规则：
+1. 文档中出现的所有参数 key-value 对都必须提取，一个不漏
+2. key 统一转为英文 camelCase：
+   - "用户名"       → "userName"
+   - "密码"         → "password"
+   - "租户ID"       → "tenantId"
+   - "订单编号"     → "orderNo"
+   - "认证令牌"     → "Authorization"（如果是 token 类，映射为 HTTP 标准头名）
+   - 原始已是英文的保持原样，如 "pageSize"、"Content-Type"
+3. 文档中有真实值的原样保留，没有值的不要凭空编造
+4. 同一参数多处出现时，优先取 Fixed Parameter 区块中的值
+5. **不要**将参数分类到 headers/params/data/json 等子对象中，就是一个扁平对象：
+   ✅ {"Authorization": "Bearer xxx", "userName": "zhangsan", "pageSize": 10}
+   ❌ {"headers": {"Authorization": "Bearer xxx"}, "params": {"pageSize": 10}}
+
+═══════════════════════════════════════
+第二部分：测试场景提取 (test_scenarios)
+═══════════════════════════════════════
+
+如果文档里存在测试场景数据，逐条提取：
+- title      : 场景标题
+- parameter  : 场景参数覆盖项
+- verify     : 校验代码（原样保留）
+如果文档没有测试场景，输出空数组 []
+
+═══════════════════════════════════════
+输出格式（严格 JSON，字符串内换行用 \\n）
+═══════════════════════════════════════
+
+{
+  "name": "接口路径，如 /api/auth/login",
+  "method": "HTTP 方法，如 POST",
+  "description": "接口描述",
+  "protocol": "协议，如 HTTP",
+  "fixed_parameter": {
+    "Authorization": "Bearer xxx",
+    "userName": "zhangsan",
+    "pageSize": 10
+  },
+  "route_parameter": {},
+  "test_scenarios": [
+    {
+      "title": "场景标题",
+      "parameter": {},
+      "verify": "校验代码"
+    }
+  ]
+}
+
+规则：
+- fixed_parameter 是一个扁平对象，不要嵌套 headers/params/data/json 等子对象
+- 空字段用 "" 或 {} 或 []，不要省略任何字段
+- 只输出 JSON，不要任何额外内容
+
+Markdown 内容如下：
+{{n_file_content}}
+''')
+

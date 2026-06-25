@@ -1,7 +1,7 @@
 /*
 {
 	"title":"CodexCLI",
-	"description":"Codex 远端智能命令行助手，能够将用户的自然语言需求转换为 Codex CLI 命令完成任务。",
+	"description":"基于Codex CLI 的本地命令行助手，直接在本地终端执行 codex 命令或系统 shell 命令，适合快速轻量的自动化任务。",
 	"parameter":[
     {
       "name":"userInput",
@@ -20,17 +20,17 @@ assign('OS_type', 'CMD')
 
 assign('n_collect_data',"None")
 assign('n_command',"None")
-//# Plan
+// Plan
 n_command,tpl_gen_command,psr_json
 
 assign('stepsArray', "{{n_command.steps}}")
 
 foreach('step', 'stepsArray', {
-    //# Run command
+    // Run command
     log('{{step.item.command}}')
     when('fn.hasValue(step.item.command)', {
         // RunShell   RunTerminalCommand
-        n_collect_data, act_rpa.send?command=RunTerminalCommand&parameters='{"command":"{{step.item.command}}","timeout": 200}'
+        n_collect_data, act_rpa.send?command=RunTerminalCommand&parameters='{"command":"{{step.item.command}}"}'
         // n_collect_data, act_rpa.send?command=TerminalView
         // n_collect_data, act_rpa.send?command=RunShell&parameters='{"shell_input":"{{step.item.command}}","shell":False}'
     })

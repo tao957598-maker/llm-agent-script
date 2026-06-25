@@ -42,7 +42,7 @@ assign('sys_prompt_parameter_extract', '''
 	}
 
 	# 工具描述：
-	{{fn.tool(n_tool_confirm.confirmed.type, n_tool_confirm.confirmed.name)}}
+	{{fn.toolDetail(n_tool_confirm.confirmed.type, n_tool_confirm.confirmed.name)}}
 ''')
 
 //## {{fn.i18n('extracting.parameters')}}
@@ -91,7 +91,7 @@ define('tpl_choose_tool', '''
 {{userInput}}
 
 # 工具集列表：
-{{fn.toolset('toolset_autotest_scenario')}}
+{{fn.tools('toolset_autotest_scenario')}}
 
 ''')
 

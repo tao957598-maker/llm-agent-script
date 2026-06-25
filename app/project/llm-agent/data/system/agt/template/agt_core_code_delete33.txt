@@ -2,16 +2,32 @@
 {
 	"title":"test demo tmp",
 	"description":"test demo tmp",
-	"parameter":"{\"name\":\"userInput\",\"label\":\"客户问题\",\"type\":\"textarea\"}",
-	"uiEntrance":"chatdoc_QA",
 	"resultPlan":"s",
-	"life":100,
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"需求"
+		},
+		{
+			"name":"kbSpaceFileId",
+			"label":"文件ID"
+			 
+		},
+		{
+			"name":"workspace",
+			"label":"workspace"
+			 
+		}
+	],
+	"uiEntrance":"chatdoc_QA",
 	"displayOrder":0,
-	"version":2
+	"version":1
 }
 */
+// 任务
+assign('message', '根据这个PPT md文档内容 生成PPT文件')
+// 知识空间目录 不要`/`开头
+assign('cwd', 'codex')
+assign('wait', '{"bool":false}')
 
-assign('parameter',"验证搜索结果页面内容是否包含与元")
-assign('userInput',"{{userInput}}")
-assign('parameter',"验证搜索结果页面内容是否包含与元")
-
+assign('codex_param', '{{fn.json("message, message, wait, wait.bool,cwd,cwd")}}')

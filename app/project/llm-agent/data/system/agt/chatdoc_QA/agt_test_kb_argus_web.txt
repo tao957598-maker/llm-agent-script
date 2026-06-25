@@ -3,36 +3,31 @@
 	"title":"K-B-Argus (web)",
 	"description":"支持多语言问答，兼容Excel、Word、PDF、PPT、图片、HTML等多种文件格式，并结合MongoDB实现表格大数据的高效计算与分析，支持联网搜索。",
 	"parameter":[
-		{
-			"name":"userInput",
-			"label":"用户问题",
-			"maxLength":50,
-			"hidden":false,
-			"readOnly":false,
-			"type":"textarea"
-		},
-		{
-			"name":"kbSpaceId",
-			"label":"目录ID（支持多个）",
-			"maxLength":50,
-			"hidden":false,
-			"readOnly":false,
-			"type":"knowledge_fold"
-		},
-		{
-			"name":"kbSpaceFileId",
-			"label":"File",
-			"maxLength":50,
-			"hidden":false,
-			"readOnly":false,
-			"type":"knowledge_space"
-		}
-	],
+    {
+      "name":"userInput",
+      "label":"用户问题",
+      "type":"textarea"
+    },
+    {
+      "name":"kbSpaceId",
+      "label":"目录ID（支持多个）",
+      "type":"knowledge_fold"
+    },
+    {
+      "name":"kbSpaceFileId",
+      "label":"File",
+      "type":"knowledge_space"
+    }
+  ],
 	"tag":"chatdoc_QA",
+	"resultPlan":"n_final_answer",
+	"life":100,
 	"displayOrder":1,
 	"version":1
 }
 */
+
+
 // prompt DIRECTORY
 assign("system_prompt_doc", '''
 /*{

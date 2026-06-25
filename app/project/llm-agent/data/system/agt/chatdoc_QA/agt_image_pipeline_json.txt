@@ -63,9 +63,9 @@ define('tpl_analyze_image', '''
 {{user_prompt}}
 {{fn.chatImageFlag('%{system_prompt}%', 'user_prompt', '', 'image_url', 1)}}
 ''')
-//# 提取信息
+// 提取信息
 n_final_answer,tpl_analyze_image, psr_all
-//# 将结果组成一个对象
+// 将结果组成一个对象
 n_tmp,act_func?script='''
 def tmp = n_final_answer
 def tmp_url = image_url

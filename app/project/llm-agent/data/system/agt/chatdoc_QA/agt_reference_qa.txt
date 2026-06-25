@@ -116,6 +116,7 @@ define('tpl_chat_response', '''
   1. 输入参数：仅限 Agent 定义块 /*{...}*/ 中 parameter 数组里显式定义的 name (例如 userInput, kbSpaceId)。
   2. 中间变量：仅限脚本中通过 assign('var', ...) 显式生成的变量。
   3. 系统函数：仅限 fn 对象及其方法 (例如 fn.json 等资产内的方法)。
+  4. 使用 assign 时，第二个参数位置使用 fn 相关方法时，外层需要用单引号包起来，fn内使用双引号。比如：assgin(var,'fn.optional(userName, "未知")')
 - 绝对禁止：
   - 严禁臆造变量：禁止根据语义猜测变量名 (如禁止使用未定义的 folderId, docName, queryText)。若需使用，必须先检查定义块或工具参数。
   - 严禁假设存在：对于非必填参数或未提供的输入，必须使用 fn.optional() 或 when 进行判空处理，禁止直接引用。

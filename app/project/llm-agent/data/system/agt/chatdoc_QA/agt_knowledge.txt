@@ -1,29 +1,31 @@
 /*
 {
-	"title":"快速检索",
-	"parameter":[
-		{
-			"name":"userInput",
-			"label":"客户问题",
-			"type":"textarea"
-		},
-		{
-			"name":"kbSpaceId",
-			"label":"Folder ID",
-			"type":"knowledge_fold"
-		},
-		{
-			"name":"kbSpaceFileId",
-			"label":"File",
-			"type":"knowledge_space"
-		}
-	],
+	"title": "快速检索",
+	"description": "",
+    "parameter": [
+        {
+        "name":"userInput",
+        "label":"客户问题",
+        "type":"textarea"
+        },
+        {
+        "name":"kbSpaceId",
+        "label":"Folder ID",
+        "type":"knowledge_fold"
+        },
+        {
+        "name":"kbSpaceFileId",
+        "label":"File",
+        "type":"knowledge_space"
+        }
+    ],
 	"tag":"chatdoc_QA",
 	"resultPlan":"n_results",
 	"displayOrder":99,
-	"version":2
-}
-*/
+	"version":1
+
+} */
+
 // 预先设置空结果
 when('fn.hasValue(kbSpaceFileId)',{
 	assign("n_answer", "[]")

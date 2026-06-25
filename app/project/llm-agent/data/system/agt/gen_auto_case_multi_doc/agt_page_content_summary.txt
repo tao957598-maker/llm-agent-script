@@ -1,11 +1,11 @@
 /*
 {
 	"title": "Page Content Classification and Summary Agent",
-    "description": "Classify and summarize page content",
+	"description": "Classify and summarize web/business style page content into structured requirement items",
 	"parameter": [
 		{
 			"name": "page_content",
-			"label": "页面内容文本"
+			"label": "Page Content"
 		},
 		{
 			"name": "outputLanguage",
@@ -19,7 +19,7 @@
 			]
 		}
 	],
-	"version": "2"
+	"version": "3"
 }
 */
 
@@ -33,73 +33,57 @@ try {
 return ""
 '''
 
-// 根据 outputLanguage 动态设置输出语言
-assign('lang_output_hint', '{{fn.optional(outputLanguage, "en")}}')
 assign('lang_output_text', '{{fn.optional(outputLanguage, "en")}}')
 when('outputLanguage == "zh"', {
-  assign('lang_output_text', '中文')
+  assign('lang_output_text', 'Chinese')
 })
 when('outputLanguage == "tw"', {
-  assign('lang_output_text', '繁体中文')
+  assign('lang_output_text', 'Traditional Chinese')
 })
 when('outputLanguage == "en"', {
-  assign('lang_output_text', '英文')
+  assign('lang_output_text', 'English')
 })
 
 n_page_content_summary,tpl_page_summary,psr_json
 
-
 define('tpl_page_summary', '''
-# 需求文档处理流程
-请根据以下提供的需求文档内容，逐页分析并整理每一页的测试点和测试内容。对于每一页，请明确以下信息：
-## 输出JSON格式存储整理后的需求内容：
-必须返回json数组list [map]格式,输出内容为{{lang_output_text}}
+You are extracting structured requirement items from one page slice of multi-document requirement material.
+
+Return JSON array only.
+
+Hard rules:
+1. Return one JSON array only. No markdown, no explanation, no comments.
+2. `requirement_type` must use one fixed English enum only: `Background`, `Functional`, `Compliance`, `Other`.
+3. All user-visible text fields other than fixed enums must be written in {{lang_output_text}}.
+4. If this page has no clear, testable, traceable requirement content, return [].
+5. Do not fabricate title, section, business rule, acceptance criteria, or dependency values.
+6. Ignore TOC, navigation, issue metadata, sprint/task management text, and low-value project admin content.
+7. Merge duplicate statements within the same page instead of repeating them.
+
+Output schema:
 ```json
 [{
   "page": 1,
   "requirement_type": "Functional",
-  "section": "用户认证",
-  "title": "登录功能需求",
-  "description": "系统应允许已注册用户使用邮箱和密码登录",
-  "business_rules": [
-    "密码必须加密存储",
-    "登录失败3次后锁定账户30分钟"
-  ],
-  "acceptance_criteria": [
-    "当输入正确凭证时，系统应授予访问权限",
-    "当输入错误凭证时，系统应显示适当错误消息"
-  ],
-  "dependencies": ["REQ-005", "REQ-008"]
+  "section": "Module or business area",
+  "title": "Requirement title",
+  "description": "One concise requirement description",
+  "business_rules": ["Rule 1"],
+  "acceptance_criteria": ["Criterion 1"],
+  "dependencies": ["REQ-001"],
+  "testability": true
 }]
 ```
 
-## 核心字段设计
+Field guidance:
+- `section`: stable business area or feature area, not a document formatting label.
+- `title`: the smallest clear testable requirement title from this page.
+- `description`: concise summary of behavior, constraint, or user-visible flow.
+- `business_rules`: only hard rules, validations, permissions, state transitions, or constraint statements.
+- `acceptance_criteria`: directly testable expected outcomes.
+- `dependencies`: only explicit dependencies or referenced requirements.
+- `testability`: false only when the page is mostly background, glossary, TOC, management metadata, or otherwise not directly testable.
 
-| 字段名 | 类型 | 描述 | 测试用例生成用途 |
-|--------|------|------|------------------|
-| page | Integer | 文档页码，使用输入 page_content.page 的原始数字 | 需求追溯 |
-| requirement_type | String | 需求类型分类 | 标识是"背景(Background)"、"功能(Functional)"还是"合规(Compliance)"需求,还是其它Other |
-| section | String | 所属章节/模块 | 测试模块分类 |
-| title | String | 需求标题 | 测试用例命名 |
-| description | String | 需求详细描述 | 测试场景依据 |
-| business_rules | Array | 业务规则列表 | 验证点提取 |
-| acceptance_criteria | Array | 验收标准 | 测试断言基础 |
-| dependencies | Array | 依赖需求列表 | 测试前置条件 |
-| testability | Boolean | 是否可直接生成测试案例 | 快速过滤不可测试内容（如当前页面应标记为false） |
-
-# 重要过滤规则（必须遵守）
-1) 忽略“目录/章节导航/TOC/索引”类内容（例如仅列标题而无具体需求的段落）。
-2) 忽略“项目管理/任务跟踪/子任务列表/Epic/Sprint/状态/负责人/创建更新时间/评论/链接/工单字段”等 Jira 元数据或管理信息。
-3) 只提取可测试的产品/系统需求、业务规则、验收标准、页面交互与按钮行为等；如果整页都是管理信息，请返回空数组 []。
-4) 对于同一页中语义重复/改写的点，合并为一条，避免重复输出。
-
-# 页面Contents：
+Page payload:
 {{page_content}}
-
-    
 ''')
-
-
-
-
-

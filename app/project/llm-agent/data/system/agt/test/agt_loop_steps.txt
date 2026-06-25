@@ -484,8 +484,8 @@ define('tpl_extract_jump_steps', '''
 
 		输出 JSON list：
 		[
-		[{"type": "input", "target": "id_2581586144", "value": "admin", "msg": "账号输入"},
-		{"type": "input", "target": "id_1526379877", "value": "xJbNmQnqk4wq0Fc", "msg": "密码输入"},
+		[{"type": "input", "target": "id_2581586144", "value": "admin", "msg": "Username"},
+		{"type": "input", "target": "id_1526379877", "value": "xJbNmQnqk4wq0Fc", "msg": "Password"},
 		{"type": "click", "target": "id_1580495499", "msg": "点击【Sign in】登录操作"}
 		],
 		[{"type": "click", "target": "id_1094787217", "msg": "点击【Sign up!】注册账号"}]

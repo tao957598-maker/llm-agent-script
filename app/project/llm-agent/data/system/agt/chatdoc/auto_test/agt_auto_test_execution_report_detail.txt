@@ -1,7 +1,7 @@
 /*
 {
-	"title":"Testing Workflow Agent",
-	"description": "chatdoc Testing Workflow Agent",
+	"title":"Testing Workflow Agent Report Detail",
+	"description": "chatdoc Testing Workflow Agent Report Detail",
 	"parameter":[
 		{
 			"name":"n_userInput",
@@ -46,7 +46,7 @@
 n_report_map,act_func?script='''
 		def reportMap = new HashMap();
 		reportMap.put("runId", n_userInput.test_name);
-		
+
 		// 获取百分比
 		double result = Double.parseDouble(n_scenario_success_size) / n_test_data_scenario_data.size();
         java.text.DecimalFormat df = new java.text.DecimalFormat("0.0%");

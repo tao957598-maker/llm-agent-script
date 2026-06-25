@@ -1,15 +1,14 @@
-/*{ 
+/*
+{
 	"title":"钉钉消息发送助手",
 	"description":"向钉钉用户或群发送消息，支持通过用户名或群名自动查询ID",
-	"parameter":[
-		{"name":"userInput", "label":"用户需求", "required":true, "description":"用户输入的消息内容及发送对象，如：给张三发送你好"}
-	],
-	"uiEntrance": "chatdoc",
+	"resultPlan":"n_result",
+	"parameter":"{\"name\":\"userInput\",\"label\":\"用户需求\",\"required\":true,\"description\":\"用户输入的消息内容及发送对象，如：给张三发送你好\"}",
+	"uiEntrance":"chatdoc",
 	"tag":"chatdoc",
-	"version":13,
-	"resultPlan":"n_result"
-}*/
-
+	"version":11
+}
+*/
 // ==================== 第一部分：初始化变量 ====================
 assign('n_max_iterations', '{{fn.raw(6)}}')
 assign('n_message', '""')
@@ -105,14 +104,20 @@ foreach('n_steps', 'n_finish != "true" && n_steps.index < n_max_iterations', {
 		when('{{n_action == "search_my_robots"}}', {
 			assign('n_robot_code', '{{(n_result["robotCode"]![])[0]!""}}')
 		})
-		
+
 		// 发送消息成功，设置finish=true
 		when('{{n_action == "send_robot_group_message" || n_action == "batch_send_robot_msg_to_users"}}', {
 			assign('n_send_result', '{{fn.str(n_result)}}')
-			assign('n_finish', 'true')
+          	assign('n_finish', 'true')
 		})
 	})
 })
 
 // ==================== 第四部分：输出结果 ====================
-assign('n_result', '消息"{{n_message}}"已发送给{{n_receiver_name}}。结果: {{n_send_result}}')
+when('{{ n_finish == "true" &&  n_send_result["success"] == "true"}}', {
+  	//$ 成功
+	assign('n_result', '消息"{{n_message}}"已发送给 {{n_receiver_name}}。结果：{{n_send_result}}')
+},{
+	//$ 失败
+	assign('n_result', '消息发送失败：{{n_send_result}}')
+})

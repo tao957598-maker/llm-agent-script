@@ -1,6 +1,6 @@
 /*
 {
-  "title": "金融智能重规划器",
+  "title": "replanner",
   "description": "当执行计划失败时，分析错误原因并生成修正后的新计划，支持工具调用优化和降级为大模型直接回答。",
   "parameter": [
     {
@@ -23,24 +23,132 @@
       "type": "textarea",
       "required": true,
       "maxLength": 2000
-    },
-    {
-      "name": "toolsJson",
-      "label": "可用工具集（JSON格式）",
-      "type": "textarea",
-      "required": true,
-      "maxLength": 5000
     }
   ],
-  "tag": ["金融", "重规划", "错误恢复"],
-  "uiEntrance": "金融重规划",
-  "life": 100,
-  "displayOrder": 3,
-  "version": 1
+	"tag":"chatdoc_QA",
+	"life":100,
+	"displayOrder":4,
+	"version":1
 }
 */
-
-assign("REPLAN_PROMPT", '''
+assign("user_question", "{{userQuestion}}")
+assign("previous_plan_json", "{{previousPlanJson}}")
+assign("execution_history_summary", "{{executionHistorySummary}}")
+assign("TOOLS_JSON", '''
+[
+  {
+    "name": "dynamic_code_executor",
+    "type": "dynamic",
+    "description": "在安全沙盒中执行金融计算逻辑，仅使用已注入的 input_data",
+    "parameters_schema": {
+      "type": "object",
+      "properties": {
+        "computation_logic": {
+          "type": "string",
+          "description": "计算逻辑标识或自然语言描述（用于生成代码）"
+        },
+        "input_data": {
+          "type": "object",
+          "description": "结构化输入数据（由前序工具提供）"
+        },
+        "allowed_libraries": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["pandas", "numpy", "math"]
+        },
+        "output_format": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "必须返回的字段名（如 ['boll_upper', 'signal']）"
+        }
+      },
+      "required": ["computation_logic", "input_data", "output_format"]
+    },
+    "output_schema": {
+      "type": "object",
+      "description": "动态生成，但必须包含 output_format 中所有字段"
+    },
+    "execution_handler": "sandbox.executor.dynamic_code_executor",
+    "example_usage": {
+      "computation_logic": "计算30日移动平均并标记价格突破信号",
+      "input_data": "${market_data}",
+      "allowed_libraries": ["pandas", "numpy"],
+      "output_format": ["ma30", "signal"]
+    },
+    "requires_secretflow": true,
+    "security_policy": {
+      "max_execution_time_sec": 10,
+      "memory_limit_mb": 256,
+      "network_access": false,
+      "file_system_access": false
+    }
+  },
+  {
+    "name": "calculate_simple_interest",
+    "type": "predefined",
+    "description": "计算单利利息（本金 × 年利率 × 时间（年））",
+    "parameters_schema": {
+      "type": "object",
+      "properties": {
+        "principal": { "type": "number", "description": "本金（货币单位）" },
+        "annual_rate": { "type": "number", "description": "年利率（小数形式）" },
+        "time_in_years": { "type": "number", "description": "时间（以年为单位，如6个月=0.5）" }
+      },
+      "required": ["principal", "annual_rate", "time_in_years"]
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "interest": { "type": "number", "description": "计算出的单利利息" }
+      },
+      "required": ["interest"]
+    },
+    "execution_handler": "finance_tools.interest.calculate_simple_interest",
+    "example_usage": {
+      "principal": 10000,
+      "annual_rate": 0.035,
+      "time_in_years": 0.5
+    },
+    "requires_secretflow": true
+  },
+  {
+    "name": "calculate_compound_interest",
+    "type": "predefined",
+    "description": "计算复利本息和（本金 × (1 + 年利率)^期数）",
+    "parameters_schema": {
+      "type": "object",
+      "properties": {
+        "principal": { "type": "number", "description": "本金" },
+        "annual_rate": { "type": "number", "description": "年利率（小数）" },
+        "periods": { "type": "number", "description": "计息期数（如2年按年计息则为2）" },
+        "compound_frequency_per_year": {
+          "type": "integer",
+          "description": "每年复利次数（默认1）",
+          "default": 1,
+          "minimum": 1
+        }
+      },
+      "required": ["principal", "annual_rate", "periods"]
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "future_value": { "type": "number", "description": "复利本息和" }
+      },
+      "required": ["future_value"]
+    },
+    "execution_handler": "finance_tools.interest.calculate_compound_interest",
+    "example_usage": {
+      "principal": 10000,
+      "annual_rate": 0.05,
+      "periods": 2,
+      "compound_frequency_per_year": 4
+    },
+    "requires_secretflow": true
+  }
+]
+''')
+define("tpl_replanner_prompt", '''
 你是一个金融智能重规划器。用户原始问题未变，但上一轮执行计划失败。请按以下流程决策并生成新计划：
 
 1. **首先评估**：基于错误原因，判断原计划经**局部修正后是否仍可执行**（如仅参数格式错误、变量引用路径错误等）。
@@ -57,7 +165,7 @@ assign("REPLAN_PROMPT", '''
 {{execution_history_summary}}
 
 ## 可用工具集
-{{tools_json}}
+{{TOOLS_JSON}}
 
 ## 重规划原则
 - **不得改变用户原始意图**。
@@ -97,141 +205,4 @@ assign("REPLAN_PROMPT", '''
 现在，请生成符合上述逻辑的新计划。
 ''')
 
-// 辅助函数：构建重规划提示词
-define('build_replan_prompt', '''
-assign("final_prompt", fn.replace("{{REPLAN_PROMPT}}", "{{user_question}}", "{{user_question}}"))
-assign("final_prompt", fn.replace("{{final_prompt}}", "{{previous_plan_json}}", "{{previous_plan_json}}"))
-assign("final_prompt", fn.replace("{{final_prompt}}", "{{execution_history_summary}}", "{{execution_history_summary}}"))
-assign("final_prompt", fn.replace("{{final_prompt}}", "{{tools_json}}", "{{tools_json}}"))
-return "{{final_prompt}}"
-''')
-
-agent("financial_replanner_agent", {
-    // 存储提示词到内存
-    assign("prompt_content", "{{REPLAN_PROMPT}}")
-    expression('''act_memory.assign?var=replan_prompt&value={{prompt_content}}&global=true''')
-    
-    // 构建完整提示词
-    assign("replan_prompt", "{{build_replan_prompt}}")
-    
-    // 调用大模型生成新计划
-    assign("new_plan_json", expression('''act_llm.generate?prompt={{replan_prompt}}&model=gpt-4&temperature=0.1'''))
-    
-    // 清理结果，确保只包含JSON
-    assign("cleaned_plan", expression('''fn.strip("{{new_plan_json}}")'''))
-    
-    // 移除可能的Markdown代码块标记
-    assign("starts_with_json", expression('''fn.startsWith("{{cleaned_plan}}", "```json")'''))
-    when('{{starts_with_json}} == true', {
-        assign("cleaned_plan", expression('''fn.replace("{{cleaned_plan}}", "```json", "")'''))
-        assign("cleaned_plan", expression('''fn.replace("{{cleaned_plan}}", "```", "")'''))
-    }, {})
-    
-    assign("starts_with_backticks", expression('''fn.startsWith("{{cleaned_plan}}", "```")'''))
-    when('{{starts_with_backticks}} == true', {
-        assign("cleaned_plan", expression('''fn.replace("{{cleaned_plan}}", "```", "")'''))
-    }, {})
-    
-    // 尝试解析JSON验证格式
-    assign("is_valid_json", "true")
-    when('fn.hasValue("{{cleaned_plan}}")', {
-        assign("parsed_json", expression('''psr_json("{{cleaned_plan}}")'''))
-        when('{{parsed_json}}!', {
-            // JSON解析成功
-            expression('''fn.json("status", "success", "message", "重规划成功生成")''')
-        }, {
-            // JSON解析失败，返回错误信息
-            assign("is_valid_json", "false")
-            assign("error_message", "生成的响应不是有效的JSON格式")
-        })
-    }, {
-        assign("is_valid_json", "false")
-        assign("error_message", "大模型未生成任何响应")
-    })
-    
-    // 返回结果
-    when('{{is_valid_json}} == true', {
-        return "{{cleaned_plan}}"
-    }, {
-        // 返回默认的错误处理计划
-        assign("default_plan", '''
-{
-  "steps": [],
-  "execution_history": {{execution_history_summary}},
-  "retry_count": 1,
-  "max_retries": 2,
-  "error": "{{error_message}}"
-}
-''')
-        return "{{default_plan}}"
-    })
-})
-
-// 示例：如何使用该智能体
-comment(''' 示例调用参数 ''');
-assign("example_user_question", "计算10000元本金，年利率5%，存期2年的复利利息")
-assign("example_previous_plan", '''
-{
-  "steps": [
-    {
-      "type": "predefined",
-      "tool_name": "calculate_compound_interest",
-      "params": {
-        "principal": 10000,
-        "annual_rate": 0.05,
-        "periods": 2
-      },
-      "output_var": "interest_result"
-    }
-  ],
-  "execution_history": [
-    {
-      "step": 0,
-      "tool_name": "calculate_compound_interest",
-      "status": "failed",
-      "error": "参数缺失: compound_frequency_per_year"
-    }
-  ],
-  "retry_count": 0,
-  "max_retries": 2
-}
-''')
-assign("example_history_summary", "步骤0失败：calculate_compound_interest工具调用失败，错误原因：参数缺失compound_frequency_per_year")
-assign("example_tools_json", '''
-[
-  {
-    "name": "calculate_compound_interest",
-    "type": "predefined",
-    "description": "计算复利本息和",
-    "parameters_schema": {
-      "type": "object",
-      "properties": {
-        "principal": { "type": "number" },
-        "annual_rate": { "type": "number" },
-        "periods": { "type": "number" },
-        "compound_frequency_per_year": { "type": "integer", "default": 1 }
-      },
-      "required": ["principal", "annual_rate", "periods"]
-    },
-    "output_schema": {
-      "type": "object",
-      "properties": {
-        "future_value": { "type": "number" }
-      }
-    }
-  },
-  {
-    "name": "dynamic_code_executor",
-    "type": "dynamic",
-    "description": "执行安全动态代码"
-  }
-]
-''')
-
-comment(''' 调用示例 ''');
-assign("replan_result", "{{financial_replanner_agent}}")
-when('{{replan_result}}!', {
-    assign("result_message", "重规划完成，新计划：{{replan_result}}")
-}, {
-    assign("result_message", "重规划失败")
-})
+n_gen_result,tpl_replanner_prompt,psr_all

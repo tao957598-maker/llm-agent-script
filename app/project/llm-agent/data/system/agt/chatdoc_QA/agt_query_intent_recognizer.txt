@@ -23,9 +23,9 @@
 }
 */
 
+// Query Intent Recognizer 查询意图识别
 n_question_intent,tpl_query_intent_recognizer_test,psr_json
 
-// Query Intent Recognizer 查询意图识别
 define('tpl_query_intent_recognizer_test', '''
 /*{
   "enable_thinking":"false",

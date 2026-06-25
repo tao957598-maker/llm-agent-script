@@ -1,19 +1,19 @@
 /*{
 	"title":"Gen testcase by KB (Entry)",
-	"description":"唯一入口：只调 agt_gen_test_case_root；文档类型用 source_type(web|api|auto)，无分支子 agent",
+	"description":"Generate test cases by knowledge base file (Entry)",
 	"parameter":[
 		{
 			"name":"kbSpaceFileId",
-			"label":"文件",
+			"label":"File",
 			"type":"knowledge_space"
 		},
 		{
 			"name":"source_type",
-			"label":"文档类型",
+			"label":"Source Type",
 			"args":[
 				{"label":"Web","value":"web"},
 				{"label":"Api","value":"api"},
-                {"label":"Auto","value":"auto"},
+                {"label":"Auto","value":"auto"}
 			],
 			"defaultValue":"web",
 			"required":true,
@@ -29,32 +29,44 @@
 			"required":true
 		},
 		{
-			"name":"resumeMode",
-			"label":"Resume Mode",
-			"type":"select",
-			"defaultValue":"auto",
-			"args":[
-				{"label":"Auto","value":"auto"},
-				{"label":"Full","value":"full"},
-				{"label":"From Step2","value":"from_step2"},
-				{"label":"From Step3","value":"from_step3"}
-			]
-		},
-		{
-			"name":"resumeSubmoduleName",
-			"label":"Resume Submodule Name"
-		},		{
+            "name":"resumeMode",
+            "label":"Execution Mode",
+            "type":"select",
+            "defaultValue":"full",
+            "args":[
+                {"label":"Full Execution","value":"full"},
+                {"label":"Auto-Resume","value":"auto"},
+                {"label":"Start from Module Design","value":"from_step2"},
+                {"label":"Start from Test Cases","value":"from_step3"}
+            ]
+        },
+        {
+            "name":"resumeSubmoduleName",
+            "label":"Resume Submodule Name"
+        },	
+        {
 			"name":"fixedThreeLanguage",
-			"label":"是否固定三语言",
+			"label":"Fixed Three Language Output",
 			"type":"select",
 			"defaultValue":"false",
 			"args":[
-				{"label":"否","value":"false"},
-				{"label":"是","value":"true"}
+				{"label":"No","value":"false"},
+				{"label":"Yes","value":"true"}
+			]
+		},
+		{
+			"name":"outputLanguage",
+			"label":"Output Language",
+			"type":"select",
+			"defaultValue":"en",
+			"args":[
+				{"label":"English","value":"en"},
+				{"label":"Chinese","value":"zh"},
+				{"label":"Traditional Chinese","value":"tw"}
 			]
 		}
   ],
-	"resultPlan":"routed_source_type,status,n_combined_result,n_doc_mind_map",
+	"resultPlan":"routed_source_type,status,n_combined_result,n_doc_mind_map,n_entry_result",
     "tag":"Automated Testing",
 	"version":8
 }*/
@@ -90,6 +102,25 @@ n_file_name, act_kb.selectBy?sql='select  knowledge_name  from kb_spaces_folder_
 assign("file_name", '{{n_file_name[0].knowledge_name}}')
 assign("documentId", "{{kbSpaceFileId}}")
 assign("effectiveDocumentId", "{{kbSpaceFileId}}")
+// Build shared export paths
+n_export_requirement_data,act_kb.selectBy?sql="select store_uri from kb_spaces_folder_knowledge where id='{{kbSpaceFileId}}'"
+// Build xlsx paths for generated tables
+n_export_paths,act_func?js='''
+(function() {
+    const rows = {{n_export_requirement_data}};
+    const requirementUri = String((rows && rows[0] && rows[0].store_uri) || '').replace(/\\/g, '/');
+    const fileName = String("{{file_name}}" || '');
+    const baseFileName = fileName.replace(/\.[^/.]+$/, '');
+    const baseDir = requirementUri.includes('/Requirement/')
+        ? requirementUri.split('/Requirement/')[0]
+        : requirementUri.replace(/\/[^\/]*$/, '');
+    return {
+        modulePath: baseDir + '/Test Module/test_module_' + baseFileName + '.xlsx',
+        designPath: baseDir + '/Test Point/test_point_' + baseFileName + '.xlsx',
+        casePath: baseDir + '/Test Case/test_case_' + baseFileName + '.xlsx'
+    };
+})();
+'''
 
 when('resume_mode == "auto"', {
     n_auto_last_case_submodule,act_kb.selectBy?sql='select submodule_name from kb_gen_test_case where version = "{{version}}" and document_id in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") and submodule_name is not null and submodule_name <> "" order by id desc limit 1'
@@ -125,6 +156,28 @@ when('resume_mode == "from_step3"', {
     assign('combined_result', '# {{file_name}}\n\n> 续跑 Step3：已从 kb_gen_test_module_design 读入设计行，已跳过读页、页摘要、MD、模块与设计 LLM。\n')
     n_combined_result,act_memory.assign?value='''{{combined_result}}'''&type=md
     // [ROOT-RESUME·step3·mmd] 导图必须在 MD 后立即展示，不能等 Step3 全部结束；使用稳定静态 mmd，不阻断后续流程
+    // Export existing kb_gen_test_module for Step3 resume
+    n_export_module_resume_raw,act_kb.selectBy?sql='select platform, main_module_name, main_module_source, submodule_name, submodule_description, submodule_source, source_type from kb_gen_test_module where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") order by main_module_name, submodule_name'
+    // Keep resume module xlsx column order stable
+    n_export_module_resume_data,act_func?script='''
+def rows = n_export_module_resume_raw
+if (rows == null || !(rows instanceof List)) rows = []
+return rows.collect { r ->
+    def out = new LinkedHashMap()
+    out["Platform"] = r.platform == null ? "" : r.platform
+    out["Main Module Name"] = r.main_module_name == null ? "" : r.main_module_name
+    out["Main Module Source"] = r.main_module_source == null ? "" : r.main_module_source
+    out["Submodule Name"] = r.submodule_name == null ? "" : r.submodule_name
+    out["Submodule Description"] = r.submodule_description == null ? "" : r.submodule_description
+    out["Submodule Source"] = r.submodule_source == null ? "" : r.submodule_source
+    out["Source Type"] = r.source_type == null ? "" : r.source_type
+    return out
+}
+'''
+    // Write resume module xlsx file
+    n_export_module_resume_file_msg,act_artifact.write?filepath='{{n_export_paths.modulePath}}'&data='{{n_export_module_resume_data}}'
+    // Trigger resume module xlsx file sync
+    n_export_module_resume_sync_msg,act_artifact.triggerSync?filepath='{{n_export_paths.modulePath}}'&forceSync=true&ensureKrd=true
     n_doc_mind_map,tpl_txt_to_mermaid,psr_mmd
     n_resume_design_rows,act_kb.selectBy?sql='select * from kb_gen_test_module_design where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
     n_resume_design_into_memory,act_func?script='''
@@ -142,6 +195,9 @@ when('resume_mode == "from_step3"', {
             def sid = (gv(r, "sub_id", "SUB_ID") ?: "").toString().trim()
             if (!sid) return
             def stc = (gv(r, "source_type", "SOURCE_TYPE") ?: "").toString().trim().toLowerCase()
+            def p = (gv(r, "page", "PAGE") ?: "").toString().trim()
+            if (p.contains(",")) p = p.split(",")[0].trim()
+            if (p.toLowerCase().startsWith("page")) p = p.substring(4).trim()
             if (!(stc in ["web", "api"])) {
                 // 历史脏数据走 auto 推断：优先识别 API 证据，否则归 Web
                 def txt = ((gv(r, "main_module_name", "MAIN_MODULE_NAME") ?: "").toString() + " "
@@ -165,7 +221,7 @@ when('resume_mode == "from_step3"', {
                 version: (gv(r, "version", "VERSION") ?: "").toString(),
                 source_type: stc,
                 change_type: (gv(r, "change_type", "CHANGE_TYPE") ?: "NEW").toString(),
-                page: (gv(r, "page", "PAGE") ?: "").toString()
+                page: p
             ])
         }
         fn.put('result_list_design', out)
@@ -192,6 +248,9 @@ when('resume_mode == "from_step2"', {
         rows.each { r ->
             if (!(r instanceof Map)) return
             def stc = (gv(r, "source_type", "SOURCE_TYPE") ?: "").toString().trim().toLowerCase()
+            def p = (gv(r, "page", "PAGE") ?: "").toString().trim()
+            if (p.contains(",")) p = p.split(",")[0].trim()
+            if (p.toLowerCase().startsWith("page")) p = p.substring(4).trim()
             if (!(stc in ["web", "api"])) {
                 // 历史脏数据走 auto 推断：优先识别 API 证据，否则归 Web
                 def txt = ((gv(r, "main_module_name", "MAIN_MODULE_NAME") ?: "").toString() + " "
@@ -212,12 +271,35 @@ when('resume_mode == "from_step2"', {
                 version: (gv(r, "version", "VERSION") ?: "").toString(),
                 source_type: stc,
                 change_type: (gv(r, "change_type", "CHANGE_TYPE") ?: "NEW").toString(),
-                page: (gv(r, "page", "PAGE") ?: "").toString()
+                page: p
             ])
         }
         fn.put('test_module_flattened_data', out)
     '''
 }, {
+when('resume_mode == "full"', {
+    n_full_cleanup_module_rows,act_kb.selectBy?sql='select distinct documentId as doc_id from kb_gen_test_module where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
+    foreach('n_full_cleanup_module_row', 'n_full_cleanup_module_rows', {
+        act_kb.delete?name=kb_gen_test_module&where='{"version":"{{version}}","documentId":"{{n_full_cleanup_module_row.item.doc_id}}"}'&maxSize=1000
+        on_failure({
+            act_func?script='throw new RuntimeException("Failed to delete kb_gen_test_module for version=" + "{{version}}" + ", documentId=" + "{{n_full_cleanup_module_row.item.doc_id}}")'
+        })
+    })
+    n_full_cleanup_design_rows,act_kb.selectBy?sql='select distinct documentId as doc_id from kb_gen_test_module_design where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
+    foreach('n_full_cleanup_design_row', 'n_full_cleanup_design_rows', {
+        act_kb.delete?name=kb_gen_test_module_design&where='{"version":"{{version}}","documentId":"{{n_full_cleanup_design_row.item.doc_id}}"}'&maxSize=1000
+        on_failure({
+            act_func?script='throw new RuntimeException("Failed to delete kb_gen_test_module_design for version=" + "{{version}}" + ", documentId=" + "{{n_full_cleanup_design_row.item.doc_id}}")'
+        })
+    })
+    n_full_cleanup_case_rows,act_kb.selectBy?sql='select distinct document_id as doc_id from kb_gen_test_case where version = "{{version}}" and document_id in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
+    foreach('n_full_cleanup_case_row', 'n_full_cleanup_case_rows', {
+        act_kb.delete?name=kb_gen_test_case&where='{"version":"{{version}}","document_id":"{{n_full_cleanup_case_row.item.doc_id}}"}'&maxSize=1000
+        on_failure({
+            act_func?script='throw new RuntimeException("Failed to delete kb_gen_test_case for version=" + "{{version}}" + ", document_id=" + "{{n_full_cleanup_case_row.item.doc_id}}")'
+        })
+    })
+})
 //# 步骤执行
 when('!fn.hasValue(pages)', {
   // 取全部页数据
@@ -225,6 +307,8 @@ when('!fn.hasValue(pages)', {
     *
 from
     (SELECT
+    documentId,
+    fileName,
     page,
     CASE
         WHEN analysis_content IS NULL OR analysis_content = '' THEN content
@@ -235,6 +319,7 @@ FROM
 WHERE
     documentId = "{{kbSpaceFileId}}"
 ORDER BY
+    documentId,
     CAST(page AS SIGNED) ASC) as a where a.content is not null'''
 
 },{
@@ -243,6 +328,8 @@ ORDER BY
     *
 from
     (SELECT
+    documentId,
+    fileName,
     page,
     CASE
         WHEN analysis_content IS NULL OR analysis_content = '' THEN content
@@ -253,19 +340,41 @@ FROM
 WHERE
     documentId = "{{kbSpaceFileId}}" and page in ({{pages}})
 ORDER BY
+    documentId,
     CAST(page AS SIGNED) ASC) as a where a.content is not null'''
 
 })
-assign("kb_list_data", '{{n_kb_data}}')
+// normalize page rows for multi-doc and preserve source references
+n_kb_data_norm,act_func?script=''' 
+    def rows = n_kb_data
+    if (rows == null || !(rows instanceof List)) rows = []
+    def out = []
+    rows.each { r ->
+        if (!(r instanceof Map)) return
+        def docId = (r.get("documentId") ?: r.get("document_id") ?: "").toString().trim()
+        def fileName = (r.get("fileName") ?: r.get("FILE_NAME") ?: "").toString().trim()
+        def p = (r.get("page") ?: "").toString().trim()
+        def srcRef = fileName ? (fileName + "#Page" + p) : ("Page" + p)
+        out.add([
+            documentId: docId,
+            document_id: docId,
+            fileName: fileName,
+            page: p,
+            source_ref: srcRef,
+            content: (r.get("content") ?: "").toString()
+        ])
+    }
+    return out
+'''
+assign("kb_list_data", '{{n_kb_data_norm}}')
 
 // Auto：按页关键字得到 web/api 页集
 assign("web_pages_csv", "")
 assign("api_pages_csv", "")
 when('pipeline_mode == "auto"', {
-    // [ROOT-MAIN·auto] agt_detect_source_type_by_page：仅 auto 模式需要按页拆 web/api；kbSpaceFileId+pages 错则 n_work_queue 双跑/单跑判断全错
-    n_page_type_detect,agt_detect_source_type_by_page?kbSpaceFileId={{kbSpaceFileId}}&pages={{pages}}
-    assign("web_pages_csv", "{{n_page_type_detect.web_pages}}")
-    assign("api_pages_csv", "{{n_page_type_detect.api_pages}}")
+    // [MULTI-DOC] auto 模式下直接按内容启发式判断，不再依赖单文件 page detector
+    assign("web_pages_csv", "")
+    assign("api_pages_csv", "")
 }, {
     assign("web_pages_csv", "")
     assign("api_pages_csv", "")
@@ -274,7 +383,7 @@ when('pipeline_mode == "auto"', {
 // [ROOT-MAIN·queue] 队列 st 来自上方模板 {{pipeline_mode}}；不要依赖 Groovy binding 读取 assign 变量
 // 工作队列：每项含 st(web|api) 与 page_content（kb 行 map）
 n_work_queue,act_func?script='''
-    def rows = n_kb_data
+    def rows = n_kb_data_norm
     if (rows == null || !(rows instanceof List)) rows = []
     def mode = "{{pipeline_mode}}"
     mode = (mode == null ? "" : mode.toString()).trim().toLowerCase()
@@ -289,28 +398,13 @@ n_work_queue,act_func?script='''
         rows.each { r -> if (r instanceof Map) out.add([st: "api", page_content: r]) }
         return out
     }
-    def wp = new HashSet()
-    def ap = new HashSet()
-    def ws = ""
-    def asv = ""
-    try { ws = web_pages_csv == null ? "" : web_pages_csv.toString() } catch (Throwable ignore) { ws = "" }
-    try { asv = api_pages_csv == null ? "" : api_pages_csv.toString() } catch (Throwable ignore) { asv = "" }
-    ws.split(",").each { String it2 -> def t = it2 == null ? "" : it2.trim(); if (t) wp.add(t) }
-    asv.split(",").each { String it2 -> def t = it2 == null ? "" : it2.trim(); if (t) ap.add(t) }
     rows.each { r ->
         if (!(r instanceof Map)) return
-        def p = r.get("page") == null ? "" : r.get("page").toString().trim()
-        def inW = wp.contains(p)
-        def inA = ap.contains(p)
-        if (inW && !inA) out.add([st: "web", page_content: r])
-        else if (inA && !inW) out.add([st: "api", page_content: r])
-        else if (inW && inA) {
-            out.add([st: "web", page_content: r])
-            out.add([st: "api", page_content: r])
-        } else {
-            out.add([st: "web", page_content: r])
-            out.add([st: "api", page_content: r])
-        }
+        def docName = (r.get("fileName") ?: "").toString().toLowerCase()
+        def text = ((r.get("content") ?: "").toString() + " " + docName).toLowerCase()
+        def apiHint = [" /api/", "post ", "get ", "put ", "patch ", "delete ", "endpoint", "bearer", "authorization", "http", "request", "response", "status code", "openapi", "swagger"]
+        def st = apiHint.any { k -> text.contains(k) } ? "api" : "web"
+        out.add([st: st, page_content: r])
     }
     return out
 '''
@@ -328,10 +422,10 @@ foreach('n_wx', 'n_work_queue', {
     assign('wx_segment_st', '{{n_wx.item.st}}')
     when('wx_segment_st == "api"', {
         // [ROOT-MAIN·sum-api] OpenAPI/契约向摘要；page_content 必须为含 page 的 kb 行 map
-        n_page_content_summary,agt_page_content_summary_api?page_content='{{page_content}}'
+        n_page_content_summary,agt_page_content_summary_api?page_content='{{page_content}}'&outputLanguage={{outputLanguage}}
     }, {
         // [ROOT-MAIN·sum-web] 与上一分支互斥；不要让 api 页误走此链，否则 requirement 仍会是 UI 语义
-        n_page_content_summary,agt_page_content_summary?page_content='{{page_content}}'
+        n_page_content_summary,agt_page_content_summary?page_content='{{page_content}}'&outputLanguage={{outputLanguage}}
     })
     act_func?script='''
         def st = "{{wx_segment_st}}"
@@ -345,9 +439,19 @@ foreach('n_wx', 'n_work_queue', {
         else if (raw instanceof Map && raw.get("value") instanceof List) lst = raw.get("value")
         if (lst == null) return
         def srcPage = ""
+        def singlePageText = { inputVal ->
+            def s = (inputVal == null ? "" : inputVal.toString()).trim()
+            if (!s) return ""
+            def token = s.contains(",") ? s.split(",")[0].trim() : s
+            if (!token) return ""
+            if (token.toLowerCase().startsWith("page")) {
+                return token.substring(4).trim()
+            }
+            return token
+        }
         if (page_content instanceof Map) {
             def p = page_content.get("page")
-            if (p != null) srcPage = p.toString().trim()
+            if (p != null) srcPage = singlePageText(p)
         }
         if (!srcPage) {
             throw new RuntimeException("【PAGE缺失】page_content.page 为空，无法向后续 Step1/2/3 传递页码")
@@ -356,6 +460,16 @@ foreach('n_wx', 'n_work_queue', {
             if (item instanceof Map) {
                 item.put("source_type", st)
                 item.put("page", srcPage)
+                if (page_content instanceof Map) {
+                    def docId = (page_content.get("documentId") ?: page_content.get("document_id") ?: "").toString()
+                    def fnm = (page_content.get("fileName") ?: "").toString()
+                    def srcRef = (page_content.get("source_ref") ?: "").toString()
+                    if (docId) item.put("documentId", docId)
+                    if (docId) item.put("document_id", docId)
+                    if (fnm) item.put("fileName", fnm)
+                    if (srcRef) item.put("source", srcRef)
+                    if (srcRef) item.put("source_ref", srcRef)
+                }
                 page_summary_list.add(item)
             }
         }
@@ -414,6 +528,100 @@ when('fn.hasValue(other_list)', {
 }, {
     assign('other_result', '')
 })
+// [MULTI-DOC] merge and compress functional input before Step1 generation
+n_multi_doc_step1_merge,act_func?script='''
+    def normalize = { s ->
+        def x = (s == null ? "" : s.toString()).trim().toLowerCase()
+        x = x.replaceAll(/\s+/, " ")
+        return x
+    }
+    def asList = { v ->
+        if (v == null) return []
+        if (v instanceof List) return v
+        return [v]
+    }
+    def mergeTextList = { leftVal, rightVal ->
+        def seen = new LinkedHashSet()
+        def out = []
+        [leftVal, rightVal].each { vv ->
+            asList(vv).each { it ->
+                def t = (it == null ? "" : it.toString()).trim()
+                if (t && !seen.contains(t)) {
+                    seen.add(t)
+                    out.add(t)
+                }
+            }
+        }
+        return out
+    }
+    def supplementLines = []
+    [background_list, compliance_list, other_list].each { lst ->
+        asList(lst).each { item ->
+            if (!(item instanceof Map)) return
+            def title = (item.get("title") ?: "").toString().trim()
+            def desc = (item.get("description") ?: "").toString().trim()
+            def sec = (item.get("section") ?: "").toString().trim()
+            def src = (item.get("source") ?: "").toString().trim()
+            def line = [sec, title, desc, src].findAll { it }.join(" | ")
+            if (line) supplementLines.add(line)
+        }
+    }
+    def supplementSummary = supplementLines.take(8).join("\n")
+    def rows = functional_list
+    if (rows == null || !(rows instanceof List)) rows = []
+    def merged = new LinkedHashMap()
+    rows.each { item ->
+        if (!(item instanceof Map)) return
+        def st = normalize(item.get("source_type") ?: "web")
+        if (!(st in ["web", "api"])) st = "web"
+        def key = [
+            normalize(item.get("section")),
+            normalize(item.get("title")),
+            st,
+            normalize(item.get("requirement_type") ?: "functional")
+        ].join("||")
+        def src = (item.get("source") ?: "").toString().trim()
+        def desc = (item.get("description") ?: "").toString().trim()
+        if (supplementSummary) {
+            if (desc) {
+                if (!desc.contains(supplementSummary)) desc = desc + "\n" + supplementSummary
+            } else {
+                desc = supplementSummary
+            }
+        }
+        def cloned = new LinkedHashMap(item)
+        cloned.put("source_type", st)
+        cloned.put("description", desc)
+        cloned.put("source", src)
+        cloned.put("merge_action", "enhance_existing")
+        if (!merged.containsKey(key)) {
+            merged.put(key, cloned)
+        } else {
+            def ex = merged.get(key)
+            ex.put("business_rules", mergeTextList(ex.get("business_rules"), cloned.get("business_rules")))
+            ex.put("acceptance_criteria", mergeTextList(ex.get("acceptance_criteria"), cloned.get("acceptance_criteria")))
+            ex.put("dependencies", mergeTextList(ex.get("dependencies"), cloned.get("dependencies")))
+            def exSrc = (ex.get("source") ?: "").toString().trim()
+            def newSrc = (cloned.get("source") ?: "").toString().trim()
+            if (newSrc && !exSrc.contains(newSrc)) {
+                ex.put("source", exSrc ? (exSrc + "; " + newSrc) : newSrc)
+            }
+            def exPage = (ex.get("page") ?: "").toString().trim()
+            def newPage = (cloned.get("page") ?: "").toString().trim()
+            if (newPage && !exPage.contains(newPage)) {
+                ex.put("page", exPage ? (exPage + "," + newPage) : newPage)
+            }
+            ex.put("merge_action", "enhance_existing")
+            merged.put(key, ex)
+        }
+    }
+    def out = new ArrayList(merged.values())
+    fn.put("multi_doc_step1_input", out)
+    fn.put("multi_doc_functional_list", out)
+    fn.put("functional_list", out)
+    functional_list = out
+    return out.size()
+'''
 assign('combined_result', '# {{file_name}} \n{{background_result}}\n{{functional_result}}\n{{compliance_result}}\n{{other_result}}')
 n_combined_result,act_memory.assign?value='''{{combined_result}}'''&type=md
 // [ROOT-MAIN·mmd] 导图必须在 Combined MD 后立即展示，不能等模块/设计/用例全部结束；使用稳定静态 mmd，不阻断后续流程
@@ -428,6 +636,8 @@ when('gen_change_type != "NEW"', {
         fl.each { item ->
             if (!(item instanceof Map)) return
             def p = (item.get("page") ?: "").toString().trim()
+            if (p.contains(",")) p = p.split(",")[0].trim()
+            if (p.toLowerCase().startsWith("page")) p = p.substring(4).trim()
             if (!p) {
                 throw new RuntimeException("【STEP1页码缺失】functional item.page 为空，无法按页生成模块")
             }
@@ -453,12 +663,12 @@ when('gen_change_type != "NEW"', {
         n_page_web_has,act_func?script='return (n_page_web_items instanceof List && n_page_web_items.size() > 0) ? "true" : "false"'
         n_page_api_has,act_func?script='return (n_page_api_items instanceof List && n_page_api_items.size() > 0) ? "true" : "false"'
         when('n_page_web_has == "true"', {
-            n_page_web_modules,agt_test_doc_func_modules?input_data='{{n_page_web_items}}'
+            n_page_web_modules,agt_test_doc_func_modules?input_data='{{n_page_web_items}}'&outputLanguage={{outputLanguage}}
         }, {
             n_page_web_modules,act_func?script='return [platform: "", modules: []]'
         })
         when('n_page_api_has == "true"', {
-            n_page_api_modules,agt_test_doc_func_modules_api?input_data='{{n_page_api_items}}'
+            n_page_api_modules,agt_test_doc_func_modules_api?input_data='{{n_page_api_items}}'&outputLanguage={{outputLanguage}}
         }, {
             n_page_api_modules,act_func?script='return [platform: "", modules: []]'
         })
@@ -508,7 +718,7 @@ when('gen_change_type != "NEW"', {
 // Web-only 保持原单次 + 最多 3 批合并逻辑；api/auto 按 source_type 拆分后分别调用 Web/API func_modules 再合并
 when('pipeline_mode == "web"', {
     // [ROOT-MAIN·fm-web-only] 整体 web 时走单链；input_data 为已分类 functional_list JSON
-    n_modules_single,agt_test_doc_func_modules?input_data='{{functional_list}}'
+    n_modules_single,agt_test_doc_func_modules?input_data='{{functional_list}}'&outputLanguage={{outputLanguage}}
     n_modules_single_ok,act_func?script='''
         def x = n_modules_single
         if (x == null || !(x instanceof Map)) return 'false'
@@ -542,15 +752,12 @@ when('pipeline_mode == "web"', {
         '''
         foreach('n_fmi', 'n_func_module_input_chunks', {
             // [ROOT-MAIN·fm-web-chunk] Web 分批拆解；每批仍保留 Web 语义 LLM
-            n_mod_part,agt_test_doc_func_modules?input_data='{{n_fmi.item}}'
+            n_mod_part,agt_test_doc_func_modules?input_data='{{n_fmi.item}}'&outputLanguage={{outputLanguage}}
             act_func?script='''
                 def acc = fn.get('acc_func_mod_modules')
                 if (acc == null) acc = new ArrayList()
                 def p = n_mod_part
                 if (p != null && p instanceof Map) {
-                    if (fn.get('acc_func_mod_platform') == null && p.get('platform') != null) {
-                        fn.put('acc_func_mod_platform', p.get('platform').toString())
-                    }
                     def ml = p.get('modules')
                     if (ml instanceof List) ml.each { m -> acc.add(m) }
                 }
@@ -592,13 +799,13 @@ when('pipeline_mode == "web"', {
     '''
     when('n_fl_web_has == "true"', {
         // [ROOT-MAIN·fm-split-web] 仅处理 n_fl_w_data（source_type=web）；api 行已放入 n_fl_a_data
-        n_mod_web_result,agt_test_doc_func_modules?input_data='{{n_fl_w_data}}'
+        n_mod_web_result,agt_test_doc_func_modules?input_data='{{n_fl_w_data}}'&outputLanguage={{outputLanguage}}
     }, {
         n_mod_web_result,act_func?script='return [platform: "", modules: []]'
     })
     when('n_fl_api_has == "true"', {
         // [ROOT-MAIN·fm-split-api] 仅处理契约型 API 输入；与 web 结果在下方 merge，并给子模块带 pipeline_source_type
-        n_mod_api_result,agt_test_doc_func_modules_api?input_data='{{n_fl_a_data}}'
+        n_mod_api_result,agt_test_doc_func_modules_api?input_data='{{n_fl_a_data}}'&outputLanguage={{outputLanguage}}
     }, {
         n_mod_api_result,act_func?script='return [platform: "", modules: []]'
     })
@@ -633,8 +840,6 @@ when('pipeline_mode == "web"', {
         try { w = n_mod_web_result } catch (Throwable ignore) { w = null }
         try { a = n_mod_api_result } catch (Throwable ignore) { a = null }
         def plat = ""
-        if (w instanceof Map && w.get("platform")) plat = w.get("platform").toString()
-        if ((!plat) && a instanceof Map && a.get("platform")) plat = a.get("platform").toString()
         def mods = new ArrayList()
         mods.addAll(collect(w, "web"))
         mods.addAll(collect(a, "api"))
@@ -739,7 +944,9 @@ foreach('n_item', 'n_modules.modules', {
             }
             def pageValue = sub.get("page")
             if (pageValue == null || pageValue.toString().trim() == "") pageValue = module.get("page")
-            def pageText = (pageValue == null ? "" : pageValue.toString()).trim()
+            def pageText = (pageValue == null ? "" : pageValue.toString().trim())
+            if (pageText.contains(",")) pageText = pageText.split(",")[0].trim()
+            if (pageText.toLowerCase().startsWith("page")) pageText = pageText.substring(4).trim()
                 def row = [
                 platform: n_modules.platform,
                 main_module_name: mainNameRaw,
@@ -767,20 +974,15 @@ act_func?script='''
         return x
     }
     def pageTextOf = { inputVal ->
-        def ps = new LinkedHashSet()
-        def s = (inputVal == null ? "" : inputVal.toString())
-        s.split(/\\s*,\\s*/).each { p ->
-            def t = (p == null ? "" : p.toString()).trim()
-            if (!t) return
-            def lower = t.toLowerCase()
-            if (lower.indexOf("page") >= 0) {
-                // keep as-is if it already contains page
-            } else if (t ==~ /\\d+/) {
-                t = "Page" + t
-            }
-            if (t) ps.add(t)
+        def s = (inputVal == null ? "" : inputVal.toString()).trim()
+        if (!s) return ""
+        def token = s.split(/\\s*,\\s*/)[0].trim()
+        if (!token) return ""
+        def lower = token.toLowerCase()
+        if (lower.indexOf("page") >= 0) {
+            return token.replaceFirst(/(?i)^page\\s*/, "").trim()
         }
-        return ps.join(", ")
+        return token
     }
     def mergePages = { a, b ->
         def ps = new LinkedHashSet()
@@ -858,6 +1060,29 @@ when('resume_mode == "from_step2"', {
 
 // 第二步：按子模块逐条生成设计、展平并单次导入（与第三步一致，不再固定 100 条切块）
 // [主链][风险点] resumeSubmoduleName 必须与 Step1 产出的 submodule_name 精确一致，否则会提前失败
+// Export kb_gen_test_module before Step2 starts
+n_export_module_raw,act_kb.selectBy?sql='select platform, main_module_name, main_module_source, submodule_name, submodule_description, submodule_source, source_type from kb_gen_test_module where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") order by main_module_name, submodule_name'
+// Keep module xlsx column order stable
+n_export_module_data,act_func?script='''
+def rows = n_export_module_raw
+if (rows == null || !(rows instanceof List)) rows = []
+return rows.collect { r ->
+    def out = new LinkedHashMap()
+    out["Platform"] = r.platform == null ? "" : r.platform
+    out["Main Module Name"] = r.main_module_name == null ? "" : r.main_module_name
+    out["Main Module Source"] = r.main_module_source == null ? "" : r.main_module_source
+    out["Submodule Name"] = r.submodule_name == null ? "" : r.submodule_name
+    out["Submodule Description"] = r.submodule_description == null ? "" : r.submodule_description
+    out["Submodule Source"] = r.submodule_source == null ? "" : r.submodule_source
+    out["Source Type"] = r.source_type == null ? "" : r.source_type
+    return out
+}
+'''
+// Write module xlsx file
+n_export_module_file_msg,act_artifact.write?filepath='{{n_export_paths.modulePath}}'&data='{{n_export_module_data}}'
+// Trigger module xlsx file sync
+n_export_module_sync_msg,act_artifact.triggerSync?filepath='{{n_export_paths.modulePath}}'&forceSync=true&ensureKrd=true
+
 n_resume_step2_scope,act_func?script='''
     def rm = "{{resume_mode}}"
     def mod = fn.get('test_module_flattened_data')
@@ -1011,7 +1236,7 @@ when('resume_mode == "from_step3"', {
         assign('test_module_content', '{{n_step2_sub.item}}')
         assign('step2_design_pipeline', '{{test_module_content.source_type}}')
         // [ROOT-MAIN·step2-design] pipelineDesignMode 必须对齐 test_module_content.source_type，否则 api 模块会误走 UI 模板
-        n_design,agt_test_doc_design?input_data='{{test_module_content}}'&documentId='{{effectiveDocumentId}}'&async=false&pipelineDesignMode={{step2_design_pipeline}}
+        n_design,agt_test_doc_design?input_data='{{test_module_content}}'&documentId='{{effectiveDocumentId}}'&async=false&pipelineDesignMode={{step2_design_pipeline}}&outputLanguage={{outputLanguage}}
         n_flat_one_batch,act_func?script='''
             def safeDocId = "{{effectiveDocumentId}}"
             def ver = "{{version}}"
@@ -1092,6 +1317,17 @@ when('resume_mode == "from_step3"', {
                 if (v != null) rawList.add(v)
             }
             def out = []
+            def pageTextOf = { inputVal ->
+                def s = (inputVal == null ? "" : inputVal.toString()).trim()
+                if (!s) return ""
+                def token = s.split(/\\s*,\\s*/)[0].trim()
+                if (!token) return ""
+                def lower = token.toLowerCase()
+                if (lower.indexOf("page") >= 0) {
+                    return token.replaceFirst(/(?i)^page\\s*/, "").trim()
+                }
+                return token
+            }
             rawList.each { raw ->
                 def d = unwrapPayload(raw)
                 if (d == null) return
@@ -1111,22 +1347,6 @@ when('resume_mode == "from_step3"', {
                         def sid = (tc.get("sub_id") ?: tc.get("Sub_id") ?: "").toString().trim()
                         if (!sid) return
                         def stRow = "web"
-                        def pageTextOf = { inputVal ->
-                            def ps = new LinkedHashSet()
-                            def s = (inputVal == null ? "" : inputVal.toString())
-                            s.split(/\\s*,\\s*/).each { p ->
-                                def t = (p == null ? "" : p.toString()).trim()
-                                if (!t) return
-                                def lower = t.toLowerCase()
-                                if (lower.indexOf("page") >= 0) {
-                                    // keep as-is if it already contains page
-                                } else if (t ==~ /\\d+/) {
-                                    t = "Page" + t
-                                }
-                                if (t) ps.add(t)
-                            }
-                            return ps.join(", ")
-                        }
                         try {
                             if (test_module_content instanceof Map) {
                                 def ts = test_module_content.get("source_type")
@@ -1159,6 +1379,9 @@ when('resume_mode == "from_step3"', {
                                 if (ms != null) modSubSrc = ms.toString().trim()
                             }
                         } catch (Throwable ignore3) { }
+                        def pageText = (modPage == null ? "" : modPage.toString().trim())
+                        if (pageText.contains(",")) pageText = pageText.split(",")[0].trim()
+                        if (pageText.toLowerCase().startsWith("page")) pageText = pageText.substring(4).trim()
                         out.add([
                             design_element: deNorm,
                             sub_category: scNorm,
@@ -1173,7 +1396,7 @@ when('resume_mode == "from_step3"', {
                             version: ver,
                             source_type: stRow,
                             change_type: "{{gen_change_type}}",
-                            page: modPage
+                            page: pageText
                         ])
                     }
                 }
@@ -1238,6 +1461,29 @@ assign('kb_gen_test_module_design', 'Download <a href="/knowledge-base/retrieval
 // design_flattened_data_one 已在展平 act_func 中 fn.put，避免用 assign 模板承接 List<Map>
 
 // 按 submodule_name 去重得到批次顺序：每批为相同 submodule_name 的设计行列表
+// Export kb_gen_test_module_design before Step3 starts
+n_export_design_raw,act_kb.selectBy?sql='select platform, main_module_name, main_module_source, submodule_name, submodule_description, submodule_source, design_element, sub_category, source_type from kb_gen_test_module_design where version = "{{version}}" and documentId in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") order by main_module_name, submodule_name, sub_category'
+// Keep design xlsx column order stable
+n_export_design_data,act_func?script='''
+def rows = n_export_design_raw
+if (rows == null || !(rows instanceof List)) rows = []
+return rows.collect { r ->
+    def out = new LinkedHashMap()
+    out["Platform"] = r.platform == null ? "" : r.platform
+    out["Main Module Name"] = r.main_module_name == null ? "" : r.main_module_name
+    out["Submodule Name"] = r.submodule_name == null ? "" : r.submodule_name
+    out["Submodule Description"] = r.submodule_description == null ? "" : r.submodule_description
+    out["Design Element"] = r.design_element == null ? "" : r.design_element
+    out["Sub Category"] = r.sub_category == null ? "" : r.sub_category
+    out["Source Type"] = r.source_type == null ? "" : r.source_type
+    return out
+}
+'''
+// Write design xlsx file
+n_export_design_file_msg,act_artifact.write?filepath='{{n_export_paths.designPath}}'&data='{{n_export_design_data}}'
+// Trigger design xlsx file sync
+n_export_design_sync_msg,act_artifact.triggerSync?filepath='{{n_export_paths.designPath}}'&forceSync=true&ensureKrd=true
+
 n_design_batches,act_func?script='''
     def d = fn.get('design_flattened_data_one')
     if (d == null || !(d instanceof List)) d = []
@@ -1361,6 +1607,15 @@ when('resume_enabled_step3 == "true"', {
     n_existing_case_rows,act_kb.selectBy?sql='select submodule_name,sub_id,title,steps,expected_result,version,document_id,test_no,source_type from kb_gen_test_case where version = "{{version}}" and document_id in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}")'
     act_func?script='''
         def norm = { v -> (v == null ? "" : v.toString()).trim().replaceAll(/\\s+/, " ") }
+        def pageKeyOf = { inputVal ->
+            def s = (inputVal == null ? "" : inputVal.toString()).trim()
+            if (!s) return ""
+            def token = s.contains(",") ? s.split(",")[0].trim() : s
+            if (!token) return ""
+            if (token.toLowerCase().startsWith("page")) return token
+            if (token.isNumber()) return "Page" + token
+            return token
+        }
         def rows = n_existing_case_rows
         if (rows == null || !(rows instanceof List)) rows = []
         def seenBiz = new LinkedHashSet()
@@ -1373,7 +1628,7 @@ when('resume_enabled_step3 == "true"', {
                 if (row.get("source_type") != null) stG = row.get("source_type").toString().trim().toLowerCase()
             } catch (Throwable ignoreSt) { stG = "web" }
             if (!(stG in ["web", "api"])) stG = "web"
-            def bizKey = [norm(row.submodule_name), norm(row.sub_id), norm(row.title), norm(row.steps), norm(row.expected_result), norm(row.version), norm(row.document_id), stG, norm(row.page)].join("||").toLowerCase()
+            def bizKey = [norm(row.submodule_name), norm(row.sub_id), norm(row.title), norm(row.steps), norm(row.expected_result), norm(row.version), norm(row.document_id), stG, pageKeyOf(row.page)].join("||").toLowerCase()
             if (bizKey) seenBiz.add(bizKey)
             def no = norm(row.test_no)
             if (no) {
@@ -1402,7 +1657,7 @@ foreach('n_batch', 'active_design_batches', {
         assign('design_case_rows', '[]')
         assign('step3_case_pipeline', '{{test_design.source_type}}')
         // [ROOT-MAIN·step3-case] pipelineCaseMode 对齐设计 source_type；api 用例不套三语 UI 强约束
-        n_gen_case,agt_test_doc_gen_case?input_data='{{test_design}}'&documentId='{{effectiveDocumentId}}'&async=false&pipelineCaseMode={{step3_case_pipeline}}&fixedThreeLanguage={{fixedThreeLanguage}}
+        n_gen_case,agt_test_doc_gen_case?input_data='{{test_design}}'&documentId='{{effectiveDocumentId}}'&async=false&pipelineCaseMode={{step3_case_pipeline}}&fixedThreeLanguage={{fixedThreeLanguage}}&outputLanguage={{outputLanguage}}
         assign('test_case_raw', '{{n_gen_case}}')
         assign('test_case_map', '{}')
         act_func?script='''
@@ -1436,22 +1691,9 @@ foreach('n_batch', 'active_design_batches', {
                         if (p != null) designPage = p.toString().trim()
                     }
                 } catch (Throwable ignore4) { designPage = "" }
-                def pageTextOf = { inputVal ->
-                    def ps = new LinkedHashSet()
-                    def s = (inputVal == null ? "" : inputVal.toString())
-                    s.split(/\\s*,\\s*/).each { p ->
-                        def t = (p == null ? "" : p.toString()).trim()
-                        if (!t) return
-                        def lower = t.toLowerCase()
-                        if (lower.indexOf("page") >= 0) {
-                            // keep as-is if it already contains page
-                        } else if (t ==~ /\\d+/) {
-                            t = "Page" + t
-                        }
-                        if (t) ps.add(t)
-                    }
-                    return ps.join(", ")
-                }
+                def pageVal = designPage
+                if (pageVal.contains(",")) pageVal = pageVal.split(",")[0].trim()
+                if (pageVal.toLowerCase().startsWith("page")) pageVal = pageVal.substring(4).trim()
                 def row = [
                     title: test_case.title,
                     application: test_case.application,
@@ -1460,6 +1702,7 @@ foreach('n_batch', 'active_design_batches', {
                     expected_result: test_case.expected_result,
                     source_value: test_case.source_value,
                     test_type: test_case.test_type,
+                    tag: test_case.tag,
                     sub_category: (v.sub_category ?: test_design.sub_category),
                     sub_id: (v.sub_id ?: test_design.sub_id),
                     design_element: (v.design_element ?: test_design.design_element),
@@ -1474,7 +1717,7 @@ foreach('n_batch', 'active_design_batches', {
                     version: "{{version}}",
                     source_type: (test_design.source_type ?: "web"),
                     change_type: "{{gen_change_type}}",
-                    page: designPage
+                    page: pageVal
                 ]
                 def st = norm(row.source_type).toLowerCase()
                 if (st == "api") {
@@ -1536,7 +1779,7 @@ foreach('n_batch', 'active_design_batches', {
             noLoop.put("data", [])
             fn.put("test_case_map", noLoop)
         '''
-        foreach('n_test_case_map','test_case_map.data',{
+        when('false', {
             assign('test_case', '{{n_test_case_map.item}}')
             act_func?script='''
                 def norm = { v -> (v == null ? "" : v.toString()).trim().replaceAll(/\\s+/, " ") }
@@ -1547,22 +1790,9 @@ foreach('n_batch', 'active_design_batches', {
                         if (p != null) designPage2 = p.toString().trim()
                     }
                 } catch (Throwable ignore5) { designPage2 = "" }
-                def pageTextOf = { inputVal ->
-                    def ps = new LinkedHashSet()
-                    def s = (inputVal == null ? "" : inputVal.toString())
-                    s.split(/\\s*,\\s*/).each { p ->
-                        def t = (p == null ? "" : p.toString()).trim()
-                        if (!t) return
-                        def lower = t.toLowerCase()
-                        if (lower.indexOf("page") >= 0) {
-                            // keep as-is if it already contains page
-                        } else if (t ==~ /\\d+/) {
-                            t = "Page" + t
-                        }
-                        if (t) ps.add(t)
-                    }
-                    return ps.join(", ")
-                }
+                def pageVal2 = designPage2
+                if (pageVal2.contains(",")) pageVal2 = pageVal2.split(",")[0].trim()
+                if (pageVal2.toLowerCase().startsWith("page")) pageVal2 = pageVal2.substring(4).trim()
                 def row = [
                     title: test_case.title,
                     application: test_case.application,
@@ -1571,6 +1801,7 @@ foreach('n_batch', 'active_design_batches', {
                     expected_result: test_case.expected_result,
                     source_value: test_case.source_value,
                     test_type: test_case.test_type,
+                    tag: test_case.tag,
                     sub_category: (test_case_map.sub_category ?: test_design.sub_category),
                     sub_id: (test_case_map.sub_id ?: test_design.sub_id),
                     design_element: (test_case_map.design_element ?: test_design.design_element),
@@ -1585,7 +1816,7 @@ foreach('n_batch', 'active_design_batches', {
                     version: "{{version}}",
                     source_type: (test_design.source_type ?: "web"),
                     change_type: "{{gen_change_type}}",
-                    page: designPage2
+                     page: pageVal2
                 ]
                 def st = norm(row.source_type).toLowerCase()
                 if (st == "api") {
@@ -1652,6 +1883,14 @@ foreach('n_batch', 'active_design_batches', {
         def arr = fn.get('batch_case_rows')
         if (arr == null || !(arr instanceof List)) { fn.put("flush_data", []); return }
         def norm = { v -> (v == null ? "" : v.toString()).trim().replaceAll(/\\s+/, " ") }
+        def pageKeyOf = { inputVal ->
+            def s = (inputVal == null ? "" : inputVal.toString()).trim()
+            if (!s) return ""
+            def token = s.contains(",") ? s.split(",")[0].trim() : s
+            if (!token) return ""
+            if (token.toLowerCase().startsWith("page")) return token.substring(4).trim()
+            return token
+        }
         def seenBiz = (seen_biz_global instanceof List) ? new LinkedHashSet(seen_biz_global) : new LinkedHashSet()
         def seenNo = (seen_no_global instanceof Map) ? new LinkedHashMap(seen_no_global) : new LinkedHashMap()
         int serial = 0
@@ -1664,7 +1903,7 @@ foreach('n_batch', 'active_design_batches', {
                 if (row.get("source_type") != null) stG = row.get("source_type").toString().trim().toLowerCase()
             } catch (Throwable ignoreSt) { stG = "web" }
             if (!(stG in ["web", "api"])) stG = "web"
-            def bizKey = [norm(row.submodule_name), norm(row.sub_id), norm(row.title), norm(row.steps), norm(row.expected_result), norm(row.version), norm(row.document_id), stG].join("||").toLowerCase()
+            def bizKey = [norm(row.submodule_name), norm(row.sub_id), norm(row.title), norm(row.steps), norm(row.expected_result), norm(row.version), norm(row.document_id), stG, pageKeyOf(row.page)].join("||").toLowerCase()
             if (!bizKey || seenBiz.contains(bizKey)) return
             seenBiz.add(bizKey)
             def no = norm(row.test_no)
@@ -1704,6 +1943,30 @@ foreach('n_batch', 'active_design_batches', {
     })
 })
 
+
+// 查询该 documentId 和版本的所有 case 数据
+// 导入所有 case 数据到文件
+// Export selected case fields to xlsx file
+n_all_case_raw,act_kb.selectBy?sql='select platform, steps, test_no, title, main_module_name, expected_result from kb_gen_test_case where version = "{{version}}" and document_id in ("{{effectiveDocumentId}}","{{documentId}}","{{kbSpaceFileId}}") order by submodule_name, test_no'
+// Keep xlsx column order stable
+n_all_case_data,act_func?script='''
+def rows = n_all_case_raw
+if (rows == null || !(rows instanceof List)) rows = []
+return rows.collect { r ->
+    def out = new LinkedHashMap()
+    out["Platform"] = r.platform == null ? "" : r.platform
+    out["Steps"] = r.steps == null ? "" : r.steps
+    out["Test No"] = r.test_no == null ? "" : r.test_no
+    out["Title"] = r.title == null ? "" : r.title
+    out["Module Name"] = r.main_module_name == null ? "" : r.main_module_name
+    out["Expected Result"] = r.expected_result == null ? "" : r.expected_result
+    return out
+}
+'''
+// Write xlsx file
+n_case_file_msg,act_artifact.write?filepath='{{n_export_paths.casePath}}'&data='{{n_all_case_data}}'
+// Trigger xlsx file sync
+n_case_file_sync_msg,act_artifact.triggerSync?filepath='{{n_export_paths.casePath}}'&forceSync=true&ensureKrd=true
  
 //# kb_gen_test_case
 assign('kb_gen_test_case', 'Download <a href="/knowledge-base/retrieval?title=knowledgeBaseList/knowledgeRetrieval/kb_gen_test_case&tableName=kb_gen_test_case&schema=llm_agent" target="_blank">kb_gen_test_case</a>')

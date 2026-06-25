@@ -42,13 +42,21 @@
 	"version":2
 }
 */
-//# Agent status
+// Agent status
 assign("status", 'Agent is running')
-// 传入的参数映射
+// argMapping parameter
 assign('n_agr_mapping', '{{argMapping}}')
-// 传入的数据参数
-assign('n_kb_list', '{{kbList}}')
-
+// Normalize kbList to a list so both a single kb object and an array are supported.
+n_kb_list, act_func.run?script='''
+	def raw = kbList
+	if (raw == null) {
+		return []
+	}
+	if (raw instanceof Collection) {
+		return raw
+	}
+	return [raw]
+'''
 assign('n_base_url', '{{base_url}}')
 
 // 任务名称
@@ -56,7 +64,7 @@ assign('n_task_name', '{{task_name}}')
 
 
 // 获取第一个application
-n_first_application, act_func.run?script="return kbList? kbList[0].application : null"
+n_first_application, act_func.run?script="return n_kb_list ? n_kb_list[0].application : null"
 
 """
 // 数据入库plan表，后续api的plan表会废弃
@@ -80,4 +88,3 @@ return JSON.stringify(transformedApi);
 '''
 
 assign("api_plan_data", '{{n_api_plan_data}}')
-

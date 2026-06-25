@@ -120,9 +120,6 @@ when('n_results?size>0',{
   assign('vector_list', '{{n_temp_vector}}')
   assign('n_results', '{{n_temp_vector}}')
 
-  // Get document id 
-  n_document_id,act_func?script='''return n_results[0].document_id'''
-
   // Check the answer meets the question first
   n_result, tpl_check_answer_new_v4,psr_json
 
@@ -134,12 +131,13 @@ when('n_results?size>0',{
       assign('need', '{{need_info.item}}')
 
       assign('n_id', '{{need.id}}')
+      assign('n_doc_id', '{{need.document_id}}')
       assign('n_up_num', '{{need.up}}')
       assign('n_next_num', '{{need.next}}')
 
       // Get the up vector content
       when('{{n_up_num>0}}', {
-        n_up_data,act_kb.selectBy?sql='SELECT id,document_id,raw_content FROM kb_spaces_knowledge_section WHERE document_id = {{n_document_id}} AND id < {{n_id}} ORDER BY id DESC LIMIT {{n_up_num}}'
+        n_up_data,act_kb.selectBy?sql='SELECT id,document_id,raw_content FROM kb_spaces_knowledge_section WHERE document_id = {{n_doc_id}} AND id < {{n_id}} ORDER BY id DESC LIMIT {{n_up_num}}'
         when('n_up_data?size>0', {
           foreach('data', 'n_up_data',{
             n_tmp_up_data, act_func?script='''
@@ -163,7 +161,7 @@ when('n_results?size>0',{
 
 		  // Get the next vector content
       when('{{n_next_num>0}}', {
-        n_next_data,act_kb.selectBy?sql='SELECT id,document_id,raw_content FROM kb_spaces_knowledge_section WHERE document_id = {{n_document_id}} AND id > {{n_id}} ORDER BY id ASC LIMIT {{n_next_num}}'
+        n_next_data,act_kb.selectBy?sql='SELECT id,document_id,raw_content FROM kb_spaces_knowledge_section WHERE document_id = {{n_doc_id}} AND id > {{n_id}} ORDER BY id ASC LIMIT {{n_next_num}}'
         when('n_next_data?size>0', {
           foreach('data', 'n_next_data',{
             n_tmp_next_data, act_func?script='''
@@ -182,11 +180,8 @@ when('n_results?size>0',{
   {
     // isEnough is true
     n_vector, act_func?script='''
-      def list_data = n_results
-      def json_data = n_result
-      def chunks_used = n_result.chunks_used
-      return chunks_used.findAll { it != null && it instanceof Number && it >= 0 && it < vector_list.size() }
-                        .collect { vector_list[it] }
+      def idList = n_result.chunks_used.collect { it.toString() }
+      return vector_list.findAll { it.id.toString() in idList }
     '''
     n_temp_vector,act_func?script='''
       def temp_data = result_datas
@@ -226,19 +221,17 @@ when('n_results?size>0',{
 
 	when('n_second_result.chunks_used?size > 0',{
 		n_answer_data, act_func?script='''
-      def chunks_used = n_second_result.chunks_used 
+      def idList = n_second_result.chunks_used.collect { it.toString() }
       def res_list = result_datas
       def result = []
       def i = 1
-      chunks_used.each { index ->
-        if (index < 0 || index >= res_list.size()) {
-          return
+      idList.each { chunkId ->
+        def item = res_list.find { it.id.toString() == chunkId }
+        if (item != null) {
+          item.id = item.id.toString(); item.serialNumber = i.toString()
+          result.add(item)
+          i++
         }
-        id = res_list[index].id.toString()
-        res_list[index].id = id
-        res_list[index].serialNumber = i.toString()           
-        result.add(res_list[index])
-        i = i + 1
       }
       return result
     '''
@@ -300,18 +293,36 @@ define('tpl_check_answer_new_v4', '''
    - 否则，`isEnough = false`。
 
 ## Output Format:
-- 若已足够：  
-  {
-    "isEnough": true,
-    "chunks_used": [i1, i2, ...] // 其中 i1, i2, ... 是 result_datas 列表中的下标（从 0 开始），仅包含与问题主题相关且渠道合规的块。
-  }
+用 ```json 代码块输出，不要输出任何其他内容。
 
-- 若全部用完仍不足够：
-  {
-    "isEnough": false,
-    "chunks_used": [i1, i2, ...]
-  }
-  
+- 若信息足以完整回答问题：
+```json
+{
+  "isEnough": true,
+  "chunks_used": ["279828510822645760", "279828510822645761"]
+}
+```
+
+- 若信息不足以完整回答问题，需列出每个不足块及其需要补充的上下文数量：
+```json
+{
+  "isEnough": false,
+  "chunks_used": ["279828510822645760"],
+  "needs": [
+    {"id": "279828510822645760", "document_id": "279825906043469824", "up": 2, "next": 1}
+  ]
+}
+```
+
+字段说明：
+- `isEnough`: true 或 false
+- `chunks_used`: 相关且渠道合规的向量块 `id` 列表（字符串数组），两种情况下都需要返回
+- `needs`: 仅 `isEnough=false` 时需要，数组元素：
+  - `id`: 该向量块的 `id` 字段值
+  - `document_id`: 该向量块所属文档的 `document_id`
+  - `up`: 需要向前（上文）补充的块数
+  - `next`: 需要向后（下文）补充的块数
+
 # 当前问题:
 {{userInput}}
 
@@ -356,22 +367,18 @@ define('tpl_check_answer_new_v1', '''
     3.2 若所有向量块评估完毕后，仍无法从片段中直接提取完整答案，则判定为信息不足。
  4. 输出最终判断结果。
 
-# 补充信息：向量块下标**不是**向量块集合中的serialNumber，而是当前向量块集合vector_list中的下标，比如：第一个向量块的下标为0，第4个向量块的下标为3
-
-
 - OutputFormat
- - 若已足够：  
-  {  
-    "isEnough": true,  
-    "chunks_used": [1,2,3..],  // [1,2,3..]中的1,2,3不是向量块的serialNumber，而是指result_datas集合的下标，比如：1表示result_datas集合中第2个向量，3表是result_datas集合中第4个向量
-  }  
+用 ```json 代码块输出，不要输出任何其他内容。
 
- - 若全部用完仍不足够：  
-  {  
-    "isEnough": false,  
-    "chunks_used": [原有向量块],  
-  }  
+```json
+{
+  "isEnough": true,
+  "chunks_used": ["279828510822645760", "279828510822645761"]
+}
+```
 
+- `isEnough`: true 表示向量块足以完整回答问题，false 表示不足
+- `chunks_used`: 被判定为相关且可用的向量块 `id` 列表（字符串数组），不是下标或 serialNumber
 
 # 当前问题:
 {{userInput}}

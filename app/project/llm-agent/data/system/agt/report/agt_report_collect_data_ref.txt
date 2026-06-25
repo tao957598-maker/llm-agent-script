@@ -208,7 +208,7 @@ foreach('n_txt_group','n_txt_group_list',{
         assign('n_txt_tool_set_result','')
         assign('n_txt_tool_set_data','Xx')
         when('fn.hasValue(n_txt_variable_tool_set)',{
-            n_txt_tool_set_result,agt_toolset_executor.chatdoc?userInput={{n_txt_variable.item.desc}}&needManual=false&toosetCode={{n_txt_variable_tool_set}}
+            n_txt_tool_set_result,agt_toolset_executor.toolset?userInput={{n_txt_variable.item.desc}}&needManual=false&toosetCode={{n_txt_variable_tool_set}}
         })
         //# n_txt_search_data
          n_txt_search_data, act_kbs.searchQuestion?paramData={{fn.json('question, n_txt_variable_desc, folderPath, n_kb_folder_path')}}&similarity='0.5'
@@ -284,7 +284,7 @@ foreach('long_txt_variable','long_txt_list',{
     assign('n_long_txt_variable_tool_set',"{{long_txt_variable.item.toolSetCode}}")
     assign('n_long_text_tool_set_result','no data')
     when('fn.hasValue(n_long_txt_variable_tool_set)',{
-        n_long_text_tool_set_result,agt_toolset_executor.chatdoc?userInput={{long_txt_variable.item.desc}}&needManual=false&toosetCode={{n_long_txt_variable_tool_set}}
+        n_long_text_tool_set_result,agt_toolset_executor.toolset?userInput={{long_txt_variable.item.desc}}&needManual=false&toosetCode={{n_long_txt_variable_tool_set}}
     })
     
     // 将本次调用的返回数据跟引用id绑定，后续从报告记录中查看每个指标的source来源
@@ -356,7 +356,7 @@ foreach('list_variable','list_list',{
     assign('n_list_tool_set_result','no data')
     //assign('n_list_variable_var',"{{list_variable.item.var}}")
     when('fn.hasValue(n_list_variable_tool_set)',{
-        n_list_tool_set_result,agt_toolset_executor.chatdoc?userInput={{list_variable.item.desc}}&needManual=false&toosetCode={{n_list_variable_tool_set}}
+        n_list_tool_set_result,agt_toolset_executor.toolset?userInput={{list_variable.item.desc}}&needManual=false&toosetCode={{n_list_variable_tool_set}}
     })
     assign("n_chart_desc","{{list_variable.item.desc}}")
     //## Semantic analysis result--List Type
@@ -381,7 +381,7 @@ foreach('list_variable','list_list',{
     when('n_diagram_result=="Y"||n_diagram_result==Y',{
         // Call ToolSet if exists
         n_diagram_ui_results,agt_generator_html.ui?html_description="{{n_list_variable_desc}}"
-        //n_chart_tool_set_result,agt_toolset_executor.chatdoc?userInput={{chart_variable.item.desc}}&needManual=false&toosetCode={{n_chart_variable_tool_set}}
+        //n_chart_tool_set_result,agt_toolset_executor.toolset?userInput={{chart_variable.item.desc}}&needManual=false&toosetCode={{n_chart_variable_tool_set}}
         log('-----------n_diagram_ui_results========={{n_diagram_ui_results}}')
         when('fn.hasValue(n_diagram_ui_results)',{
             act_func?script='''

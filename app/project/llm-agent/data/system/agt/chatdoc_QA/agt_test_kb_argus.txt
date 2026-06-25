@@ -2,30 +2,44 @@
 {
 	"title":"K-B-Argus",
 	"description":"支持多语言问答，兼容Excel、Word、PDF、PPT、图片、HTML等多种文件格式，并结合MongoDB实现表格大数据的高效计算与分析。",
-	"resultPlan":"n_final_answer",
 	"parameter":[
-		{
-			"name":"userInput",
-			"label":"用户问题",
-			"type":"textarea"
-		},
-		{
-			"name":"kbSpaceId",
-			"label":"目录ID（支持多个）",
-			"type":"knowledge_fold"
-		},
-		{
-			"name":"kbSpaceFileId",
-			"label":"File",
-			"type":"knowledge_space"
-		}
-	],
+    {
+      "name":"userInput",
+      "label":"用户问题",
+      "type":"textarea"
+    },
+    {
+      "name":"kbSpaceId",
+      "label":"目录ID（支持多个）",
+      "type":"knowledge_fold"
+    },
+    {
+      "name":"kbSpaceFileId",
+      "label":"File",
+      "type":"knowledge_space"
+    },
+    {
+      "name":"mcpCode",
+      "label":"mcp工具",
+      "default":"",
+      "required":false
+    },
+    {
+      "name":"skillName",
+      "label":"skills工具",
+      "default":"",
+      "required":false
+    }
+  ],
 	"tag":"chatdoc_QA",
+	"resultPlan":"n_final_answer",
+	"life":100,
 	"displayOrder":1,
-	"version":4,
-	"life":100
+	"version":1
 }
 */
+
+
 // prompt DIRECTORY
 assign("system_prompt_doc", '''
 /*{
@@ -309,6 +323,7 @@ D. **模型推导（最后手段）**：
 
 ## ✅ 最终输出要求（必须满足）
 
+- execution_log中所有步骤的执行结果step_result先简要概述“是做什么的步骤，以及 是否成功”。
 - 若使用 `knowledge_rules` → **必须附带原始 `<div>`**；
 - 若未使用 `knowledge_rules` → **绝对不可出现 `<div>`**；
 - 所有图像/截图信息 → **统一表述为“根据资料可知”**，**无时态、无操作状态暗示**；
@@ -461,9 +476,14 @@ agent('agt_async_2',{
   assign('answer_summary_list_2', '[]')
   assign('answer_summary_2', '[]')
   assign('n_tmp_answers_2', '[]')
+  assign('webSearch', '暂无')
+  // 进入异步 skillName
+  assign('skillName', '{{skillName}}')
+  // 进入异步 mcpCode
+  assign('mcpCode', '{{mcpCode}}')
 
   // Planning
-  n_plan_response,agt_planner_gen?userInput={{question}}&languageType={{languageType}}&milvusRules={{milvusRules}}&mongodbSampling={{mongodbSampling}}&n_language_type={{languageType}}&expertData={{expertData}}&async=true
+  n_plan_response,agt_planner_gen.chatdoc_QA?question={{question}}&languageType={{languageType}}&milvusRules={{milvusRules}}&mongodbSampling={{mongodbSampling}}&expertData={{expertData}}&mcpCode={{mcpCode}}&skillName={{skillName}}&webSearch={{webSearch}}&async=true
   n_plan_response_temp,act_func?script='''
     def expert = n_plan_response
     async_list_2.add([n_plan_response:expert])
@@ -519,6 +539,8 @@ agent('agt_async_3',{
   '''
   assign('kbSpaceFileId', '{{n_kbSpaceFileId}}')
   
+  // Milvus的参数
+  log('question {{question}} kbSpaceId {{kbSpaceId}} kbSpaceFileId {{kbSpaceFileId}}')
   // 1.1.Milvus 知识库 入数组
   n_milvus_rules, agt_test_query_vector_1?userInput={{question}}&folderIds={{kbSpaceId!}}&knowledgeIds={{kbSpaceFileId!}}&async=true
   n_milvus_rules_response_temp,act_func?script='''
@@ -534,7 +556,6 @@ agent('agt_async_3',{
     return expert
   '''
 
-"""
   // 2.Mysql 入数组
   n_document_query_answer,agt_test_query_document_2?userInput={{question}}&kbSpaceFileId={{kbSpaceFileId}}&async=true
   n_document_query_answer_temp,act_func?script='''
@@ -542,6 +563,7 @@ agent('agt_async_3',{
     async_list_3.add([n_document_query_answer:expert])
     return expert
   '''
+"""
   // 3.Mongodb 入数组
   n_mongodb_data, agt_test_query_mongo_3?userInput={{question}}&kbSpaceId={{kbSpaceId}}&async=true
   assign('n_mongodb_sampling_data',"[]")
@@ -599,6 +621,9 @@ n_language_type,act_func?script='''
   def paramMap = data.collectEntries { entry -> [ (entry.key): entry.value ] }
   return paramMap.n_language_type ?: ''
 '''
+// 用户问题
+log('{{question}}')
+// 改写
 n_rewrite,act_func?script='''
   def data = n_tmp_answers_2
   def paramMap = data.collectEntries { entry -> [ (entry.key): entry.value ] }
@@ -617,7 +642,10 @@ n_rewrite,act_func?script='''
   // 异常兜底：改写 agent 失败时可能回传 String（错误信息或原文）
   return rewrite
 '''
-assign("question", "{{fn.hasValue(n_rewrite) ? n_rewrite : question}}")
+// 暂时不使用改写
+"""
+// assign("question", "{{fn.hasValue(n_rewrite) ? n_rewrite : question}}")
+"""
 n_userInput_intent,act_func?script='''
   def data = n_tmp_answers_2
   def paramMap = data.collectEntries { entry -> [ (entry.key): entry.value ] }
@@ -635,6 +663,18 @@ assign('n_language_type', '{{n_language_type}}')
 assign('n_rewrite', '{{n_rewrite}}')
 //# Question intent
 assign('n_question_intent', '{{n_question_intent}}')
+
+n_handle_intent,act_func?script='''
+def data = n_userInput_intent
+def order = ["3", "2", "1"]
+for (num in order) {
+    if (data.contains(num)) {
+        return num as Integer
+    }
+}
+return 0
+'''
+assign('n_userInput_intent', '{{n_handle_intent}}')
 
 when('n_userInput_intent == 3',{
   //# Strategize and Deliberate
@@ -678,12 +718,12 @@ when('n_userInput_intent == 3',{
       return paramMap.n_expert_query_answer ?: []
     '''
 
-"""
     n_document_query_answer,act_func?script='''
       def data = n_tmp_answers_4
       def paramMap = data.collectEntries { entry -> [ (entry.key): entry.value ] }
       return paramMap.n_document_query_answer ?: []
     '''
+"""
     n_mongodb_data,act_func?script='''
       def data = n_tmp_answers_4
       def paramMap = data.collectEntries { entry -> [ (entry.key): entry.value ] }
@@ -728,7 +768,7 @@ when('n_userInput_intent == 3',{
     log('{{n_mongodb_sampling_data}}')
 
     // no agent plan
-    agt_async_2?userInput={{question}}&languageType={{n_language_type}}&milvusRules={{n_milvus_rules_refed}}&mongodbSampling={{n_mongodb_sampling_data}}&expertData={{n_expert_query_answer}}
+    agt_async_2?userInput={{question}}&languageType={{n_language_type}}&milvusRules={{n_milvus_rules_refed}}&mongodbSampling={{n_mongodb_sampling_data}}&expertData={{n_expert_query_answer}}&skillName={{skillName}}&mcpCode={{mcpCode}}
     n_tmp_answers_3,act_memory.retrieve?var=agt_async_2_answer&global=true
     n_plan_response,act_func?script='''
       def data = n_tmp_answers_3
@@ -759,6 +799,56 @@ when('n_userInput_intent == 3',{
             assign('step_type', '{{step.type}}')
             assign('step_tool_name', '{{step.tool_name}}')
 
+            when('step_type == "skills"',{
+            assign('skills_instructions', '{{step.params.intent_description}}')
+            when('!fn.hasValue(skills_instructions)',{
+              n_tmp_res,act_func?script='''
+                  def data_arr = context
+                  def step_task = "未成功生成"
+                  def data_json = {}
+                  data_json['step_no'] = step_no
+                  data_json['step_task'] = step_task
+                  data_json['step_result'] = '无'
+                  data_arr.add(data_json)
+                  return data_arr
+              '''
+              assign('context', '{{n_tmp_res}}')
+            },{
+              // skills使用的描述
+              log('{{skills_instructions}}')
+              n_skills_run,agt_run_skills?userInput={{skills_instructions}}&languageType={{n_language_type}}&milvusRules={{n_milvus_rules}}&mongodbSampling={{n_mongodb_data}}&webSearch="暂无"&expertData={{n_expert_query_answer}}&skillName={{skillName}}
+              // 上下文
+              n_tmp_res,act_func?script='''
+                  def data_arr = context
+                  def step_task = skills_instructions
+                  def step_result = n_skills_run
+                  def data_json = {}
+                  data_json['step_no'] = step_no
+                  data_json['step_task'] = step_task
+                  data_json['step_result'] = step_result
+                  data_arr.add(data_json)
+                  return data_arr
+              '''
+              assign('context', '{{n_tmp_res}}')
+            })
+            
+            })
+            when('step_type == "mcp"',{
+            n_mcp_run,agt_run_mcp?userInput={{question}}&mcpCode={{mcpCode}}  
+            // 上下文
+            n_tmp_res,act_func?script='''
+                def data_arr = context
+                def step_task = userInput
+                def step_result = n_mcp_run
+                def data_json = {}
+                data_json['step_no'] = step_no
+                data_json['step_task'] = step_task
+                data_json['step_result'] = step_result
+                data_arr.add(data_json)
+                return data_arr
+            '''
+            assign('context', '{{n_tmp_res}}')
+            })
             when('step_type == "dynamic" && step_tool_name == "dynamic_code_executor"',{
             n_computation_logic,act_func?script='''
                 def json_data = step
@@ -912,7 +1002,6 @@ when('n_userInput_intent == 1',{
   n_chat_log,tpl_chat_qa_test,psr_ref
   // history_data
   assign('history_log','{{tpl_chat_qa_test}}')
-  //$ Finally Answer
   assign('n_final_answer', '{{n_chat_log}}')
 })
 when('!fn.hasValue(n_final_answer)',{

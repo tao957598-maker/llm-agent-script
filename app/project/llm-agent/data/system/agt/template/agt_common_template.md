@@ -92,7 +92,8 @@ n_result,rag_memory.retrieve?var=kbData
 //## call kbs。 psr_XXX支持psr_all、psr_json、psr_ref、psr_codeblock、psr_code、psr_sql。 rag_XXX可以改为act_XXX
 rag_XXX.{{}}}?data='{{n_result!}}',psr_XXX
 //act_XXX.{{}}}?data='{{n_result!}}',psr_XXX
-
+// psr_ref：RAG 场景，将输出中的 ref（<div id="a" type="1" num="n"/>格式）标签转为 UI 引用块,且内容有www.baidu.com这种url会输出超链接标签
+tpl_rag_answer, psr_ref?urlLinkEnabled=true
 // groovy script: new List
 n_data,act_func?script=''' 
     // ------- map使用方法 ---- //
@@ -220,16 +221,17 @@ assign('params','{"question":"{{userInput}}","folderIds":"{{kbSpaceId!}}","knowl
 
 // 向量库查询（部分属性可能来自于mysql）
 /*
-    requirement  用户需求,
-    name         表名,
-    column       指定查询的字段,
-    outputFields 返回的列，支持多个列，逗号分隔,
-    top          返回的数量,
+    requirement  用户需求
+    name         表名,不传默认取系统配置type=knowledge_agent&value={{来自系统配置type=knowledge_vendor&value=default属性}}
+    column       指定查询的向量化字段，默认content或自动查找表meta_data_column定义的第一个向量字段
+    outputFields 返回的列，支持多个列，逗号分隔,不传默认全部
+    top          返回的数量，不传默认10
     isRerank     是否 二次rerank（调用外部的rerank接口）,true为是,
     bm25Weight   bm25权重(精确优先匹配权重）,值范围为[0-1]。不想生效设置为0，空时默认为0.3（底层知识库查询方法已经有默认值）
     isReferenceGraph  是否关联图谱知识 true为是，否则false,
+    filterItem   用于精确匹配向量库中的标量字段，格式为:{"filterKey":"tool_type","operator":"==","filterValue":"API","logicType":""}
 */
-act_kb.search
+act_kb.search?requirement=&name=&column&outputFields=
 
 // 查询知识空间的名称（即目录名称）
 /*  参数说明： kbSpaceIdOrFileId:知识空间ID即目录ID  或 知识ID即文件ID  （其中多个值会用拼接，只至此一种类型）
@@ -284,4 +286,51 @@ rag_kbs.searchFaq?question='{{userInput}}'&similarity='0.1'&top=10&isRerank=true
 assign('n_documents','{"query": "搜索文本", "documents": "[\"1\",\"2\"]", "top_n": 10}')
 //## Rerank
 n_rerank_data,act_kbs.rerankData?params={{fn.json('query, userInput, documents, n_documents, top_n, "5"')}}
+
+// 查询知识库文档（根据目录、用户的问题，找到对应的知识文档，检索文件名）
+/* 参数说明：
+    folderIds    目录ids，多个用逗号分隔
+    question     用户问题
+    size         返回文件个数，不传默认为20
+    outputFields 返回属性，格式如：id,knowledge_name，不传默认为：id,knowledge_name,extension,store_uri,kb_spaces_folder_id,file_name
+    score        相似度分数，double类型，不传默认为0.7
+*/
+rag_kbs.searchDocument?folderIds='1,2,3'&question='查询文档'&size=10&outputFields='id,knowledge_name'&score=0.8
+
+// 查询知识信息（根据不同调用类型查询知识ID或其他字段）
+/* 参数说明：
+    callType           调用类型：folderName(根据目录名)、folderPath(根据目录路径)、folderIds(根据目录ID)、knowledgeIds(根据知识ID)
+    value              对应类型的值，支持多值（逗号分隔）
+    knowledgeNameItems 知识名称列表，可选过滤条件  目前只针对callType=folderIds时生效
+    outFieldName       kb_spaces_folder_knowledge表输出的字段名，默认为id，只能指定一个字段
+*/
+rag_kbs.callQuestionKnowledges?callType='folderName'&value='技术文档'&knowledgeNameItems=''
+rag_kbs.callQuestionKnowledges?callType='folderPath'&value='appdata/ac_script/selenium/result/FAAP_001'&knowledgeNameItems=''&outFieldName='id'
+rag_kbs.callQuestionKnowledges?callType='folderName'&value='技术文档'&knowledgeNameItems=''&outFieldName='id'
+rag_kbs.callQuestionKnowledges?callType='folderIds'&value='1,2,3'&knowledgeNameItems=''&outFieldName='knowledge_name'
+rag_kbs.callQuestionKnowledges?callType='knowledgeIds'&value='100,101,102'&knowledgeNameItems=''&outFieldName='store_uri'
+
+// 根据问题搜索报告模板内容
+/* 参数说明：
+    question：问题文本 非空
+    top： 返回前N条，不传或空默认为3
+*/
+rag_kbs.searchTemplate?question='查找咨询报告'&top=5
+
+// ----------------------- API Tool 相关操作-----------------------
+// 调用API工具的doExecute方法 。旧方法，不支持复杂的动态参数/环境变量参数解析，建议不要用，建议使用下面的act_api.doExecuteDynamic方法
+/* 参数说明：
+    name：API配置编码 （记住是api工具页面配置的编码，不是name）
+    params：请求参数Map
+    fileNames：文件名列表（可选）
+    headers：请求头Map（可选）
+*/
+n_api_result,act_api.doExecute?name='api_code'&params='{"param1":"value1","param2":"value2"}'&fileNames='[]'&headers='{"Content-Type":"application/json"}'
+
+// 调用API工具的doExecuteDynamic方法  -- 新方法，推荐使用
+/* 参数说明：
+    name：API配置编码 （记住是api工具页面配置的编码，不是name）
+    dynamicParamData：动态参数数据Map
+*/
+n_dynamic_api_result,act_api.doExecuteDynamic?name='api_code'&dynamicParamData='{"key1":"value1","key2":"value2"}'
 ```
