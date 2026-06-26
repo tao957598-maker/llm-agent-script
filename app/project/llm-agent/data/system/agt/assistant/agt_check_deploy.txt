@@ -12,7 +12,7 @@
       "label": "目标环境",
       "required": true
     },
-    {123
+    {
       "name": "project_root",
       "label": "项目根目录"
     },
