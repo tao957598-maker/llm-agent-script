@@ -19,9 +19,8 @@
 
 assign('n_log', '')
 assign('n_mvn_bin_path', '')
-assign('n_mvn_version', '')
 
-// 检查 Maven 是否存在 
+// 检查 Maven 是否存在
 n_mvn_path, agt_cmd_executor.assistant?cmd='which mvn 2>/dev/null || echo "NOT_FOUND"'&cmd_executor_name="检查Maven路径"&server_id={{server_id}}
 assign('n_mvn_found', '{{fn.contains(n_mvn_path, "/mvn") && !fn.contains(n_mvn_path, "NOT_FOUND")}}')
 
@@ -40,7 +39,7 @@ when('fn.bool(n_mvn_found)', {
     }
     return ver
   '''
-  // 判断是否是 3.9.x 版本 
+  // 判断是否是 3.9.x 版本
   assign('n_is_39x', '{{fn.contains(n_mvn_version, "3.9")}}')
   when('fn.bool(n_is_39x)', {
     // 已是 3.9.x，直接使用提取 home 路径
@@ -57,8 +56,36 @@ when('fn.bool(n_mvn_found)', {
     assign('n_log', '{{n_log}}\n✓ 已有 Maven {{n_mvn_version}}，路径: {{n_mvn_bin_path}}')
     assign("n_mvn_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_mvn_bin_path}}","is_plan_break":"false"}')
   }, {
-    // 版本不是 3.9.x，需要下载 3.9.6
-    assign('n_log', '{{n_log}}\n⚠ 当前 Maven 版本 {{n_mvn_version}} 不兼容 JDK 21，将下载 Maven 3.9.6')
+    // 版本不是 3.9.x，需要使用 3.9.6，先检查缓存
+    n_mvn_tmp_exists, agt_cmd_executor.assistant?cmd='test -d /tmp/apache-maven-3.9.6 && test -f /tmp/apache-maven-3.9.6/bin/mvn && echo "EXISTS" || echo "NOT_FOUND"'&cmd_executor_name="检查tmp目录Maven是否存在"&server_id={{server_id}}
+    assign('n_mvn_tmp_found', '{{fn.contains(n_mvn_tmp_exists, "EXISTS")}}')
+    when('fn.bool(n_mvn_tmp_found)', {
+      assign('n_mvn_bin_path', '/tmp/apache-maven-3.9.6/bin')
+      assign('n_log', '{{n_log}}\n✓ /tmp 下已有 Maven 3.9.6')
+      assign("n_mvn_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_mvn_bin_path}}","is_plan_break":"false"}')
+    }, {
+      assign('n_log', '{{n_log}}\n⚠ 当前 Maven 版本 {{n_mvn_version}} 不兼容 JDK 21，将下载 Maven 3.9.6')
+      when('n_os == "windows"', {
+        assign('n_mvn_install_cmd', 'winget install --id Apache.Maven -e --source winget || choco install maven -y')
+      }, {
+        assign('n_mvn_install_cmd', 'mkdir -p /tmp && curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz -o /tmp/maven.tar.gz && tar -xzf /tmp/maven.tar.gz -C /tmp && rm /tmp/maven.tar.gz && /tmp/apache-maven-3.9.6/bin/mvn -version')
+      })
+      n_mvn_install_result, agt_cmd_executor.assistant?cmd={{n_mvn_install_cmd}}&cmd_executor_name="下载Maven 3.9.6"&server_id={{server_id}}
+      assign('n_mvn_bin_path', '/tmp/apache-maven-3.9.6/bin')
+      assign('n_log', '{{n_log}}\n✓ Maven 3.9.6 下载完成')
+      assign("n_mvn_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_mvn_bin_path}}","is_plan_break":"false"}')
+    })
+  })
+}, {
+  // Maven 不存在，先检查缓存
+  n_mvn_tmp_exists, agt_cmd_executor.assistant?cmd='test -d /tmp/apache-maven-3.9.6 && test -f /tmp/apache-maven-3.9.6/bin/mvn && echo "EXISTS" || echo "NOT_FOUND"'&cmd_executor_name="检查tmp目录Maven是否存在"&server_id={{server_id}}
+  assign('n_mvn_tmp_found', '{{fn.contains(n_mvn_tmp_exists, "EXISTS")}}')
+  when('fn.bool(n_mvn_tmp_found)', {
+    assign('n_mvn_bin_path', '/tmp/apache-maven-3.9.6/bin')
+    assign('n_log', '{{n_log}}\n✓ /tmp 下已有 Maven 3.9.6')
+    assign("n_mvn_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_mvn_bin_path}}","is_plan_break":"false"}')
+  }, {
+    assign('n_log', '{{n_log}}\n⚠ 未找到 Maven，将下载 Maven 3.9.6')
     when('n_os == "windows"', {
       assign('n_mvn_install_cmd', 'winget install --id Apache.Maven -e --source winget || choco install maven -y')
     }, {
@@ -69,16 +96,4 @@ when('fn.bool(n_mvn_found)', {
     assign('n_log', '{{n_log}}\n✓ Maven 3.9.6 下载完成')
     assign("n_mvn_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_mvn_bin_path}}","is_plan_break":"false"}')
   })
-}, {
-  // Maven 不存在，直接下载 3.9.6
-  assign('n_log', '{{n_log}}\n⚠ 未找到 Maven，将下载 Maven 3.9.6')
-  when('n_os == "windows"', {
-    assign('n_mvn_install_cmd', 'winget install --id Apache.Maven -e --source winget || choco install maven -y')
-  }, {
-    assign('n_mvn_install_cmd', 'mkdir -p /tmp && curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz -o /tmp/maven.tar.gz && tar -xzf /tmp/maven.tar.gz -C /tmp && rm /tmp/maven.tar.gz && /tmp/apache-maven-3.9.6/bin/mvn -version')
-  })
-  n_mvn_install_result, agt_cmd_executor.assistant?cmd={{n_mvn_install_cmd}}&cmd_executor_name="下载Maven 3.9.6"&server_id={{server_id}}
-  assign('n_mvn_bin_path', '/tmp/apache-maven-3.9.6/bin')
-  assign('n_log', '{{n_log}}\n✓ Maven 3.9.6 下载完成')
-  assign("n_mvn_plan_result", '{"n_log":"{{n_log}}","n_data":"{{n_mvn_bin_path}}","is_plan_break":"false"}')
 })
