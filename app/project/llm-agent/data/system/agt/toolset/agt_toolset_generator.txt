@@ -41,7 +41,7 @@ when("fn.equals(n_has_existing_match.matched, 'true')", {
     assign('n_tool_set_code', "{{n_has_existing_match.toolsetCode}}")
 }, {
     //# 无匹配，走向量搜索
-    n_search_result, act_api.search?size=100&query="{{userInput}}"&toolType="{{toolType}}"&excludeToolType="{{excludeToolType}}"
+    n_search_result, act_api.search?size=50&query="{{userInput}}"&toolType="{{toolType}}"&excludeToolType="{{excludeToolType}}"
 
     // 格式化搜索结果：保证 n_tool_details 始终为工具对象列表
     n_tool_details, act_func.run?script='''
