@@ -33,7 +33,7 @@ when('!fn.hasValue(steps_item)', {
 })
 
 when('fn.hasValue(n_file_data)',{
-  // 元数据agent
+  // 元数据agent-----
   n_metadata_data,agt_metadata_information.test_gen_data?input="{{n_file_data}}"&other="生成表名称{{parameter_item.kb_name}}"
   assign("n_metadata", "{{n_metadata_data}}")
 },{

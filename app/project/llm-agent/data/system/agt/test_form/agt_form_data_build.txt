@@ -15,13 +15,13 @@
         }
     ],
 	 "llmType": "",
-	 "resultPlan": "n_python_file",
+	 "resultPlan": "n_result",
 	 "life": "50"
  }
 */
 
 
-
+// RunLocalJS运行collection_form_data.js获得结果
 n_collect_page, act_rpa.send?command=RunLocalJS&parameters='{"js_path":"collection_form_data.js"}'
 
 
@@ -38,12 +38,13 @@ when('fn.hasValue(actionArr)',{
      act_func?script="action.put('version', '''{{version}}''')"
      
      act_func?script="action.put('page_url', '''{{page_url}}''')"
-     act_kb.defineAndImportData?schema='auto_test'&tableName='kb_page_action_min_preconditions'&data={{action}}
+     act_kb.importData?name='kb_page_action_min_preconditions'&data='{{action}}'&embedding=false
     //  act_kb.merge?name='kb_page_action_min_preconditions'&columnValues={{action}}&where='{"application":"test","action_id":"id_864492000"}'
     //  act_kb.update?name='kb_page_action_min_preconditions'&columnValues={{action}}&where='{"application":"test","action_id":"id_864492000"}'
 	})
-act_func.run?script='return action'
 })
+// 返回动作数组
+assign('n_result', '{{actionArr}}')
 
 // 结合需求分析页面元素
 define('tpl_pamp_extraction_prompt', '''
@@ -61,16 +62,17 @@ define('tpl_pamp_extraction_prompt', '''
 - Constrains:
   1. 严禁创造输入数据中不存在的任何信息，所有element_id、name、xpath必须与原数据完全一致
   2. 必须先输出动作识别清单，再逐一生成前置条件分析，两阶段不可合并
-  3. 若fields字段不存在或为空数组，则默认该section下所有非button元素均为必填
-  4. row_selection的list_id必须从原始HTML结构（element_content）中解析提取，禁止臆测
-  5. validation规则仅允许使用：not_empty、email_format、phone_format、number_range、date_format、url_format、custom_regex
-  6. 输出JSON必须可通过标准解析器验证，禁止尾随逗号、非法转义字符
+  3. 对于Sign in、Sign up、提交、保存、确认等提交类按钮，必须将同section内所有input类型字段（包括text、password、email、tel、number、checkbox、select等）添加为必填字段
+  4. 若fields字段不存在或为空数组，则默认该section下所有非button元素均为必填
+  5. row_selection的list_id必须从原始HTML结构（element_content）中解析提取，禁止臆测
+  6. validation规则仅允许使用：not_empty、email_format、phone_format、number_range、date_format、url_format、custom_regex
+  7. 输出JSON必须可通过标准解析器验证，禁止尾随逗号、非法转义字符
 - OutputFormat: 分阶段文本说明 + 最终结构化JSON代码块，包含actions数组
 - Workflow:
-  1. 扫描阶段：遍历data数组 → 展开每个section → 过滤element_type为"button"的元素 → 生成动作识别清单（含action_id、action_name、action_type、xpath）
-  2. 分类阶段：基于action_name关键词（提交/保存/确认/删除/移除/添加/新增/创建等）判定动作语义类别，输出分类结果
-  3. 条件推断阶段：针对每个动作，依据其类别执行差异化分析——提交类扫描同section内所有必填字段；删除类解析element_content提取列表容器ID；添加类置空字段要求
-  4. 验证规则映射阶段：根据字段type属性（text→not_empty, email→email_format, tel→phone_format, number→number_range, date→date_format, url→url_format）绑定validation规则
+  1. 扫描阶段：遍历data数组 → 展开每个section → 过滤element_type为"button"或tag为"link"的元素 → 生成动作识别清单（含action_id、action_name、action_type、xpath）
+  2. 分类阶段：基于action_name关键词（提交/保存/确认/删除/移除/添加/新增/创建/Sign in/Sign up等）判定动作语义类别，输出分类结果
+  3. 条件推断阶段：针对每个动作，依据其类别执行差异化分析——提交类（Sign in/Sign up/提交/保存/确认）必须扫描同section内所有input类型字段作为前置条件；删除类解析element_content提取列表容器ID；添加类置空字段要求
+  4. 验证规则映射阶段：根据字段type属性（text→not_empty, password→not_empty, email→email_format, tel→phone_format, number→number_range, date→date_format, url→url_format, checkbox→not_empty）绑定validation规则
   5. 置信度赋值阶段：按动作复杂度评分（添加0.9/删除0.8/提交0.7），输出带confidence的完整preconditions
   6. 最终组装阶段：整合所有动作对象，生成符合Schema的JSON，执行语法自检
 
@@ -123,4 +125,3 @@ define('tpl_pamp_extraction_prompt', '''
 # 输入数据
 {{n_collect_page}}
 ''')
- 

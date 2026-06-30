@@ -6,15 +6,26 @@
         {
 			"name":"test_no",
 			"label":"Test No",
-			"type":"textarea"
+			"type":"textarea",
+            "required":true
 		},
         {
 			"name":"system",
-			"label":"system"
+			"label":"system",
+            "required":true
+		},
+        {
+			"name":"version",
+			"label":"version",
 		},
         {
 			"name":"test_method",
 			"label":"Test Method",
+			"type":"textarea"
+		},
+        {
+			"name":"module_name",
+			"label":"module name",
 			"type":"textarea"
 		},
 		{
@@ -22,16 +33,24 @@
 			"label":"Data Storage Table",
 			"type":"input",
 			"defaultValue":"kb_test_data_scenario"
+		},
+		{
+			"name": "testTag",
+			"label": "testTag",
+			"type":"select",
+			"args":[
+				{"label":"Core test","value":"CORE_PATH_TEST"},
+				{"label":"Smoke test","value":"SMOKE_TEST"}
+			]
 		}
 	],
 	"tag":"Automated Testing",
-	"resultPlan":"userInput, n_kb_data",
+	"resultPlan":"n_def_userInput, n_kb_data",
 	"life":1000,
 	"displayOrder":61,
 	"version":1
 }
 */
-
 
 when('fn.hasValue(test_no)', {
     assign("test_no_input", "test no为{{test_no}}")
@@ -55,54 +74,63 @@ when('fn.hasValue(test_method)', {
 })
 
 when('fn.hasValue(score)', {
-    assign("score_input", "score{{test_no}}")
+    assign("score_input", "score为{{test_no}}")
 },
 {
     assign("score_input", "")
 })
 
+when('fn.hasValue(version)', {
+    assign("test_version", "version为{{version}}")
+},
+{
+    assign("test_version", "")
+})
 
 // userInput
-assign("userInput", "基于`kb_test_steps_data`表 \n帮我取{{system_input}},{{test_no_input}}、{{test_method_input}}、{{score_input}}")
+assign("n_def_userInput", "基于`kb_test_steps_data`表 \n帮我取{{system_input}},{{test_no_input}}、{{test_method_input}}、{{score_input}}、{{test_version}}")
 
 // 获取查询 SQL 并执行
-n_sql,agt_auto_sql1.knowledge?userInput='{{userInput}}'
+n_sql,agt_auto_sql1.knowledge?userInput='{{n_def_userInput}}'
 
 // n_kb_data
 n_kb_data, act_kb.selectBy?sql='{{n_sql}}'
 
-n_data_item, act_func?js='''
-(function() {
-    let arrList = {{n_kb_data}};
-    let nData_Arr = [];
-    let nResult_Arr = [];
-    let nTitle_Arr = [];
-    let n_Method_Arr = [];
-    for(let i = 0; i < arrList.length; i++) {
-        let jsonArr = JSON.parse(arrList[i].data);
-        for(let j = 0; j < jsonArr.length; j++) {
-            nData_Arr.push(jsonArr[j]);
-            nResult_Arr.push(arrList[i].expected_result);
-            nTitle_Arr.push(arrList[i].title);
-            n_Method_Arr.push(arrList[i].test_method);
-            
+n_data_item, act_func?script='''
+    def arrList = n_kb_data;
+    def newArr = new ArrayList<>();
+    def nResArr = new ArrayList<>();
+    def nTitleArr = new ArrayList<>();
+    def test_step = "";
+
+    for (int i = 0; i < arrList.size(); i++) {
+        def dataList = com.alibaba.fastjson2.JSON.parseObject(arrList[i].data, java.util.List.class);
+        for (int j = 0; j < dataList.size(); j++) {
+            newArr.add(dataList[j]);
         }
-       
-        
+
+        nResArr.add(arrList[i].expected_result);
+        if(i == 0){
+            nTitleArr.add(arrList[i].title);
+            test_step = arrList[i].steps;
+        }
     }
-    
-    let obj = {
-        "title": JSON.stringify(nTitle_Arr),
-        "test_no": arrList[0].test_no,
-        "system_name": arrList[0].system_name,
-        "metadata_id": arrList[0].metadata_id,
-        "test_method": JSON.stringify(n_Method_Arr),
-        "data": JSON.stringify(nData_Arr),
-        "expected_result": JSON.stringify(nResult_Arr)
-    };
-    
-    return JSON.stringify(obj);
-})();
+
+    // 构造最终对象
+    def obj = new HashMap();
+    obj.put("title", nTitleArr);
+    obj.put("test_no", test_no);
+    obj.put("system_name", system);
+    obj.put("metadata_id", arrList[0].metadata_id);
+    obj.put("test_method", arrList[0].test_method);
+    obj.put("data", newArr);
+    obj.put("test_step", test_step);
+    obj.put("expected_result", nResArr);
+    obj.put("scene", module_name);
+    obj.put("version", version);
+    obj.put("tag", testTag);
+
+    return obj
 '''
 
 assign("n_result_data", "{{n_data_item}}")
@@ -110,10 +138,10 @@ assign("n_result_data", "{{n_data_item}}")
 n_test_no, act_func?script='''return n_result_data.test_no'''
 
 // 查询test step语句 
-assign("n_userInput", "在kb_test_metadata表查询application为{{system}} test_no为{{n_test_no}}的create_time 为最新的第一条数据")
+assign("n_query_userInput", "在kb_test_metadata表查询application为{{system}} test_no为{{n_test_no}}的create_time 为最新的第一条数据")
 
 // 取test step数据sql
-agt_auto_sql1.knowledge?userInput='{{n_userInput}}'
+agt_auto_sql1.knowledge?userInput='{{n_query_userInput}}'
 
 // data from kb_test_metadata
 n_test_metadata,act_kb.selectBy?sql='{{sys_last_result}}'
@@ -121,10 +149,7 @@ n_test_metadata,act_kb.selectBy?sql='{{sys_last_result}}'
 // 输出 test step
 n_step_data, act_func?script='''return n_test_metadata[0].steps'''
 
-
-
-// 得到测试数据
-n_test_data, act_func?script='''return [n_result_data.put('test_step', n_step_data)]'''
+// case数据
 assign("case_item", "{{n_result_data}}")
 
 

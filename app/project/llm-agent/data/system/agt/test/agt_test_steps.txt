@@ -161,19 +161,16 @@ when("n_programming_language=='java'", {
 	assign("file_type",".java")
 })
 
-// script subfolder /{{system}}/{{n_programming_language}}/workflows/{{n_module}}/{{n_draft_tests}}/{{test_no}}
-assign("script_subfolder","/{{system}}/Test Script/{{test_no}}")
-// script tmp subfolder /{{system}}/{{n_programming_language}}/tmp/{{test_no}}
-assign("script_subfolder_tmp","/{{system}}/Test Script/tmp/{{test_no}}")
+// script subfolder 
+assign("script_subfolder","/{{system}}/{{n_programming_language}}/workflows/{{n_module}}/{{n_draft_tests}}/{{test_no}}")
+// script tmp subfolder 
+assign("script_subfolder_tmp","/{{system}}/{{n_programming_language}}/tmp/{{test_no}}")
 
 // feature subfolder
-// /{{system}}/features/{{n_module}}/{{test_no}}{{file_type}}
-assign("feature_subfolder_main_code","/{{system}}/Test Script/test_script_{{test_no}}{{file_type}}")
-// /{{system}}/features/{{n_module}}/{{test_no}}_steps.txt
-assign("feature_subfolder_main_steps","/{{system}}/Test Script/test_script_{{test_no}}_steps.txt")
+assign("feature_subfolder_main_code","/{{system}}/features/{{n_module}}/{{test_no}}{{file_type}}")
+assign("feature_subfolder_main_steps","/{{system}}/features/{{n_module}}/{{test_no}}_steps.txt")
 // global variable
 assign("global_variable","{{fn.json('system,system,programming_language,n_programming_language,module,n_module,draft_tests,n_draft_tests,test_no,test_no,script_subfolder,script_subfolder,script_subfolder_tmp,script_subfolder_tmp,file_type,file_type,feature_subfolder_main_code,feature_subfolder_main_code,feature_subfolder_main_steps,feature_subfolder_main_steps,version,version')}}")
-
 
 act_memory.assign?var=global_variable&value={{global_variable}}&global=true
 

@@ -21,8 +21,7 @@ when('!fn.hasValue(taskType)', {
 })
 
 // Collect page information
-n_collect_page, act_rpa.send?command=CollectPageInfo\
-	act_func?name=StepTestInfo
+n_collect_page, act_rpa.send?command=CollectPageInfo,act_func?name=StepTestInfo
 	
 // Split test step
 when('taskType=="DYNAMIC_SELECT_TASK"', {
@@ -40,8 +39,7 @@ tpl_test_script_fast, psr_json_python
 act_python.writeTmp?requirement={{current_step}}&pythonCode={{sys_last_result}}
 
 // Run selenium script through RPA client
-n_rpa_test, act_rpa.send?name={{python_file}}\
-	act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,sys_last_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+n_rpa_test, act_rpa.send?name={{python_file}},act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,sys_last_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
 
 // Write selenium script to the artifact repository
 n_python_file, act_python.write?requirement={{current_step}}

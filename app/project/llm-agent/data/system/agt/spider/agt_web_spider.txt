@@ -21,7 +21,7 @@
 		},
 		{
 			"name":"current_uri",
-			"label":"Current uri",
+			"label":"Current Uri",
 			"maxLength":50,
 			"hidden":false,
 			"readOnly":false
@@ -57,7 +57,7 @@
 					"value":"stepExplorationMode"
 				},
 				{
-					"label":"URL Exploration Mode",
+					"label":"Url Exploration Mode",
 					"value":"urlExplorationMode"
 				}
 			],
@@ -77,21 +77,21 @@
 		},
 		{
 			"name":"custom_param",
-			"label":"LLM Additional Parameters (e.g. account, password)",
+			"label":"Llm Additional Parameters",
 			"maxLength":50,
 			"hidden":false,
 			"readOnly":false
 		},
 		{
 			"name":"sleep_time",
-			"label":"sleep time (must int)",
+			"label":"Sleep Time",
 			"maxLength":50,
 			"hidden":false,
 			"readOnly":false
 		},
 		{
 			"name":"cookie",
-			"label":"cookie",
+			"label":"Cookie",
 			"maxLength":50,
 			"hidden":false,
 			"readOnly":false

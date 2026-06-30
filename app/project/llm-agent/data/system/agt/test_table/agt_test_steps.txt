@@ -109,9 +109,9 @@ when('n_db_testcase?size==0 || n_test_requirement?length==0', {
 		tpl_update_requirement
 		
 		// Save new test steps to KB
-		act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'\
-			act_kb.convert?data={{tpl_update_requirement}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'\
-			act_kb.importData?name=kb_testcase_step&data={{sys_last_result}}
+		act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'
+		n_map_list,act_kb.convert?data={{tpl_update_requirement}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'
+		act_kb.importData?name=kb_testcase_step&data={{n_map_list}}
 	})
 })
 
@@ -124,15 +124,16 @@ when('n_steps?size==0', {
 	n_envinfo, act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'
 	
 	// Set the system language
-	assign('language', '{{fn.str(n_envinfo, "language")}}', 'to_check_steps', '{{fn.when(expected_result, steps + "\nExpect Result：\n" + expected_result, steps)}}')
+	assign('language', '{{fn.str(n_envinfo, "language")}}')
+	assign('to_check_steps', '{{fn.when(expected_result, steps + "\nExpect Result：\n" + expected_result, steps)}}')
 	
 	//# Get test steps by sorting out requirements
 	n_format_requirement, tpl_format_requirement
 	
 	// Clean existed plan and save new plan to KB
-	act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'\
-		act_kb.convert?data={{tpl_format_requirement}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'\
-		act_kb.importData?name=kb_testcase_step&data={{sys_last_result}}
+	act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'
+	n_map_list,act_kb.convert?data={{tpl_format_requirement}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'
+	act_kb.importData?name=kb_testcase_step&data={{n_map_list}}
 	
 	//# Run test steps
 	agt_test_steps_run?test_no={{test_no}}&steps={{tpl_format_requirement}}&system={{system}}&explore_mode={{explore_mode}}
@@ -387,9 +388,9 @@ when('n_db_testcase?size==0 || n_test_requirement?length==0', {
 		tpl_update_requirement
 		
 		// Save new test steps to KB
-		act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'\
-			act_kb.convert?data={{tpl_update_requirement}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'\
-			act_kb.importData?name=kb_testcase_step&data={{sys_last_result}}
+		act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'
+		n_map_list,act_kb.convert?data={{tpl_update_requirement}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'
+		act_kb.importData?name=kb_testcase_step&data={{n_map_list}}
 	})
 })
 
@@ -402,15 +403,16 @@ when('n_steps?size==0', {
 	n_envinfo, act_kb.select?name=kb_testcase_biz&where='{"name":"{{system}}"}'
 	
 	// Set the system language
-	assign('language', '{{fn.str(n_envinfo, "language")}}', 'to_check_steps', '{{fn.when(expected_result, steps + "\nExpect Result：\n" + expected_result, steps)}}')
+	assign('language', '{{fn.str(n_envinfo, "language")}}')
+	assign('to_check_steps', '{{fn.when(expected_result, steps + "\nExpect Result：\n" + expected_result, steps)}}')
 	
 	//# Get test steps by sorting out requirements
 	n_format_requirement, tpl_format_requirement
 	
 	// Clean existed plan and save new plan to KB
-	act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'\
-		act_kb.convert?data={{tpl_format_requirement}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'\
-		act_kb.importData?name=kb_testcase_step&data={{sys_last_result}}
+	act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'
+	n_map_list,act_kb.convert?data={{tpl_format_requirement}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'
+	act_kb.importData?name=kb_testcase_step&data={{n_map_list}}
 	
 	//# Run test steps
 	agt_test_steps_run?test_no={{test_no}}&steps={{tpl_format_requirement}}&system={{system}}&explore_mode={{explore_mode}}

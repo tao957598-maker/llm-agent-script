@@ -18,7 +18,7 @@
 
 
 //# 自动获取或者创建工具集
-n_tool_set_code, agt_toolset_generator?userInput={{userInput}}
+n_tool_set_code, agt_toolset_generator.toolset?userInput={{userInput}}
 
 //# 工具集执行
-agt_toolset_executor?userInput={{userInput}}&toosetCode={{n_tool_set_code}}&manualRequired=false
+agt_toolset_executor.toolset?userInput={{userInput}}&toosetCode={{n_tool_set_code}}&manualRequired=false

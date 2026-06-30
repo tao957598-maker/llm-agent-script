@@ -3,7 +3,7 @@
 	"title":"单元测试：流程测试",
 	"parameter":"requirement=用户需求",
 	"llmType":"",
-	"resultPlan":"n_ttt",
+	"resultPlan":"act_memory_assign, n_ttt, n_loop, act_flow_fail, finalResult",
 	"version":1
 }
 */
@@ -16,14 +16,38 @@ act_flow.wait?second=1
 // 测试mem assign
 act_memory.assign?var=tmp_data&value='cccccc'&type=md
 
+//## 循环测试
+foreach('n_loop', '[1..3]', {
+	assign('test_index', '{{n_loop.index}}')
+	assign('test_item', '{{n_loop.item}}')
+
+	// 等一哈哈
+	act_flow.wait?second=1
+
+	// 测试循环异常退出
+	when('test_item == 2', {
+		// 走到失败了
+		act_flow.fail?result="失败测试"
+	}, {
+		// 没有进入失败
+		assign('eeeeeeeeee', '{{n_loop.item}}')
+	}) 
+
+    // **Log** ✅
+    log('=== STEP END ===')
+
+	// 走到每次结尾了
+	assign("one_time_end", "One End!!!!")
+})
+
 // 掉起其他agt测试
-agt_junittest_grammer?requirement='xxx'
+agt_add_partition?requirement='xxx'
 
 // 数学运算
 n_ttt, tpl_do_the_math, psr_json
 
 //$ 这是最后结果
-assign("aaa", "result: End!!!")
+assign("finalResult", "result: End!!!")
 
 define('tpl_do_the_math', '''
 	请帮我计算值：8*12，以json ```json ```格式返回
@@ -36,6 +60,7 @@ define('tpl_ask_pai', '''
 ''')
 
 agent('add_partition', {
+	// Hive Sql优化
 	tpl_set_partition: '''
 		作为大数据Hive开发工程师，请检查和修正HiveSQL，使之符合规则：
 		
@@ -44,6 +69,9 @@ agent('add_partition', {
 		3. 请用三个反引号```sql <code>``` 来清晰分隔代码块，以便于阅读和理解
 		
 		Hive SQL：
-		{{sys_last_result}}
+		select * from dws_sys_user where username = 'LiyouQin'
+
 	''', psr_sql
+	
+	// act_flow.fail?result="失败测试"
 })

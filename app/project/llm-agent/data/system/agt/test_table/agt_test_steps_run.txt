@@ -107,8 +107,7 @@ foreach('n_test_step', 'steps', {
 		on_failure({
 			act_flow.fail
 			//## Collect page information
-			n_collect_page, act_rpa.send?command=CollectPageInfo\
-				act_func?name=StepTestInfo
+			n_collect_page, act_rpa.send?command=CollectPageInfo,act_func?name=StepTestInfo
 	
 			// Save to kb_testcase_step_explorer
 			act_kb.merge?name=kb_testcase_step_explorer&columnValues='''

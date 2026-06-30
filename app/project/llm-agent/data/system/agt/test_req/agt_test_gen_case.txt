@@ -11,7 +11,7 @@
 	 		"name":"requirement",
 	 		"label":"需求文档",
 	 		"type":"file"
-	 	},
+	 	}
 
 	 ],
 	"llm_type": "qwen2.5-32b-coder-instruction-8bit",

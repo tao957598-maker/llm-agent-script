@@ -14,6 +14,13 @@
 		{
 			"name":"kbSpaceName",
 			"label":"目录名称（支持多个）"
+		},
+		{
+			"name": "is_read_chat_history",
+			"label": "是否读取主流程历史对话",
+			"type": "bool",
+			"required": false,
+			"description": "生成的信息结合历史对话"
 		}
 	],
 	"version":1,
@@ -29,18 +36,21 @@ assign("kb_space_context", "NaN")
 assign("kb_dir_path", "")
 // 判断是否有目录ID传入
 when('fn.hasValue(kbSpaceId)', {
+	n_filepath, act_kb.selectBy?sql='select  full_path  from kb_spaces_folder where id={{kbSpaceId}} '
+	assign("filepath", '{{n_filepath[0].full_path}}')
+	assign("kb_space_context", "NaN")
 	// 获取目录下已有文件列表用作LLM上下文参考
-	n_kb_dir_info,act_artifact.list?filepath='{{kbSpaceId}}'&maxDepth=1&maxResults=100
+	n_kb_dir_info,act_artifact.list?filepath='{{filepath}}'&maxDepth=1&maxResults=100
 	// 将文件列表赋值给上下文变量
 	assign("kb_space_context", "{{n_kb_dir_info}}")
-	// 获取目录元数据以提取实际路径
-	n_dir_desc,act_artifact.describe?filepath='{{kbSpaceId}}'
-	// 从describe结果中提取目录的实际路径
-	n_dir_path,act_func?script='''
-		return n_dir_desc.filepath
-	'''
 	// 将提取的路径赋值给目录路径变量
-	assign("kb_dir_path", "{{n_dir_path}}")
+	assign("kb_dir_path", "{{filepath}}")
+})
+
+assign("chat_history", "Nan")
+when('is_read_chat_history==true', {
+n_main_chat_session_history, act_memory.retrieve?var=main_chat_session_history&global=true
+assign("chat_history", "{{n_main_chat_session_history}}")
 })
 
 // 生成文件名称与内容
@@ -65,17 +75,11 @@ n_result,act_func.write?filename='{{n_final_path}}'&data='{{n_gen_result.fileCon
 // 组装最终返回结果
 assign("finalResult", '{"success":true,"fileName":"{{n_gen_result.fileName}}","filePath":"{{n_final_path}}","fileType":"{{n_gen_result.fileType}}"}')
 
-// 输出最终结果
-n_output,act_memory.assign?var=finalResult&value={{finalResult}}&type=json
 
 // 异常处理：生成或写入失败时记录错误信息
 on_failure({
 	// 记录失败原因
 	assign("finalResult", '{"success":false,"error":"{{sys_failure_task.result}}"}')
-	// 输出错误结果
-	act_memory.assign?var=finalResult&value={{finalResult}}&type=json
-	// 跳转到结束
-	act_flow.go?plan=end
 })
 
 // 文件生成模板：根据用户需求智能生成文件名和完整文件内容
@@ -84,6 +88,8 @@ define('tpl_gen_file', '''
 
 # 用户需求
 {{userInput}}
+## chat_history
+{{chat_history}}
 
 # 目标目录已有文件列表（供参考，避免命名冲突）
 {{kb_space_context}}

@@ -2,21 +2,27 @@
 {
 	"title":"Python to Ruby Conversion",
 	"description":"Translate Python code into Ruby",
+	"resultPlan":"n_result",
 	"parameter":[
 		{
 			"name":"kbSpaceId",
 			"label":"目录ID（支持多个）",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
 			"type":"knowledge_fold"
 		},
-        {
+		{
 			"name":"cucumber_git_path",
 			"label":"cucumber git 目录路径",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false,
 			"type":"text"
 		}
 	],
 	"tag":"demo",
-    "life":1000,
-	"version":1
+	"version":5
 }
 */
 when('fn.hasValue(kbSpaceId)',{

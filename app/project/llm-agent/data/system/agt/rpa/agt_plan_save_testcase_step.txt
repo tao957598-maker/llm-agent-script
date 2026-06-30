@@ -1,14 +1,14 @@
 /*
  {
 	 "title": "Save test steps",
-	 "parameter": "steps=Test Steps&test_no=Test No&version=Version",
+	 "parameter": "system=system&steps=Test Steps&test_no=Test No&version=Version"
  }
 */
 // test_no来自share memory
 // Load history data
-n_load_target_data, act_kb.select?name='kb_testcase_step'&where='{"test_no":"{{test_no}}","application":"{{system}}","version":"{{version}}"}'&column='application,test_no,step,result,version'
+n_load_target_data, act_kb.select?name='kb_testcase_step'&where='{"test_no":"{{test_no}}","application":"{{system}}","version":"{{version}}"}'&column='application,test_no,step,result,version,executor,script_path'
 
 // Save test step
-act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}","application":"{{system}}","version":"{{version}}"}'&maxSize=100\
-	act_kb.convert?data={{steps}}&converter=mergeList&storeColumn='application,test_no,step,result,executor,version'&parameters='{"uniqueKey":"step","targetData": {{n_load_target_data}},"test_no":"{{test_no}}","application":"{{system}}","version":"{{version}}"}'\
-	act_kb.importData?name=kb_testcase_step&data={{sys_last_result}}&uniqueKey='application,test_no,step,version'
+act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}","application":"{{system}}","version":"{{version}}"}'&maxSize=100
+n_map_list,act_kb.convert?data={{steps}}&converter=mergeList&storeColumn='application,test_no,step,result,executor,version'&parameters='{"uniqueKey":"step","targetData": {{n_load_target_data}},"test_no":"{{test_no}}","application":"{{system}}","version":"{{version}}"}'
+act_kb.importData?name=kb_testcase_step&data={{n_map_list}}&uniqueKey='application,test_no,step,version'

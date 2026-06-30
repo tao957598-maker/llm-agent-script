@@ -100,8 +100,7 @@ assign('system_message', '''
 ''')
 
 //# Collect page information
-n_collect_page, act_rpa.send?command=CollectPageInfo\
-	act_func?name=StepTestInfo
+n_collect_page, act_rpa.send?command=CollectPageInfo,act_func?name=StepTestInfo
 // TODO Collect page URL
 
 //# Analysis steps

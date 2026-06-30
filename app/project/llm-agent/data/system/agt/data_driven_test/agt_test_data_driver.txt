@@ -35,6 +35,11 @@
 }
 */
 
+log('testNo：{{testNo}}')
+log('system_name：{{system_name}}')
+log('dependent_test_no：{{dependent_test_no}}')
+log('system_name：{{system_name}}')
+
 // Get Test No
 assign('test_no', '{{testNo}}')
 
@@ -50,6 +55,7 @@ when('fn.hasValue(dependent_test_no)', {
 
 // Get script path of test no  
 n_result_data,act_kb.selectBy?sql="SELECT * FROM kb_testcase_step WHERE test_no = '{{test_no}}' and application = '{{system_name}}' LIMIT 100"
+log('n_result_data:{{n_result_data}}')
 
 // Check if system_name is None
 when('fn.hasValue(system_name)', {

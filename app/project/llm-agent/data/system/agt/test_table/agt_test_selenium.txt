@@ -31,8 +31,7 @@ when('!fn.hasValue(taskType)', {
 })
 
 //# Collect page information
-n_collect_page, act_rpa.send?command=CollectPageInfo\
-	act_func?name=StepTestInfo
+n_collect_page, act_rpa.send?command=CollectPageInfo,act_func?name=StepTestInfo
 
 // Check for multiple failures
 when('sys_run_count>3', {
@@ -56,7 +55,7 @@ tpl_task_element_info, psr_json?filter=id&format='id_\\d+',\
 		vrf_func?name=CheckElements,\
 		agt_save_explorer?columns='''
 			test_no, test_no, step, StepTestInfo.current_step, task_type, taskType,
-			element_info, StepTestInfo.simplepageinfo, related_element_info, tpl_task_element_info'''\
+			element_info, StepTestInfo.simplepageinfo, related_element_info, tpl_task_element_info''',\
 		act_memory.canHint?hintCount=3
 
 // Elements is empty
@@ -104,8 +103,7 @@ when('n_isEmptyisEmpty==true', {
 n_gen_file, act_python.writeTmp?requirement={{current_step}}&pythonCode={{python_code}}
 
 //# Run selenium script through RPA client
-n_rpa_test, act_rpa.send?name={{python_file}}\
-	act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,sys_last_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
+n_rpa_test, act_rpa.send?name={{python_file}},act_kb.merge?name=kb_testcase_step&columnValues={{fn.json('result,sys_last_result.screenshot_filename', true)}}&where={{fn.json('test_no,test_no,step,current_step')}}
 
 n_result,agt_test_action_type?current_step={{current_step}}
 
@@ -170,9 +168,9 @@ when('n_cmp1.hasDialog', {
 		// Save to KB
 		when('n_plan_result.success', {
 			// Clean old plan and save new plan to KB
-			act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'\
-				act_kb.convert?data={{steps}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'\
-				act_kb.importData?name=kb_testcase_step&data={{sys_last_result}}
+			act_kb.delete?name=kb_testcase_step&where='{"test_no":"{{test_no}}"}'
+			n_map_list,act_kb.convert?data={{steps}}&convert=map&storeColumn=step&parameters='{"test_no":"{{test_no}}"}'
+			act_kb.importData?name=kb_testcase_step&data={{n_map_list}}
 		})
 	})
 })

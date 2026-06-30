@@ -143,7 +143,7 @@ when('n_executor_type == "local_ac"', {
     })
   }, {
     // 执行模式为云端，且同步
-    //# [{{n_executor_mode}}] {{cmd_executor_name_text}} 查看同步执行详情
+    //## [{{n_executor_mode}}] {{cmd_executor_name_text}} 查看同步执行详情
     n_result, act_api.doExecuteDynamic?name="send_cmd"&dynamicParamData='{"command":"{{cmd_text}}","commands":"","async":false,"server_id":"{{server_id}}"}'
     assign("n_result_data", '{{n_result.data}}')
     when('n_result_data.exit_code == 0', {

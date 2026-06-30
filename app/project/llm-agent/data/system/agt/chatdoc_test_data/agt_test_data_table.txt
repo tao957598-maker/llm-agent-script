@@ -71,7 +71,7 @@ n_data_item,act_func?script='''
 '''
 
 // 查询案例生成表格数据
-assign("userInput2", "在kb_gen_test_case表查询test_no为{{steps_data.test_no}}的第一条数据")
+assign("userInput2", "在kb_gen_test_case表查询test_no为{{steps_data.test_no}},verion为{{steps_data.version}},application为{{steps_data.application}}的第一条数据")
 agt_auto_sql1.knowledge?userInput='{{userInput2}}'
 n_kb_test_data,act_kb.selectBy?sql='{{sys_last_result}}'
 
@@ -97,7 +97,9 @@ when('n_isEmptyisEmpty==false', {
           result.submodule_name = n_kb_test_data[0].submodule_name
           result.submodule_description = n_kb_test_data[0].submodule_description
           result.steps = stepsData.steps
+          result.tag = stepsData.tag
           result.expected_result = n_kb_test_data[0].expected_result
+          result.version = n_kb_test_data[0].version
           return result
         '''
           // 大模型根据有期望结果生成测试矩阵数据
@@ -157,12 +159,18 @@ when('n_isEmptyisEmpty==false', {
           assign('n_final_data', '{{test_design_list}}')
 			})
 
-
-
-
-
 // 保存数据库
 act_kb.defineAndImportData?tableName='kb_test_steps_data'&data='{{n_final_data}}'
+
+// Export Test Data xlsx by system name
+n_test_data_export_path,act_func?js='''
+(function() {
+  const systemName = String("{{n_system}}" || "").trim();
+  const testNo = String("{{n_data_item.test_no}}" || "").trim();
+  return "/" + systemName + "/Test Data/test_data_" + testNo + ".xlsx";
+})();
+'''
+n_test_data_file_msg,act_artifact.write?filepath='{{n_test_data_export_path}}'&data='{{n_final_data}}'
 
 // 判断每步是否为输入项，并生成测试数据矩阵
 define("tpl_llm_test_data_no_result", '''
@@ -271,6 +279,7 @@ define("tpl_llm_test_data_with_result", '''
   5. 每个测试步骤都必须有对应的数据项，包括非输入操作用'null'占位,
     5.1: data字段中的JSON数组必须包含与测试步骤数量完全一致的元素,
     5.2: 每个数据项对应一个测试步骤，按步骤顺序排列,
+    5.3: data字段中的JSON数组，并且限制值的长度，最多允许长度100
   6. 禁止生成带HTML/XML标签的数据（包括但不限于<script>、<div>、<script>alert(...)</script>等）
   7. 禁止生成可能引发安全问题的特殊字符组合
   8. 字符串长度控制在合理范围内
@@ -286,12 +295,17 @@ define("tpl_llm_test_data_with_result", '''
 期望结果：{{n_test_data_item.expected_result}}
 系统名称：{{n_system}}
 元数据ID：{{n_test_data_item.metadata_id}}
+版本号:{{n_test_data_item.version}}
+测试范围:{{stepsData.tag}}
 
 # 生成要求
 1. 为每种测试方法生成至少一组测试数据
 2. 每组数据包含输入值和预期结果
-3. expected_result字段使用布尔值：如果预期结果与测试用例中expected_result意思一致，则输出true，否则输出false
-4. 输出格式为标准合法的JSON，不要解释
+3. 算法限制(重要)：
+  3.1.错误推测法：生成的数据，data的value值不允许生成超过100个字符的数据
+4. expected_result字段使用布尔值：如果预期结果与测试用例中expected_result意思一致，则输出true，否则输出false
+5. 测试编号的值不需要自动增长，使用已定义的值
+6. 输出格式为标准合法的JSON，不要解释
 
 - Examples:
   - 例子1：
@@ -312,9 +326,12 @@ define("tpl_llm_test_data_with_result", '''
           "system_name": "系统名称",
           "test_method": "等价类划分法", # 生成该数据所有使用的测试用例设计方法
           "title":"1.用户名和密码均正确时可以正常登录"  # 用来简单描述生成的数据的测试内容，由index作为序号开头
-        "data": "[{"1":null, "2":\"admin\", "3":\"123456\"}]" # 生成的测试数据,
+          "data": "[{"1":null, "2":\"admin\", "3":\"123456\"}]" # 生成的测试数据,value不能超过100个字符
           "expected_result": true, # 布尔值：true表示与测试用例预期结果一致，false表示不一致
-          "index": 1 # 生成数据的序号
+          "index": 1 # 生成数据的序号,
+          "version": 1,
+          "steps":"操作步骤",
+          "tag":"测试范围"
         },
         {
           "test_no": "test_record_xxx",
@@ -322,9 +339,12 @@ define("tpl_llm_test_data_with_result", '''
           "system_name": "系统名称",
           "test_method": "边界值分析法",
           "title":"用户名短一位为OKPT02，密码正确时登录失败"
-        "data": "[{"1":null, "2":\"admin\", "3":\"123456\"}]"
+          "data": "[{"1":null, "2":\"admin\", "3":\"123456\"}]" # 生成的测试数据,value不能超过100个字符
           "expected_result":"false",
-          "index": 2
+          "index": 2,
+          "version": 1,
+          "steps":"操作步骤",
+          "tag":"测试范围"
         }
         ...... # 此处省略其他测试方法生成的测试数据
       ]
@@ -351,19 +371,25 @@ define("tpl_llm_test_data_with_result", '''
           "system_name": "sys",
           "test_method": "正交试验法",
           "title": "5.用户名正确密码错误组合",
-          "data": "[{\"1\": \"http://189.1.224.215:8888/index\", \"2\": \"peter.li\", \"3\": \"incorrect@123\", \"4\": null}]",
+          "data": "[{\"1\": \"http://189.1.224.215:8888/index\", \"2\": \"peter.li\", \"3\": \"incorrect@123\", \"4\": null}]", # 生成的测试数据,value不能超过100个字符
           "expected_result": false,
-          "index": 5
+          "index": 5,
+          "version": 1,
+          "steps":"操作步骤",
+          "tag":"测试范围"
         },
         {
-            "test_no": "NAV_001",
-            "metadata_id": "253435702366666752",
-            "system_name": "sys",
-            "test_method": "状态迁移法",
-            "title": "6.从初始状态到登录成功状态迁移",
-            "data": "[{\"1\": \"http://189.1.224.215:8888/index\", \"2\": \"peter.li\", \"3\": \"gientech@123\", \"4\": null}]",
-            "expected_result": true,
-            "index": 6
+          "test_no": "NAV_001",
+          "metadata_id": "253435702366666752",
+          "system_name": "sys",
+          "test_method": "状态迁移法",
+          "title": "6.从初始状态到登录成功状态迁移",
+          "data": "[{\"1\": \"http://189.1.224.215:8888/index\", \"2\": \"peter.li\", \"3\": \"gientech@123\", \"4\": null}]", # 生成的测试数据,value不能超过100个字符
+          "expected_result": true,
+          "index": 6,
+          "version": 1,
+          "steps":"操作步骤",
+          "tag":"测试范围"
         },
         ......
       ]

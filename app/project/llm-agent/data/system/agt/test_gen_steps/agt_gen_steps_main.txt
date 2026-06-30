@@ -30,9 +30,12 @@ when('!fn.hasValue(n_list)', {
 
 
 // 页面之间跳转的操作
+log("DEBUG: n_list content: {{n_list}}")
 n_search_condition,agt_get_start_end_url?system_name={{system_name}}&list_uri={{n_list}}
+log("DEBUG: n_search_condition: {{n_search_condition}}")
 assign('start',"{{n_search_condition.start_url}}")
 assign('end',"{{n_search_condition.end_url}}")
+log("DEBUG: start={{start}}, end={{end}}")
 
 	when('start==end', {
 		assign("sql", "SELECT collect_data FROM llm_agent.kb_spiderdeep_content where system_name = '{{system_name}}'  and current_uri = '{{start}}'  ")
@@ -68,6 +71,17 @@ assign('end',"{{n_search_condition.end_url}}")
 // 补充 TODO 页面里边的操作序列
 
 define('tpl_get_page_action_info', '''
+/*{
+ 	"llmType":"alias.highquality"
+}*/
+# 角色：页面操作序列生成专家
+# 规则：
+# 1. 使用页面数据中的原始元素名称，禁止翻译或修改
+# 2. 按钮名称、输入框标签等元素名称必须保持原样
+# 3. URL路径必须保持原样，禁止修改或简化
+# 4. 如果页面数据中的元素名称是中文（如"取款"），输出时保持中文
+# 5. 如果页面数据中的元素名称是英文（如"Go to Withdrawal"），输出时保持英文
+
 {{n_search_graph_data}}
 # 用户目标:
 {{userInput}}

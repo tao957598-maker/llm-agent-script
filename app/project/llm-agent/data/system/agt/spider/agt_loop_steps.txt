@@ -88,7 +88,7 @@ when('explore_mode == "FileDownExplorationMode"', {
   assign("spider_deep_num", "2")
 })
 
-when('time == "first"', {
+	when('time == "first"', {
 	// is first time
 	n_parameters,act_func?script='''
 		def params = [:]
@@ -107,10 +107,10 @@ when('time == "first"', {
 		params.explore_mode = explore_mode
 
 		return params
-	'''
+		'''
 },{
 	// not first time query all data
-	n_kb_all_data,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" AND run_success = 2 AND spider_deep <= {{max_spider_deep}}'
+	n_kb_all_data,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" AND run_success = 2 AND spider_deep <= {{max_spider_deep}} ORDER BY spider_deep ASC, id ASC'
 	// check n_parameters
 	when('{{(n_kb_all_data![])?size > 0}}', {
 			n_parameters,act_func?script=''' n_kb_all_data[0] '''
@@ -124,7 +124,7 @@ when('time == "first"', {
 			map[item.Title] = item.knowledge_id.toString()
 			return map
 		}
-		'''
+			'''
 		// return
 		assign('return', '{{n_res_knowledge_data}}')
 		act_flow.go?plan=end
@@ -143,7 +143,7 @@ when('!fn.hasValue(n_parameters)', {
 		n_parameters.folder_id = n_folder_id	// 文件下载 知识空间的目录id
 		n_parameters.sleep_time = sleep_time	// 执行点击操作后需要等待的时间
 		return n_parameters
-	'''
+		'''
 
 	// send
 	n_spider_deep_result, act_rpa.send?command=SpiderDeep&parameters='{{n_parameters}}'
@@ -166,9 +166,11 @@ when('!fn.hasValue(n_parameters)', {
 		n_param,act_func?script='''
 			def v = []
 			v << fn.str(n_parameters.run_steps)
-		'''
+				v << n_parameters.system_name
+				v << n_parameters.current_uri
+			'''
 		// 更新相同步骤状态
-		act_kb.selectBy?sql="UPDATE kb_spiderdeep_directory SET run_success = '{{n_run_success}}' WHERE run_steps=?"&parameters={{n_param}}
+		act_kb.selectBy?sql="UPDATE kb_spiderdeep_directory SET run_success = '{{n_run_success}}' WHERE run_steps=? AND system_name=? AND current_uri=?"&parameters={{n_param}}
 
 		assign('return', 'true')
 		act_flow.go?plan=end
@@ -178,19 +180,93 @@ when('!fn.hasValue(n_parameters)', {
 	// is_return_able
 	when('n_data.old_data.is_return_able == "0"', {
 		// is_return_able == 0
-		n_return_able_data,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" AND run_success = 1 AND (target_uri = "{{n_data.old_data.current_uri}}" OR current_uri like "%{{n_data.old_data.target_uri}}%")'
+		n_src_uri_key,act_func?script='''
+			def uri = n_parameters.current_uri
+			def q = uri.indexOf('?')
+			if (q < 0) return uri
+			// strip temp/session params by pattern, not just hardcoded names
+			def base = uri.substring(0, q)
+			def query = uri.substring(q + 1)
+			def kept = query.split('&').findAll { p ->
+				def key = p.split('=')[0]
+				def val = p.substring(key.length() + 1)
+				// strip: _prefix keys, uuid-like values, very long values (tokens)
+				if (key.startsWith('_')) return false
+				if (val.matches('^[0-9a-fA-F]{26,36}$')) return false
+				if (val.length() > 40) return false
+				def tempKeys = ["requestId", "token", "timestamp", "nonce", "sid"]
+				if (custom_param?.contains("uri_temp_params=")) {
+					def extra = custom_param.split("uri_temp_params=")[1]?.split(";")[0]
+					if (extra) tempKeys.addAll(extra.split(","))
+				}
+				!tempKeys.contains(key)
+			}
+			return kept.size() > 0 ? base + '?' + kept.join('&') : base
+		'''
+			n_tgt_uri_key,act_func?script='''
+			def uri = n_data.old_data.target_uri
+			def q = uri.indexOf('?')
+			if (q < 0) return uri
+			// strip temp/session params by pattern, not just hardcoded names
+			def base = uri.substring(0, q)
+			def query = uri.substring(q + 1)
+			def kept = query.split('&').findAll { p ->
+				def key = p.split('=')[0]
+				def val = p.substring(key.length() + 1)
+				// strip: _prefix keys, uuid-like values, very long values (tokens)
+				if (key.startsWith('_')) return false
+				if (val.matches('^[0-9a-fA-F]{26,36}$')) return false
+				if (val.length() > 40) return false
+				def tempKeys = ["requestId", "token", "timestamp", "nonce", "sid"]
+				if (custom_param?.contains("uri_temp_params=")) {
+					def extra = custom_param.split("uri_temp_params=")[1]?.split(";")[0]
+					if (extra) tempKeys.addAll(extra.split(","))
+				}
+				!tempKeys.contains(key)
+			}
+			return kept.size() > 0 ? base + '?' + kept.join('&') : base
+		'''
+			// only recover if src != tgt; same-page nav means no real jump, skip recovery
+			when('n_src_uri_key != n_tgt_uri_key', {
+			n_return_able_data,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" AND run_success = 1 AND ((target_uri = "{{n_src_uri_key}}" OR target_uri LIKE "{{n_src_uri_key}}&%" OR target_uri LIKE "{{n_src_uri_key}}?%") OR (current_uri = "{{n_tgt_uri_key}}" OR current_uri LIKE "{{n_tgt_uri_key}}&%" OR current_uri LIKE "{{n_tgt_uri_key}}?%"))'
 		n_gen_data,tpl_generate_return_able_data,psr_json_python
 		n_check_return_able,act_rpa.send?command=SpiderDeep&parameters='{{n_gen_data}}'
 		// check returnable data
 		when('!fn.hasValue(n_check_return_able[0].old_data)', {
-			// return
-			assign('return', 'false')
-			act_flow.go?plan=end
+			// return: only stop for loop, first-time falls through to content processing
+			when('time != "first"', {
+				assign('return', 'false')
+				act_flow.go?plan=end
+			}, {
+				// first-time: only continue if page content was actually collected
+				when('fn.hasValue(n_data.spider_deep_content)', {
+					// content valid, fall through to processing below
+				}, {
+					assign('return', 'false - first-time: spider_deep_content empty')
+					act_flow.go?plan=end
+					})
+				})
+			})
+			})
 		})
-	})
-
 	// back content
 	assign('n_content', '{{n_data.spider_deep_content}}')
+	n_page_uri_data,act_func?script='''
+		def uri = ""
+		def pageItem = n_content?.collect_data?.find { it.pageUrl }
+		if (pageItem) uri = pageItem.pageUrl
+		if (uri) {
+			// strip scheme+host, keep path+query
+			def idx = uri.indexOf("://")
+			if (idx > 0) {
+				uri = uri.substring(idx + 3)
+				idx = uri.indexOf("/")
+				if (idx > 0) uri = uri.substring(idx)
+			}
+		}
+		return uri
+'''
+assign('n_page_uri', '{{n_page_uri_data}}')
 
 	when('explore_mode == "stepExplorationMode"', {
 		assign('n_old_data', '{{n_data.old_data}}')
@@ -206,7 +282,7 @@ when('!fn.hasValue(n_parameters)', {
 					def v = []
 					v << fn.str(n_old_data.run_steps)
 					v << n_old_data.system_name
-				'''
+					'''
 				// 找出已被执行的run_success=3的数据(过滤掉本身),同时保证有子任务
 				n_executed_repeat_steps,act_kb.selectBy?sql="SELECT * FROM kb_spiderdeep_directory d WHERE d.run_steps =? and d.system_name=? and d.run_success=3 and d.id != {{n_parameters.id}} and exists(select 1 from kb_spiderdeep_directory d2 WHERE d2.step_relate_id = d.id)"&parameters={{n_param}}
 
@@ -240,7 +316,7 @@ when('!fn.hasValue(n_parameters)', {
 							result << new_son_data
 						}
 						return result
-					'''
+						'''
 				}, {
 					// 库内无已执行的相同步骤，开始对比差异
 					n_steps_list_first,tpl_compare_data,psr_json_python
@@ -250,7 +326,7 @@ when('!fn.hasValue(n_parameters)', {
 
 					// 生成新子任务步骤
 					n_content_data,act_func?script='''
-						def current_uri = n_data.old_data.current_uri
+						def current_uri = n_parameters.current_uri
 						def result = []
 						// 循环处理每个step
 						n_steps_list.each { steps ->
@@ -276,7 +352,7 @@ when('!fn.hasValue(n_parameters)', {
 							result << params
 						}
 						return result
-					'''
+						'''
 				})
 			},	{
 				// run_success = 1
@@ -288,7 +364,7 @@ when('!fn.hasValue(n_parameters)', {
 
 				// 组装目录表数据
 				n_content_data,act_func?script='''
-					def current_uri = n_data.spider_deep_content.current_uri
+					def current_uri = n_page_uri
 					def result = []
 					// 循环处理每个step
 					n_steps_list.each { steps ->
@@ -312,7 +388,7 @@ when('!fn.hasValue(n_parameters)', {
 						result << params
 					}
 					return result
-				'''
+					'''
 			})
 
 		}, {
@@ -320,14 +396,14 @@ when('!fn.hasValue(n_parameters)', {
 			n_content_data,act_func?script='''
 				def content_data = []
 				return content_data
-			'''
+				'''
 		})
 
 		n_param,act_func?script='''
 			def v = []
 			v << fn.str(n_old_data.run_steps)
 			v << n_old_data.system_name
-		'''
+			'''
 		// 查询目录表重复的步骤做更新
 		n_all_repeat_steps,act_kb.selectBy?sql="SELECT * FROM kb_spiderdeep_directory WHERE run_steps =? and system_name=? and run_success=2"&parameters={{n_param}}
 		when('n_data.old_data.run_success == "3"', {
@@ -351,7 +427,7 @@ when('!fn.hasValue(n_parameters)', {
 						res.spider_deep = repeat_steps_item.spider_deep
 						res.generate_type = 5
 						return res
-					'''
+						'''
 					// 插回新生成的列表
 					n_content_data, act_func?script='''
 						def res = []
@@ -360,7 +436,7 @@ when('!fn.hasValue(n_parameters)', {
 						this_data = n_save_data
 						res << this_data
 						return res
-					'''
+						'''
 				})
 				// 生成完毕，直接更新相同的步骤
 				act_kb.selectBy?sql="UPDATE kb_spiderdeep_directory SET content_id='{{n_same_content.content_id}}', run_success = 3, directory_id = '{{n_old_data.directory_id}}', target_uri='{{n_old_data.target_uri}}', is_return_able='{{n_old_data.is_return_able}}', generate_type=4 WHERE id='{{n_repeat_steps.id}}'"&parameters={{n_param}}
@@ -379,7 +455,7 @@ when('!fn.hasValue(n_parameters)', {
 				n_param,act_func?script='''
 					def v = []
 					v << fn.str(n_old_data.run_steps)
-				'''
+					'''
 				when('{{(n_steps_same_biz![])?size > 0}}', {
 					// 重复步骤已存在biz_id 当前页跳转到目标页已执行过，仅更新target_uri、run_success、is_return_able字段
 					act_kb.selectBy?sql="UPDATE kb_spiderdeep_directory SET content_id='{{n_same_content.content_id}}', run_success = 1, directory_id = '{{n_old_data.directory_id}}', target_uri='{{n_old_data.target_uri}}', is_return_able='{{n_old_data.is_return_able}}', generate_type=2 WHERE current_uri='{{repeat_steps_item.current_uri}}' and run_steps = ? and system_name='{{n_old_data.system_name}}' and run_success =2"&parameters={{n_param}}
@@ -391,14 +467,14 @@ when('!fn.hasValue(n_parameters)', {
 		})
 	}, {
 		// URL探索 / 文件下载模式 直接保存返回
-		act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{n_data.old_data}}'
-		act_kb.defineAndImportData?tableName=kb_spiderdeep_content&data='{{n_content}}'
+			act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{n_data.old_data}}'
+			act_kb.defineAndImportData?tableName=kb_spiderdeep_content&data='{{n_content}}'
 
 		// 该模式不需要解析步骤元素
 		n_content_data,act_func?script='''
 			def content_data = []
 			return content_data
-		'''
+			'''
 	})
 
 	// all directory
@@ -407,7 +483,7 @@ when('!fn.hasValue(n_parameters)', {
 		def arr2 = n_content_data
 		def merged = arr1 + arr2
 		return merged
-	'''
+		'''
 
 	foreach('n_d_data', 'n_all_directory', {
 		// d_item
@@ -424,7 +500,7 @@ when('!fn.hasValue(n_parameters)', {
 			n_new_spider_deep, act_func?script='''
 				def new_spider_deep = old_spider_deep + 1
 				return new_spider_deep
-			'''
+				'''
 			assign('new_spider_deep', '{{n_new_spider_deep}}')
 		})
 
@@ -441,16 +517,16 @@ when('!fn.hasValue(n_parameters)', {
 				act_kb.selectBy?sql='UPDATE kb_spiderdeep_directory SET run_success = 1 WHERE biz_id = "{{d_item.biz_id}}"'
 			},{
 				// 目录表无数据，保存
-				act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{d_item}}'
+					act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{d_item}}'
 			})
 		},{
 			// 新生成的步骤，先直接入库
-			act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{d_item}}'
+				act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{d_item}}'
 
 			n_param,act_func?script='''
 				def v = []
 				v << fn.str(d_item.run_steps)
-			'''
+				'''
 			// 去重逻辑2：查找库内此步骤是否已执行过（步骤相同，run_success = 1）
 			n_executed_repeat_steps,act_kb.selectBy?sql="SELECT * FROM kb_spiderdeep_directory WHERE run_steps = ? and system_name='{{d_item.system_name}}' and run_success = 1"&parameters={{n_param}}
 			when('{{(n_executed_repeat_steps![])?size > 0}}', {
@@ -465,7 +541,7 @@ when('!fn.hasValue(n_parameters)', {
 					def v = []
 					v << (d_item.generate_type ?: 3)
 					v << fn.str(executed_repeat_step, 'run_steps')
-				'''
+					'''
 				// 模拟生成出的biz_id是否已存在
 				n_steps_same_biz,act_kb.selectBy?sql='SELECT * FROM kb_spiderdeep_directory WHERE biz_id = "{{n_new_biz_id}}"'
 				when('{{(n_steps_same_biz![])?size > 0}}', {
@@ -480,6 +556,53 @@ when('!fn.hasValue(n_parameters)', {
 		})
 	})
 })
+
+	// save first-time baseline for is_return_able recovery: the initial open_url
+// is a confirmed successful page visit, record it as run_success=1 reference
+		when('time == "first"', {
+			// check if baseline already exists to avoid duplicates on re-run
+			n_page_uri_key,act_func?script='''
+			def uri = n_page_uri
+			def q = uri.indexOf('?')
+			if (q < 0) return uri
+			// strip temp/session params by pattern, not just hardcoded names
+			def base = uri.substring(0, q)
+			def query = uri.substring(q + 1)
+			def kept = query.split('&').findAll { p ->
+				def key = p.split('=')[0]
+				def val = p.substring(key.length() + 1)
+				// strip: _prefix keys, uuid-like values, very long values (tokens)
+				if (key.startsWith('_')) return false
+				if (val.matches('^[0-9a-fA-F]{26,36}$')) return false
+				if (val.length() > 40) return false
+				def tempKeys = ["requestId", "token", "timestamp", "nonce", "sid"]
+				if (custom_param?.contains("uri_temp_params=")) {
+					def extra = custom_param.split("uri_temp_params=")[1]?.split(";")[0]
+					if (extra) tempKeys.addAll(extra.split(","))
+				}
+				!tempKeys.contains(key)
+			}
+			return kept.size() > 0 ? base + '?' + kept.join('&') : base
+		'''
+			n_existing_baseline,act_kb.selectBy?sql='SELECT id FROM kb_spiderdeep_directory WHERE system_name = "{{system_name}}" AND action_type = "open_url" AND run_success = "1" AND generate_type = 0 AND (target_uri = "{{n_page_uri_key}}" OR target_uri LIKE "{{n_page_uri_key}}&%" OR target_uri LIKE "{{n_page_uri_key}}?%")'
+			when('{{(n_existing_baseline![])?size == 0}}', {
+				n_baseline_data,act_func?script='''
+					def baseline = [:]
+					baseline.system_name = system_name
+					baseline.base_url = url
+					baseline.current_uri = n_page_uri
+					baseline.target_uri = n_page_uri
+					baseline.run_steps = '[{"type":"open_url","value":"' + n_page_uri + '"}]'
+					baseline.action_type = 'open_url'
+					baseline.run_success = '1'
+					baseline.msg = '打开' + url + n_page_uri
+					baseline.spider_deep = 1
+					baseline.generate_type = 0
+					return baseline
+				'''
+				act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{n_baseline_data}}'
+			})
+		})
 
 assign('return', 'true')
 
@@ -499,7 +622,40 @@ agent('agt_verify_steps', {
 			// 返回steps_list
 			return n_verify_steps.steps_list
 		}
-	'''
+		'''
+
+	// hard guard: code-level filter for dangerous global actions
+	// per-action allow via custom_param: allow_action=action1,action2
+	n_steps_list,act_func?script='''
+		// dangerous actions: check msg in Chinese + English, per-action bypass
+		def dangerousEN = ["stop all agent", "logout", "sign out", "delete", "remove",
+		                   "reset", "deactivate", "shutdown", "restart", "clear all",
+		                   "drop", "truncate", "purge", "wipe", "destroy", "terminate"]
+		def dangerousCN = ["停止", "退出登录", "登出", "注销", "删除", "移除", "重置",
+		                   "停用", "关机", "重启", "清空", "清除", "销毁", "终止",
+		                   "关闭所有", "全部停止"]
+		def allowedList = []
+		if (custom_param?.contains("allow_action=")) {
+			def actions = custom_param.split("allow_action=")[1]?.split(";")[0]
+			if (actions) allowedList = actions.split(",").collect{ it.trim().toLowerCase() }
+		}
+		def filtered = n_steps_list.findAll { step ->
+			def msg = (step.msg ?: "").toLowerCase()
+			def msgCN = step.msg ?: ""
+			for (a in allowedList) {
+				if (msg.contains(a)) return true
+			}
+			for (kw in dangerousEN) {
+				if (msg.contains(kw)) return false
+			}
+			for (kw in dangerousCN) {
+				if (msgCN.contains(kw)) return false
+			}
+			return true
+		}
+		return filtered
+		'''
+
 })
 
 agent('agt_content_version', {
@@ -545,7 +701,7 @@ agent('agt_content_version', {
 		res.directory_id = n_directory_id
 		res.content_id = contentId
 		return res
-	'''
+		'''
 
 	when("n_same_content.have_content != true", {
 		// 本内容为首次进入，需要入内容表
@@ -555,9 +711,9 @@ agent('agt_content_version', {
 			res.content_id = n_same_content.content_id
 			res.content_version = n_same_content.max_version
   			return res
-		'''
+			'''
 		// first time, save content
-		act_kb.defineAndImportData?tableName=kb_spiderdeep_content&data='{{n_save_content}}'
+			act_kb.defineAndImportData?tableName=kb_spiderdeep_content&data='{{n_save_content}}'
 	})
 
 	// 开始更新任务表，判断执行后biz_id是否存在
@@ -572,10 +728,10 @@ agent('agt_content_version', {
 			res = n_old_data
 			res.content_id = n_same_content.content_id
 			return res
-		'''
+			'''
 		when('!fn.hasValue(n_parameters.id)', {
 			// 首次执行没有id，直接入库
-			act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{n_save_old_data}}'
+				act_kb.defineAndImportData?tableName=kb_spiderdeep_directory&data='{{n_save_old_data}}'
 		}, {
 			// 非首次运行，根据id更新任务
 			act_kb.update?name='kb_spiderdeep_directory'&columnValues='{{n_save_old_data}}'&where='{"id":"{{n_parameters.id}}"}'
@@ -663,114 +819,144 @@ define('tpl_compare_data', '''
 
 // prompt
 define('tpl_extract_jump_steps', '''
-	- Role: 你是一位专业的页面操作流程抽取与步骤映射专家。  
+		- Role: 你是一位专业的页面操作流程抽取与步骤映射专家。
 
-	我会提供一个页面解析的 JSON 数据（包含 system_name、base_url、current_uri、cookie、version、collect_data 等字段）。  
-	- Goals:
-		根据 collect_data 中的元素信息，提取所有 **可能导致页面跳转的操作**，并转化为标准执行步骤 JSON list。  
-		由collect_data生成一个字典列表: [{"msg": "", "run_steps": [run_steps1]}, {"msg": "", "run_steps": [run_steps2]}, {"msg": "", "run_steps": [run_steps2]}]
-		"run_steps" 为一个完整的动作组，对应一个跳转操作，可能存在多个步骤组合， "msg" 为根据元素信息和步骤组合推测的描述,
-		覆盖范围：登录页、注册页、首页导航、下拉菜单、按钮、超链接、仪表盘操作等常用网页场景。 
+		我会提供一个页面解析的 JSON 数据（包含 system_name、base_url、current_uri、cookie、version、collect_data 等字段）。
+		- Goals:
+			根据 collect_data 中的元素信息，提取所有 **可能导致页面跳转或功能切换的操作**，并转化为标准执行步骤 JSON list。
+			由collect_data生成一个字典列表: [{"msg": "", "run_steps": [run_steps1]}, {"msg": "", "run_steps": [run_steps2]}, {"msg": "", "run_steps": [run_steps2]}]
+			"run_steps" 为一个完整的动作组，对应一个跳转操作，可能存在多个步骤组合， "msg" 为根据元素信息和步骤组合推测的描述。
+			覆盖范围：登录页、注册页、首页导航、侧边栏、下拉菜单、按钮、超链接、标签页切换、仪表盘操作等常用网页场景。
 
-	# 部分生成规则、元素说明：  
-		a. **直接跳转类元素（仅作参考）**（单独生成 click 步骤）  
-		- tag = "a"  
-		- tag = "link"  
-		- tag = "image-button"  
-		- → run_steps: {"msg": "根据元素信息推测的描述", "run_steps": [{ "type": "click", "target": 元素id}]}
+		# 核心原则：宁可多提取，不可遗漏
+		后续有 tpl_verify_steps 专门负责过滤不合规的步骤（登出、删除、修改数据等危险操作会被剔除）。
+		你不应该在提取阶段就做过滤 —— 只要是可能触发页面跳转或功能切换的元素，全部提取出来。
+		多提取了顶多被 verify 过滤掉，漏掉了整个蜘蛛就无法继续探索。
 
-		b. **按钮类元素**（需考虑组合逻辑）  
-		- tag = "button"  
-		- 如果按钮关联了用户名输入框 + 密码输入框，则作为 **登录操作**：  
-		1) 用户名输入 → { "type": "input", "target": 用户名id, "value": ...}  
-		2) 密码输入 → { "type": "input", "target": 密码id, "value": ...}  
-		3) 点击登录按钮 → { "type": "click", "target": 登录按钮id}  
-		- 如果按钮关联了其他输入类元素，则和相关输入一起生成组合操作。
-			如：			
-				{
-					"msg": "输入账号'...', 密码'...', 点击【Sign in】按钮登录",
-					"run_steps": [
-						{"type": "input", "target": "用户名对应的元素id", "value": "..."},
-						{"type": "input", "target": "密码对应的元素id", "value": "..."},
-						{"type": "click", "target": "登录按钮对应的元素id"}
-					]
-				}
-		- 独立按钮（提交、确认、下一步等） → {"msg": "点击【元素名称或类型】+ 步骤描述", "run_steps": [{ "type": "click", "target": 按钮id}]}
+		# Step 0: 先识别页面结构（必须在提取前完成）
+		collect_data 是一个树形结构，元素通过 children 字段嵌套。先遍历所有元素，根据 name 字段的语义关键词识别以下区域：
 
-		c. **输入类元素**（仅在与按钮组合时生效）  
-		- tag = "input" / "textarea" / "tableInput" / "switch" / "select"  
-		- 有值时 → {"msg": "输入/选择【元素名称或类型】+ 步骤描述", "run_steps": [{ "type": "input", "target": 元素id, "value": 值}]}
-		- value值可以在自定义参数中(特别要注意区分参数需要添加的字段和页面)提取相关联的值，也可以直接在元素中提取，若无提取值时 → 不生成 value 字段，仅保留 msg 提示  
+		【导航/菜单区域】name 包含以下关键词之一的容器元素：
+		- "menu"、"nav"、"sidebar"、"navigation"、"drawer"、"header"
+		→ 该容器内的所有子元素（含 children 嵌套）都视为可点击的导航入口，逐个提取
 
-		d. **其他可能触发跳转的容器类元素**  
-		- tag = "div" / "span"  或其他
-	
-		e. **图片元素定义**
-		- tag = "image" / "image-button" / "svg"
-        	默认忽略所有图片相关元素，当自定义参数中明确包含"需要操作 / 点击 图片"或类似指令时，需要对图片（含svg）元素进行操作
-			否则：忽略掉图片的数据操作，不对图片、纯文本（不可点击的元素）进行点击操作
+		【标签页/功能切换区域】name 包含以下关键词之一：
+		- "tab"、"tab-bar"、"tab-pane"、"toolbar"、"ribbon"
+		→ 该容器内的子元素视为功能切换入口，逐个提取
 
-		f. **表格元素定义**
-		- tag = "table-box" / "table-header"(表头) / "cell"(单元格) 或其他有表格语义的类型
-			当存在表格中的元素或者表格内的子集的时候，需要忽略不允许提取里面的元素，除非自定义参数中明确包含"需要操作 / 点击表格"或类似指令
+		【下拉/选择器】name 包含以下关键词或 tag="select"：
+		- "select"、"dropdown"、"picker"、"switch"、"radio"、"checkbox"
+		→ 提取为 input 或 click 步骤
 
-	## 输出示例：
-	run_steps 示例:
-	- 输入框 -> {"msg": "输入账号","run_steps": [{ "type": "input", "target": "id_xxx", "value": "提取元素中的值或对应页面的自定义参数，无则不显示"}]}
-	- 密码框 -> {"msg": "输入密码","run_steps": [{ "type": "input", "target": "id_xxx", "value": "提取元素中的值或对应页面的自定义参数，无则不显示"}]}
-	- 点击按钮 -> {"msg": "点击【登录】进行登录", "run_steps": [{"type": "click", "target": "id_xxx"}]}
+		【用户/通知/设置区域】name 包含以下关键词之一：
+		- "user"、"avatar"、"profile"、"bell"、"notification"、"setting"、"logout"
+		→ 这些区域内的可交互子元素逐个提取
 
-	## 输出要求：  
-	- run_steps 必须带有 msg 字段，用于简要描述操作目的。
-	- msg为根据元素信息推测的步骤描述，统一输出风格为：点击【xxx】 + 由元素信息用自己的语言总结出描述
-	- 忽略跟文件上传、文件导出、下载、搜索相关的元素
-	- 输出 JSON list，"run_steps" 为一个完整的动作组，对应一个跳转操作，"msg" 为根据元素信息和步骤组合推测的描述,
-	如：[{"msg": "", "run_steps": [run_steps1]}, {"msg": "", "run_steps": [run_steps2]}, {"msg": "", "run_steps": [run_steps2]}]
-	- 每组操作都包含完整根节点字段
-	- 不要额外解释或说明
-	- 输出时检查步骤是否存在约束条件中禁止出现的步骤（如登出、数据修改、翻页、条件选择（如选择日期等））按钮
+		【内容/主页区域】name 包含以下关键词之一：
+		- "home"、"content"、"main"、"body"、"card"、"list"、"table"、"grid"
+		→ 这是主要内容区，对其中的按钮、链接、可点击卡片等按 Step 1 规则提取
 
-	- Examples:
-		输入 collect_data：
-		[
-			{"id": "id_2581586144", "tag": "input", "type": "text", "placeholder": "Username"},
-			{"id": "id_1526379877", "tag": "input", "type": "password", "placeholder": "Password"},
-			{"id": "id_1580495499", "tag": "button", "type": "submit", "name": "Sign in"},
-			{"id": "id_1094787217", "tag": "link", "name": "Sign up!"},
-			{"id": "id_1423062691", "tag": "a", "name": "Home"},
-			{"id": "id_171780386", "tag": "image-button", "name": "Accounts"},
-			{"id": "id_171810177", "tag": "div", "name": "Transfer", "onclick": "goTransfer()"}
-		]
-		输出 JSON list：
-		[
-			{
-				"msg": "输入账号'admin', 密码'xJbNmQnqk4wq0Fc', 点击【Sign in】按钮登录",
-				"run_steps": [
-					{"type": "input", "target": "id_2581586144", "value": "admin"},
-					{"type": "input", "target": "id_1526379877", "value": "xJbNmQnqk4wq0Fc"},
-					{"type": "click", "target": "id_1580495499"}
-				]
-			},
-			{
-				"msg": "点击【Sign up!】注册账号",
-				"run_steps": [
-					{"type": "click", "target": "id_1094787217"}
-				]
-			}
-		]
+		判断容器类型时，name 字段优先于 tag 字段。name 中的语义信息比 HTML tag 更能反映元素的真实用途。
 
-	# 输入参数：
-	{{n_parameters}}
+		# Step 1: 逐元素提取规则
+		对已完成结构标注的区域，按以下规则逐个提取子元素：
 
-	# current_uri：
-	{{n_data.spider_deep_content.current_uri}}
+		1. **任何有 name 属性、且有 id 的元素**，只要不在以下排除清单中，就生成一个 click 步骤：
+		排除清单（这些 tag 不能作为点击目标）：
+		- "input"（输入框走规则 3）
+		- "textarea"
+		- "checkbox" / "radio" / "switch"（走规则 3）
+		- "table-header" / "table-box" / "cell"（表格，走规则 4）
+		- "image"（纯图片，走规则 5）
 
-	# collect_data：
-	{{n_content.collect_data}}
+		2. 以下 tag 无条件生成 click 步骤（即使 name 不匹配任何关键词）：
+		- "a"、"link"、"button"
+		- "div"、"span"、"text"、"strong"、"em"、"i"、"li"、"p"、"h1"~"h6"、"label"
+		→ run_steps: [{"type": "click", "target": 元素id}]
+		→ msg: "点击【元素name】" + 根据元素上下文自行补充简短描述
 
-	#自定义参数：
-	{{custom_param}}
-''')
+		3. **输入类元素**（仅在与按钮组合时生成组合步骤，或单独提取为 input）：
+		tag = "input" / "textarea" / "switch" / "select" / "checkbox" / "radio"
+		- 如果附近（同一容器内）存在关联的 button 元素 → 组合为 [input步骤, click按钮步骤]
+		- 如果独立存在且有 value → 生成 {"type": "input", "target": 元素id, "value": 从元素或custom_param中提取}
+		- 如果独立存在无 value → 仅生成 input 步骤，value 从 custom_param 中匹配
+
+		4. **表格区域**：tag 包含 "table" 或在 name 中含 "table" 的容器
+		- 默认不提取表格内元素。仅当 custom_param 明确要求操作表格时才提取
+
+		5. **图片元素**：tag = "image" / "image-button" / "svg"
+		- image（纯图片）：仅当 custom_param 明确要求操作图片时才生成 click 步骤
+		- image-button 和 svg：仅当位于语义容器（menu/nav/header/toolbar/sidebar）内、或有明确的 name 且 name 表达了业务功能意图时 → 生成 click 步骤。孤立的、无 name 或 name 为空/无意义的 image-button/svg → 不提取（很可能是装饰性元素，点击无实际效果）
+
+		6. **登录场景**：当页面同时存在用户名/密码输入框 + 登录按钮时
+		→ 组合为一个完整的登录操作：[input用户, input密码, click登录按钮]
+		→ value 优先从 custom_param 提取，其次从元素自身的 placeholder/value 提取
+
+		## 输出示例：
+		run_steps 示例:
+		- 点击导航 -> {"msg": "点击【Dashboard】导航到仪表盘", "run_steps": [{"type": "click", "target": "id_945446986"}]}
+		- 输入框 -> {"msg": "输入账号", "run_steps": [{"type": "input", "target": "id_xxx", "value": "提取元素中的值或对应页面的自定义参数，无则不显示"}]}
+		- 点击按钮 -> {"msg": "点击【Login】进行登录", "run_steps": [{"type": "click", "target": "id_xxx"}]}
+		- 导航菜单项（tag=text） -> {"msg": "点击【Agent Management】进入代理管理页面", "run_steps": [{"type": "click", "target": "id_1468482313"}]}
+		- 容器内的功能入口 -> {"msg": "点击【ChatDoc Q&A】打开智能问答", "run_steps": [{"type": "click", "target": "id_2289334388"}]}
+
+		## 输出要求：
+		- JSON list 按以下优先级排序输出（确保蜘蛛优先探索高价值入口）：
+		  1. 导航/菜单区域内的条目（Step 0 识别的 menu/nav/sidebar 容器内的所有元素）
+		  2. 标签页/功能切换入口（tab/toolbar 容器内的元素）
+		  3. 登录步骤（如有）
+		  4. 其他内容区按钮和链接
+		  5. 图片类元素（image-button/svg）放在最后
+		- 每个可交互元素生成一个独立的步骤对象，不要遗漏
+		- run_steps 必须带有 msg 字段，用于简要描述操作目的
+		- msg 统一风格：点击【元素name】 + 简短目的描述
+		- 忽略跟文件上传、文件导出、下载相关的元素
+		- 输出 JSON list，如：[{"msg": "...", "run_steps": [step]}, {"msg": "...", "run_steps": [step]}]
+		- 不要额外解释或说明
+
+		- Examples:
+			输入 collect_data（导航 + 按钮 + 链接混合场景）：
+			[
+				{"children":[{"id":"id_945446986","name":"Dashboard","tag":"text","type":"DIV"},{"id":"id_1468482313","name":"Agent Management","tag":"text","type":"DIV"}],"id":"id_472327675","name":"el-menu el-menu--vertical menu-box","tag":"container","type":"ul"},
+				{"id": "id_3042563435", "name": "User Name", "tag": "input", "type": "input"},
+				{"id": "id_210466781", "name": "Password", "tag": "input", "type": "input"},
+				{"id": "id_664778757", "name": "Login", "tag": "button", "type": "button"},
+				{"id": "id_1094787217", "tag": "link", "name": "Sign up!"},
+				
+				{"id": "id_2289334388", "name": "ChatDoc Q&A", "tag": "text", "type": "SPAN"},
+				{"id": "id_3690686744", "name": "English", "tag": "select", "type": "dynamics-select"},
+				{"id": "id_171810177", "tag": "div", "name": "Transfer", "onclick": "goTransfer()"}
+			]
+			分析过程：
+			- "el-menu el-menu--vertical menu-box" → Step 0 识别为导航区域 → 提取子元素 Dashboard、Agent Management
+			- User Name + Password + Login → Step 1 规则 6 识别为登录场景 → 组合为登录操作
+			- "Sign up!" tag=link → Step 1 规则 2 → click 步骤
+			- "ChatDoc Q&A" → 在内容区域内的有 name 元素 → click 步骤
+			- "English" tag=select → Step 1 规则 3 → click 步骤（语言切换，select 控件用 click 触发下拉再选择）
+			- "Transfer" 有 onclick → Step 1 规则 2 → click 步骤
+			输出 JSON list：
+			[
+				{"msg": "点击【Dashboard】导航到仪表盘", "run_steps": [{"type": "click", "target": "id_945446986"}]},
+				{"msg": "点击【Agent Management】进入代理管理", "run_steps": [{"type": "click", "target": "id_1468482313"}]},
+				{"msg": "输入用户名'...', 密码'...', 点击【Login】按钮登录", "run_steps": [{"type": "input", "target": "id_3042563435", "value": "..."}, {"type": "input", "target": "id_210466781", "value": "..."}, {"type": "click", "target": "id_664778757"}]},
+				{"msg": "点击【Sign up!】注册账号", "run_steps": [{"type": "click", "target": "id_1094787217"}]},
+				{"msg": "点击【ChatDoc Q&A】打开智能问答", "run_steps": [{"type": "click", "target": "id_2289334388"}]},
+				{"msg": "点击【English】切换语言", "run_steps": [{"type": "click", "target": "id_3690686744"}]},
+				{"msg": "点击【Transfer】", "run_steps": [{"type": "click", "target": "id_171810177"}]}
+			]
+
+		# 输入参数：
+		{{n_parameters}}
+
+		# current_uri：
+		{{n_data.spider_deep_content.current_uri}}
+
+		# collect_data：
+		{{n_content.collect_data}}
+
+		#自定义参数：
+		{{custom_param}}
+		''')
 
 
 define('tpl_verify_steps', '''
@@ -793,6 +979,19 @@ define('tpl_verify_steps', '''
 	- 执行任何输入、修改、勾选、筛选、日期选择、搜索，翻页
 	- 表格交互类：对 tag 为 "table" 的元素或其子元素进行点击、勾选、展开等操作
 	- 图片（不能点击的元素）
+		- 无业务语义的泛化 class 名：元素的 name / class / id 仅由布局样式类词汇组成（如纯 CSS class 名、layout 命名），且该元素不位于导航/菜单/工具栏容器内。此时即使 tag 允许点击，也因无法确认其业务功能而应剔除
+
+		- 非交互性展示元素：需结合以下维度综合判断，而非按字面名称硬匹配：
+		  维度 1【是否有业务动作语义】：元素的 name 是否表达了明确的业务操作意图（如"进入某页面"、"切换某功能"、"打开某模块"）。仅表达状态、属性、身份的文本不具有业务动作语义
+		  维度 2【是否位于导航/菜单/工具栏容器】：检查元素在 collect_data 树中的父容器。位于 menu/nav/sidebar/toolbar/tab-bar/header 等语义容器内的元素，即使 tag 为 text/span，也更可能是可交互的导航入口，应倾向于保留
+		  维度 3【是否匹配展示文本模式】：是否存在以下模式特征 ——
+		    · 纯数字或数字+符号（如 "55"、"99+"、"3/10"）
+		    · 日期时间格式（如 "2026-01-01"、"14:00:00"、"at 14:00"）
+		    · 状态/结果标签（如 "Running"、"Success"、"Failed"、"No Data"、"Completed"）
+		    · 欢迎/问候/口号句式（以 "Hello"、"Welcome"、"Hi" 等开头，或为感叹句/陈述句口号）
+		    · 用户名/账户名（与 custom_param 中的用户名匹配，或为纯人名字符串）
+		    · 纯标题/分类标签：仅作为区域标题出现，无独立点击行为（需结合页面元素信息判断其兄弟/子元素中是否已有对应的可点击入口，若有则本标签为装饰性标题，应剔除）
+		  以上维度需综合判断，不得仅凭单一维度做决定。例如："Stop All Agent" 和 "New Chat" 可能在某些页面中是按钮，在另外页面中只是文本标签 —— 应结合页面元素信息中的容器上下文和交互属性判断
 
 	# 处理逻辑：
 	1. 先对【待校验步骤】中的每一步输出检查：
@@ -886,9 +1085,9 @@ define('tpl_verify_steps', '''
 define('tpl_generate_return_able_data', '''
 	在执行前先解释目标与思路
 		1、请根据已执行过并成功执行的数据，总结出一个需要执行的操作run_steps列表
-		2、通过在 {{n_data.old_data.target_uri}} 页面上进行操作，返回到 {{n_data.old_data.current_uri}} 路由中
+		2、通过在 {{n_data.old_data.target_uri}} 页面上进行操作，返回到 {{n_parameters.current_uri}} 路由中
 		3、当前路由current_uri必须为 {{n_data.old_data.target_uri}} 路由下的
-		4、目标路由target_uri必须为 {{n_data.old_data.current_uri}} 下的
+		4、目标路由target_uri必须为 {{n_parameters.current_uri}} 下的
 		5、当不能直接获取数据时，进行run_steps列表的组合，组合成的每一个run_steps必须都是已执行过的，不允许凭空生成
 		6、当涉及到登录的操作时，登录操作结束后直接使用open_url的方式进行直接跳转：如{"type": "open_url", "value": "uri"}
 		7、直接返回
@@ -918,5 +1117,5 @@ define('tpl_generate_return_able_data', '''
 	已执行过并成功执行的数据:
 	{{n_return_able_data}}
 	输入：
-	我在访问 {{n_data.old_data.current_uri}} 路由的时候被自动跳转到了 {{n_data.old_data.target_uri}} 页面, 现在希望能够回到 {{n_data.old_data.current_uri}} 页面
+	我在访问 {{n_parameters.current_uri}} 路由的时候被自动跳转到了 {{n_data.old_data.target_uri}} 页面, 现在希望能够回到 {{n_data.old_data.current_uri}} 页面
 ''')

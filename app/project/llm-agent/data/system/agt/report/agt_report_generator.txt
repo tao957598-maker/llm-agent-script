@@ -515,7 +515,7 @@ assign('n_output_path',"appdata/report123/{{n_report_data[0].reportName}}.docx")
 
  //## Generate report: Generate a report in Word format
 n_word_report_path,act_func.word?template="{{n_remplate_info[0].filePath}}"&output="{{n_output_path}}"&rootVar='n_report_source'
-log('***n_word_report_path={{n_word_report_path}}')
+//log('***n_word_report_path={{n_word_report_path}}')
 when('!fn.hasValue(n_word_report_path)',{
      //## Generate report: Failed to generate Word document
     log('Generate report failed!')
@@ -565,8 +565,8 @@ n_update_report_url_result,act_api.doExecute?name='report_update_report_url'&par
 when('n_update_report_url_result.code==200',{ 
     assign('n_report_resp_data',"{{n_update_report_url_result.data}}")
     log('******n_report_resp_data={{n_report_resp_data}}')
-    //# The relative path of the report Docx file.
-    act_memory.assign?var='n_report_word_url'&value='{{n_report_resp_data.reportFilePathWord}}'&type='word'
+    //The relative path of the report Docx file.
+    //act_memory.assign?var='n_report_word_url'&value='{{n_report_resp_data.reportFilePathWord}}'&type='word'
 
     //# The relative path of the report Pdf file.
     act_memory.assign?var='n_report_pdf_url'&value='{{n_report_resp_data.reportFilePath}}'&type='pdf'

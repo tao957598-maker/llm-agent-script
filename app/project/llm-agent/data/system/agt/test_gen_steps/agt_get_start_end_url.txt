@@ -28,10 +28,53 @@ assign('params','{"question":"{{userInput}}","folderIds":"{{folderIds!}}","knowl
 // initialize variables for result
 assign('result_datas', '[]')
 
-n_current_uri,act_func.run?script='def entry = list_uri[0].entrySet().first()
-def key = entry.key
-def value = entry.value
-return  key
+// Parse list_uri to extract the first URI
+n_current_uri,act_func.run?script='
+def listUri = list_uri
+// Debug: print input
+println("DEBUG: list_uri type=" + listUri.getClass().getName() + ", value=" + listUri)
+// Handle nested lists - n_list may be [[{url:desc}]] format
+def data = listUri
+// Unwrap nested lists
+if (data instanceof List && !data.isEmpty()) {
+    while (data instanceof List && !data.isEmpty() && data[0] instanceof List) {
+        data = data[0]
+        println("DEBUG: Unwrapped nested list, now: " + data)
+    }
+    // Now data should be [{url:desc}] format
+    if (data instanceof List && !data.isEmpty()) {
+        def entry = data[0]
+        if (entry instanceof Map && !entry.isEmpty()) {
+            def result = entry.keySet().iterator().next()
+            println("DEBUG: Extracted from List: " + result)
+            return result
+        }
+    }
+}
+// Handle string JSON format: [{"url":"description"}] or [[{"url":"description"}]]
+if (listUri instanceof String) {
+    def str = listUri.trim()
+    println("DEBUG: Processing string: " + str)
+    if (str.startsWith("[") && str.contains("{")) {
+        // Find first opening brace (after any leading brackets)
+        def firstBrace = str.indexOf("{")
+        if (firstBrace > 0) {
+            // Find the colon after the brace
+            def colonPos = str.indexOf(":", firstBrace)
+            if (colonPos > firstBrace) {
+                def keyStr = str.substring(firstBrace + 1, colonPos).trim()
+                // Remove quotes if present
+                if (keyStr.startsWith("\"") && keyStr.endsWith("\"")) {
+                    keyStr = keyStr.substring(1, keyStr.length() - 1)
+                }
+                println("DEBUG: Extracted from String: " + keyStr)
+                return keyStr
+            }
+        }
+    }
+}
+println("DEBUG: Returning null")
+return null
 '
 // 定义变量current_uri
 assign("current_uri", "{{n_current_uri}}")

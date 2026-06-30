@@ -2,11 +2,18 @@
 {
 	"title":"打印测试",
 	"description":"打印测试",
-	"parameter":"param=参数",
+	"parameter":[
+		{
+			"name":"param",
+			"label":"参数",
+			"maxLength":50,
+			"hidden":false,
+			"readOnly":false
+		}
+	],
 	"version":1
 }
 */
-
 //# 打印1
 log("第一步骤")
 

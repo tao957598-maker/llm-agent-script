@@ -17,10 +17,14 @@ when('!fn.hasValue(n_queryResult)', {
 	// 无查询结果的情况
 	n_file_name, act_kb.selectBy?sql='select  file_name,store_uri  from kb_spaces_folder_knowledge where id="{{kbSpaceFileId}}" '
 	n_file_data,act_func.read?filename="{{n_file_name[0].store_uri}}"
-	assign("queryResult", '{"file_name":"{{n_file_name[0].file_name}}","file_content":"{{n_file_data}}"}')
+	assign("file_name", '{{n_file_name[0].file_name}}');
+	assign("file_content", '{{n_file_data}}');
+	assign("queryResult", '{{fn.json("file_name,file_name,file_content,file_content")}}')
 },{
 	// 有查询结果的情况
-	assign("queryResult", '{"file_name":"{{n_queryResult[0].fileName}}","file_content":"{{n_queryResult[0].content}}"}')
+	assign("file_name", '{{n_queryResult[0].fileName}}');
+	assign("file_content", '{{n_queryResult[0].content}}');
+	assign("queryResult", '{{fn.json("file_name,file_name,file_content,file_content")}}')
 }
 )
 // 返回查询结果

@@ -175,7 +175,7 @@ agent('agt_internal_gen_test_case', {
 			assign('n_plan_summary','已自动生成：{{n_gen_case?size}}条测试用例');
 			//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 生成 Test case
 			act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
-			assign("n_plan_virtual_value", "{{fn.pluckStr(n_gen_case,'description','\n')}}")
+			assign("n_plan_virtual_value", "{{fn.pluckStr(n_gen_case,'method,api_name,description','\n','%s %s (%s)')}}")
 		})
 	})
 	assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
@@ -215,7 +215,7 @@ agent('agt_internal_gen_test_data', {
 				assign('n_plan_summary','已自动生成：{{n_drive_data?size}}条测试数据');
 				//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test Data
 				act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
-				assign("n_plan_virtual_value", "{{fn.pluckStr(n_drive_data,'api_name','\n')}}")
+				assign("n_plan_virtual_value", "{{fn.pluckStr(n_drive_data,'name','\n')}}")
 			},{
 				// 1.2.1.将未生成的case，生成对应的Data数据
 				when("fn.hasValue(n_not_gen_case_data)", {
@@ -237,7 +237,7 @@ agent('agt_internal_gen_test_data', {
 					assign('n_plan_summary','已自动生成：{{n_drive_data?size}}条测试数据');
 					//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 准备Test Data
 					act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
-					assign("n_plan_virtual_value", "{{fn.pluckStr(n_drive_data,'steps','\n')}}")
+					assign("n_plan_virtual_value", "{{fn.pluckStr(n_drive_data,'description','\n')}}")
 				})
 			})
 			assign("n_plan_virtual_value", "{{fn.pluckStr(n_drive_data,'api_name','\n')}}")
@@ -285,10 +285,9 @@ agent('agt_internal_gen_plan_and_run',{
 				caseData.add(caseMap);
 				return caseData;
 			'''
-			//### 执行测试
-            n_plan_virtual_open,act_memory.assign?var=n_plan_virtual&value="{{fn.pluckStr(n_api_case_data,'steps','\n')}}"&type=open_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
-
 		})
+        //### 创建plan
+        n_plan_virtual_open,act_memory.assign?var=n_plan_virtual&value="{{fn.pluckStr(n_api_case_data!,'steps','\n')}}"&type=open_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
 
 		n_api_params,act_func?script='''					
 							def n_tmp_map = new HashMap()
@@ -371,10 +370,9 @@ agent('agt_internal_gen_plan_and_run',{
 					act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update&planName='n_plan_task'&index={{n_plan_task.index}}
 					act_flow.wait?second=5
 				})
-				assign("n_plan_virtual_value", "{{n_plan_summary!}}")
-			    //### 创建并执行plan
-                n_plan_virtual_open,act_memory.assign?var=n_plan_virtual&value="{{n_plan_virtual_value!}}"&type=open_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
 			})
+            //### 执行plan
+            n_plan_virtual_open,act_memory.assign?var=n_plan_virtual&value="{{n_api_result_data.data.name}}"&type=open_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
 
 		},{
 			assign('n_plan_summary','执行plan失败');
@@ -383,11 +381,14 @@ agent('agt_internal_gen_plan_and_run',{
 		    assign("n_plan_virtual_value", "{{n_plan_summary}}")
 			act_flow.fail?result='{{n_api_result_data.message}}'
 		})
-		assign('n_plan_summary','执行plan失败');
-		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
-		act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
-		assign("n_plan_virtual_value", "{{n_plan_summary}}")
-		act_flow.fail?result='{{n_api_result_data.message}}'
+
+		on_failure({
+			assign('n_plan_summary','执行plan失败');
+			//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
+			act_memory.assign?var=n_plan_summary&value={{n_plan_summary}}&type=plan_update
+			assign("n_plan_virtual_value", "{{n_plan_summary}}")
+			act_flow.fail?result='{{n_api_result_data.message}}'
+		})
 	},{
 		assign('n_plan_summary','执行完成:创建Test Plan失败');
 		//## {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排)
@@ -395,7 +396,7 @@ agent('agt_internal_gen_plan_and_run',{
 		assign("n_plan_virtual_value", "{{n_plan_summary}}")
 	})
 
-	//### {{n_plan_task.index + 1}} / {{n_plan_tasks.size}} 执行测试(并发调度/自动编排) 完成
+	//### 创建并执行plan 完成
     n_plan_virtual_close,act_memory.assign?var=n_plan_virtual&value="{{n_plan_virtual_value!}}"&type=close_virtual&planName='n_plan_task'&index={{n_plan_task.index}}
 
 	assign('step_result_{{current_plan_step}}', '{{n_plan_summary}}')
