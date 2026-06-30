@@ -1,0 +1,48 @@
+/*
+{
+	"title":"Simple Chat Agent",
+	"resultPlan":"n_chat_response",
+	"parameter":[
+		{
+			"name":"userInput",
+			"label":"User Message",
+			"description":"The message from the user",
+			"required":true
+		},
+		{
+			"name":"conversationHistory",
+			"label":"Conversation History",
+			"description":"Previous conversation context (optional)"
+		}
+	],
+	"uiEntrance":"34",
+	"displayOrder":0,
+	"version":1
+}
+*/
+// Define the chat prompt template
+define('tpl_chat_response', '''
+/*{
+	"stream": true,
+	"llmType": "alias.chat"
+}*/
+You are a helpful AI assistant. Respond to the user's message in a friendly and helpful manner.
+
+# Conversation History
+{{conversationHistory!}}
+
+# Current User Message
+{{userInput}}
+
+# Your Response
+''')
+
+// Main chat logic
+tpl_chat_response, psr_all
+
+// Store the response
+assign("n_chat_response", '{{tpl_chat_response}}')
+
+// Optional: Log the interaction for debugging
+log('User: {{userInput}}')
+log('Assistant: {{tpl_chat_response}}')

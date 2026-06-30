@@ -1,0 +1,28 @@
+/*
+{
+  "title": "Groovy Fixed Script CheckAgent",
+  "parameter": [],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+
+// 写死的 Groovy 脚本：用于语法校验（不依赖任何外部入参）
+assign('data', '1')
+assign('data1', '1')
+assign('data2', """
+/*
+{
+  "title": "Groovy Fixed Script CheckAgent",
+  "parameter": [],
+  "version": 1,
+  "resultPlan": "n_result"
+}*/
+assign('data', '1')
+assign('data1', '1')
+assign('data3', '{{data}}:
+{{data1}}')
+
+""")
+
+// 使用 vrf_plan.checkAgent 校验上面的 Groovy 脚本
+n_result,vrf_plan.checkAgent?type=groovy&script={{data2}}

@@ -1,0 +1,45 @@
+/*
+{
+	"title":"Simple Chat Agent",
+	"uiEntrance":"24",
+	"tag":"OA",
+	"displayOrder":0,
+	"version":2
+}
+*/
+// Define the chat prompt template
+define('tpl_chat_response', '''	
+	/*{
+		"stream": true,
+		"temperature": 0.7
+	}*/
+	你是一个友好的聊天助手。请根据对话历史回复用户的最新消息。
+	
+	# 对话历史
+	{{conversation_history}}
+	
+	# 用户最新消息
+	{{current_message}}
+	
+	请用友好、自然的语气回复用户。
+''')
+
+// Initialize conversation history if not exists
+when('{{fn.hasValue(conversation_history)}} == false', {
+	assign('conversation_history', '[]')
+})
+
+// Add current user message to conversation history
+append('conversation_history', '{"role": "user", "content": "{{userInput}}"}')
+
+// Call LLM to generate response
+tpl_chat_response, psr_all
+
+// Add assistant response to conversation history
+append('conversation_history', '{"role": "assistant", "content": "{{tpl_chat_response}}"}')
+
+// Store the final response
+assign('n_chat_response', '{{tpl_chat_response}}')
+
+// 结果
+act_memory.assign?var=result&value='<a href="/approval" target="_blank">查看申请单</a>'
