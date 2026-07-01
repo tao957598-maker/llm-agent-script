@@ -67,12 +67,12 @@ when('fn.bool(n_is_llm_agent)', {
 
   // 构建并执行 SSH 命令
   when('n_os == "windows"', {
-    assign('n_sync_cmds', '"\\"{{bash_path}}\\" -c \\"ssh -p{{ssh_port}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ssh_host}} \\"mkdir -p {{n_jar_dst_base}} {{n_jar_dst_base}}/lib-hot {{n_jar_dst_base}}/lib-stable && rsync -a {{n_jar_src_base}}/lib-hot/ {{n_jar_dst_base}}/lib-hot/ && rsync -a {{n_jar_src_base}}/lib-stable/ {{n_jar_dst_base}}/lib-stable/\\"\\""')
+    assign('n_sync_cmds', '"\\"{{bash_path}}\\" -c \\"ssh -p{{ssh_port}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ssh_host}} \\"mkdir -p {{n_jar_dst_base}} {{n_jar_dst_base}}/lib-hot {{n_jar_dst_base}}/lib-stable && rsync -a {{n_jar_src_base}}/application.jar {{n_jar_dst_base}}/ && rsync -a {{n_jar_src_base}}/lib-hot/ {{n_jar_dst_base}}/lib-hot/ && rsync -a {{n_jar_src_base}}/lib-stable/ {{n_jar_dst_base}}/lib-stable/\\"\\""')
   }, {
-    assign('n_sync_cmds', 'ssh -p{{ssh_port}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ssh_host}} "mkdir -p {{n_jar_dst_base}} {{n_jar_dst_base}}/lib-hot {{n_jar_dst_base}}/lib-stable && rsync -a {{n_jar_src_base}}/lib-hot/ {{n_jar_dst_base}}/lib-hot/ && rsync -a {{n_jar_src_base}}/lib-stable/ {{n_jar_dst_base}}/lib-stable/"')
+    assign('n_sync_cmds', 'ssh -p{{ssh_port}} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{{ssh_host}} "mkdir -p {{n_jar_dst_base}} {{n_jar_dst_base}}/lib-hot {{n_jar_dst_base}}/lib-stable && rsync -a {{n_jar_src_base}}/application.jar {{n_jar_dst_base}}/ && rsync -a {{n_jar_src_base}}/lib-hot/ {{n_jar_dst_base}}/lib-hot/ && rsync -a {{n_jar_src_base}}/lib-stable/ {{n_jar_dst_base}}/lib-stable/"')
   })
   n_sync_result, agt_cmd_executor.assistant?cmd={{n_sync_cmds}}&cmd_executor_name="同步llm-agent依赖jar"&server_id={{server_id}}
-  assign('n_log', '{{n_log}}\n✓ lib-hot 和 lib-stable 同步完成')
+  assign('n_log', '{{n_log}}\n✓ application.jar、lib-hot 和 lib-stable 同步完成')
 }, {
   // 非 llm-agent 项目，跳过 jar 同步
 })
